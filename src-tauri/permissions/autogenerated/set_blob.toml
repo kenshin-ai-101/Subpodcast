@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-blob"
+description = "Enables the set_blob command without any pre-configured scope."
+commands.allow = ["set_blob"]
+
+[[permission]]
+identifier = "deny-set-blob"
+description = "Denies the set_blob command without any pre-configured scope."
+commands.deny = ["set_blob"]

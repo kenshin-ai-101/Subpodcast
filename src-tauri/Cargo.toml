@@ -1,0 +1,42 @@
+[package]
+name = "subpodcast"
+version = "0.1.0"
+description = "Subpodcast · 声译 — bilingual podcast & YouTube listener"
+authors = ["Subpodcast"]
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "subpodcast_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks", "gzip", "brotli", "system-proxy", "multipart", "stream"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+roxmltree = "0.20"
+regex = "1"
+sha1 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+anyhow = "1"
+once_cell = "1"
+urlencoding = "2"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

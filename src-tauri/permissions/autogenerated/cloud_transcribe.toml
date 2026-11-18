@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cloud-transcribe"
+description = "Enables the cloud_transcribe command without any pre-configured scope."
+commands.allow = ["cloud_transcribe"]
+
+[[permission]]
+identifier = "deny-cloud-transcribe"
+description = "Denies the cloud_transcribe command without any pre-configured scope."
+commands.deny = ["cloud_transcribe"]

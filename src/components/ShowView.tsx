@@ -1,0 +1,315 @@
+/**
+ * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll
+ * [OUTPUT]: 订阅节目详情页（封面头图、筛选、月份轴、分组单集）
+ * [POS]: Sidebar 点选订阅后的主面板；对齐 SubCast ShowView 信息架构，不含乔木精读
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import {
+  ChevronDown,
+  ListVideo,
+  Loader2,
+  MoreHorizontal,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
+import { api, errText, type Episode, type Show } from "../lib/api";
+import { ask } from "../lib/confirm";
+import { groupLabel, plainText } from "../lib/format";
+import { playAll } from "../lib/queue";
+import { useStore } from "../store";
+import { EpisodeRow } from "./HomeView";
+import { MonthFilter, useMonthFilter } from "./MonthFilter";
+
+type Filter = "all" | "unplayed" | "subs";
+
+function kindLabel(show: Show): string {
+  if (show.kind === "youtube") return "YouTube 频道";
+  if (show.kind === "xiaoyuzhou") return "小宇宙";
+  return "播客";
+}
+
+function isFinished(ep: Episode): boolean {
+  return !!(ep.duration && ep.progress >= ep.duration * 0.97);
+}
+
+function isPlayable(ep: Episode): boolean {
+  return !!(ep.audioUrl || ep.videoId) && !isFinished(ep);
+}
+
+export function ShowView({ showId }: { showId: string }) {
+  const { shows, openEpisode, notify, reloadShows, go } = useStore(
+    useShallow((s) => ({
+      shows: s.shows,
+      openEpisode: s.openEpisode,
+      notify: s.notify,
+      reloadShows: s.reloadShows,
+      go: s.go,
+    })),
+  );
+  const show = shows.find((s) => s.id === showId);
+  const [eps, setEps] = useState<Episode[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [expanded, setExpanded] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchBox = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setEps(null);
+    setFilter("all");
+    setExpanded(false);
+    setMenu(false);
+    setQuery("");
+    void api.listEpisodes(showId, 5000).then(setEps).catch((e) => notify(errText(e)));
+  }, [showId, notify]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        searchBox.current?.focus();
+        searchBox.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const desc = useMemo(() => plainText(show?.description), [show?.description]);
+
+  const byFilter = useMemo(() => {
+    if (!eps) return null;
+    return eps.filter((e) => {
+      if (filter === "unplayed") return e.progress < 5;
+      if (filter === "subs") return e.hasTranscript || !!e.transcriptUrl;
+      return true;
+    });
+  }, [eps, filter]);
+
+  const hits = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !eps) return null;
+    return eps.filter((e) => {
+      const hay = `${e.title}\n${e.notes ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [eps, query]);
+
+  const { month, setMonth, filtered: shown } = useMonthFilter(byFilter);
+  useEffect(() => {
+    setMonth(null);
+  }, [showId, setMonth]);
+  const list = hits ?? shown;
+  const playable = (shown ?? []).filter(isPlayable);
+
+  if (!show) return <div className="page muted">节目不存在</div>;
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const n = await api.refreshShow(showId);
+      setEps(await api.listEpisodes(showId, 5000));
+      await reloadShows();
+      notify(n > 0 ? `更新了 ${n} 期` : "已是最新");
+    } catch (e) {
+      notify(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setMenu(false);
+    const ok = await ask(`取消订阅「${show.title}」？已生成的字幕和收听进度会保留。`);
+    if (!ok) return;
+    await api.removeShow(showId);
+    await reloadShows();
+    go({ kind: "home" });
+  };
+
+  const meta =
+    show.author && show.author !== show.title
+      ? `${kindLabel(show)} · ${show.author}`
+      : kindLabel(show);
+
+  return (
+    <div className="page">
+      <div className="show-head">
+        {show.cover ? (
+          <img src={show.cover} alt="" />
+        ) : (
+          <div className="cover-fallback">{show.title.slice(0, 1)}</div>
+        )}
+        <div className="show-info">
+          <p className="meta-line">{meta}</p>
+          <h1 className="show-title-h">{show.title}</h1>
+          {desc && (
+            <>
+              <p className={`show-desc ${expanded ? "" : "clamp3"}`}>{desc}</p>
+              <div className="row-actions tight">
+                <button type="button" className="link-btn" onClick={() => setExpanded(!expanded)}>
+                  {expanded ? "收起" : "展开"}
+                  <ChevronDown size={12} className={expanded ? "flip" : ""} />
+                </button>
+              </div>
+            </>
+          )}
+          <div className="row-actions">
+            <button type="button" className="btn sm" onClick={() => void refresh()} disabled={busy}>
+              {busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+              检查更新
+            </button>
+            {playable.length > 1 && (
+              <button
+                type="button"
+                className="btn sm"
+                title={`按列表顺序连着播放没听完的 ${playable.length} 集`}
+                onClick={() => playAll(playable)}
+              >
+                <ListVideo size={14} /> 播放全部
+              </button>
+            )}
+            <div className="menu-wrap">
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => setMenu(!menu)}
+                aria-haspopup="menu"
+                aria-expanded={menu}
+              >
+                <MoreHorizontal size={14} /> 更多
+              </button>
+              {menu && (
+                <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
+                  <button type="button" role="menuitem" className="danger" onClick={() => void remove()}>
+                    取消订阅
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="list-head">
+        <h2 className="section-title flush">{hits ? "搜索结果" : "全部单集"}</h2>
+        <label className={`show-search ${query ? "on" : ""}`}>
+          <Search size={14} />
+          <input
+            ref={searchBox}
+            value={query}
+            spellCheck={false}
+            placeholder="搜索本节目（⌘F）"
+            aria-label="搜索本节目的单集与简介"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setQuery("");
+                e.currentTarget.blur();
+              }
+            }}
+          />
+          {query && (
+            <button
+              type="button"
+              className="icon-btn sm"
+              onClick={() => {
+                setQuery("");
+                searchBox.current?.focus();
+              }}
+              aria-label="清除搜索"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </label>
+        {!hits && (
+          <div className="seg-control">
+            {(
+              [
+                ["all", "全部"],
+                ["unplayed", "未听"],
+                ["subs", "有字幕"],
+              ] as [Filter, string][]
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                className={filter === k ? "on" : ""}
+                onClick={() => setFilter(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {hits ? (
+        hits.length ? (
+          <>
+            <p className="muted small search-count">找到 {hits.length} 集</p>
+            <div className="ep-feed">
+              {hits.map((ep) => (
+                <EpisodeRow key={ep.id} ep={ep} onOpen={() => openEpisode(ep)} />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="panel-empty soft">
+            <p className="lead">没有找到「{query.trim()}」</p>
+            <p className="muted">搜索范围是本节目的标题与简介</p>
+          </div>
+        )
+      ) : (
+        <>
+          <MonthFilter episodes={byFilter} month={month} onChange={setMonth} />
+          <EpisodeList episodes={list} onOpen={openEpisode} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function EpisodeList({
+  episodes,
+  onOpen,
+}: {
+  episodes: Episode[] | null;
+  onOpen: (ep: Episode) => void;
+}) {
+  if (episodes == null) return <p className="muted">加载中…</p>;
+  if (!episodes.length) {
+    return (
+      <div className="panel-empty soft">
+        <p className="lead">这里还没有内容</p>
+        <p className="muted">新的内容到了，会出现在这里</p>
+      </div>
+    );
+  }
+
+  const groups: { label: string; items: Episode[] }[] = [];
+  for (const ep of episodes) {
+    const label = groupLabel(ep.published);
+    const last = groups[groups.length - 1];
+    if (last?.label === label) last.items.push(ep);
+    else groups.push({ label, items: [ep] });
+  }
+
+  return (
+    <div className="ep-feed">
+      {groups.map((g) => (
+        <section key={g.label} className="ep-group">
+          <h3 className="ep-group-h">{g.label}</h3>
+          {g.items.map((ep) => (
+            <EpisodeRow key={ep.id} ep={ep} onOpen={() => onOpen(ep)} />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}

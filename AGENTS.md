@@ -1,12 +1,9 @@
-# Agent notes for SubCast
+# Agent notes for Subpodcast · 声译
 
-Read before changing or shipping anything here.
-
-- **Shipping**: [docs/RELEASING.md](docs/RELEASING.md) decides between an interface hot update (`scripts/ui-release.sh`, front end only, no notarization) and an app release (`scripts/release.sh`, anything in `src-tauri/`). Follow it; don't improvise a release.
-- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Server pieces: [server/deploy/README.md](server/deploy/README.md).
-- **Checks before a PR**: `npx tsc --noEmit -p .`, `npm run i18n -- --strict`, `cargo test --lib` in `src-tauri`. Interface text goes through `t("中文")` with translations in `src/locales/{en,ja,zh-TW}.ts`.
-- **Git**: short branch → PR → merge commit; never push to `main`.
-- **Tauri commands**: a new command needs the Rust function, `invoke_handler`, `src-tauri/build.rs` COMMANDS and `capabilities/default.json`. That makes it an app release, not a hot update.
-- **WebView traps**: no `window.confirm/alert/prompt` (use `ask()` from `src/lib/confirm.ts`); select store slices with `useShallow`, never subscribe to the whole store; never define components inside components.
-- **Secrets**: never in the repo, logs or prompts (updater key, Apple credentials, server tokens).
-- **Design**: no vertical side-stripe accents (border-left bars); reply to the owner in Chinese.
+- **对照**：可阅读 `/Users/kenshin/Projects/Subcast` 的设计与行为，**禁止复制其源码**。
+- **Checks**：`npx tsc --noEmit -p .`；`cd src-tauri && cargo test --lib`
+- **Tauri 新命令**：Rust 函数 + `invoke_handler` + `build.rs` COMMANDS + `capabilities/default.json`
+- **WebView**：禁止 `window.confirm/alert/prompt`（用 `ask()`）；store 用 `useShallow`；不在组件内定义组件
+- **Secrets**：永不进仓库、日志、提示词
+- **Design**：无竖向侧条装饰；回复用户用中文；以「哥」开头
+- **产品名**：英文 Subpodcast，中文 声译

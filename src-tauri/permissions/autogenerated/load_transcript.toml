@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-transcript"
+description = "Enables the load_transcript command without any pre-configured scope."
+commands.allow = ["load_transcript"]
+
+[[permission]]
+identifier = "deny-load-transcript"
+description = "Denies the load_transcript command without any pre-configured scope."
+commands.deny = ["load_transcript"]
