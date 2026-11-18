@@ -39,6 +39,9 @@ pub struct Episode {
     pub notes: Option<String>,
     pub transcript_url: Option<String>,
     pub transcript_type: Option<String>,
+    /// 是否有乔木精读 / 改写长文（列表「精读」标签与精读 Tab）。
+    #[serde(default)]
+    pub deep: bool,
     #[serde(default)]
     pub progress: f64,
     #[serde(default)]

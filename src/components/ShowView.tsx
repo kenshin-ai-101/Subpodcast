@@ -1,12 +1,13 @@
 /**
  * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll
  * [OUTPUT]: 订阅节目详情页（封面头图、筛选、月份轴、分组单集）
- * [POS]: Sidebar 点选订阅后的主面板；对齐 SubCast ShowView 信息架构，不含乔木精读
+ * [POS]: Sidebar 点选订阅后的主面板；含「有乔木精读版」入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  BookOpen,
   ChevronDown,
   ListVideo,
   Loader2,
@@ -18,6 +19,7 @@ import {
 import { api, errText, type Episode, type Show } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { groupLabel, plainText } from "../lib/format";
+import { alreadySubscribedDeep, deepPickFor } from "../lib/deepPicks";
 import { playAll } from "../lib/queue";
 import { useStore } from "../store";
 import { EpisodeRow } from "./HomeView";
@@ -28,6 +30,7 @@ type Filter = "all" | "unplayed" | "subs";
 function kindLabel(show: Show): string {
   if (show.kind === "youtube") return "YouTube 频道";
   if (show.kind === "xiaoyuzhou") return "小宇宙";
+  if (show.kind === "qiaomu") return "乔木精读";
   return "播客";
 }
 
@@ -40,13 +43,14 @@ function isPlayable(ep: Episode): boolean {
 }
 
 export function ShowView({ showId }: { showId: string }) {
-  const { shows, openEpisode, notify, reloadShows, go } = useStore(
+  const { shows, openEpisode, notify, reloadShows, go, set } = useStore(
     useShallow((s) => ({
       shows: s.shows,
       openEpisode: s.openEpisode,
       notify: s.notify,
       reloadShows: s.reloadShows,
       go: s.go,
+      set: s.set,
     })),
   );
   const show = shows.find((s) => s.id === showId);
@@ -135,6 +139,26 @@ export function ShowView({ showId }: { showId: string }) {
     show.author && show.author !== show.title
       ? `${kindLabel(show)} · ${show.author}`
       : kindLabel(show);
+  const deepPick =
+    show.kind !== "qiaomu" ? deepPickFor(show.title) : undefined;
+  const deepReady =
+    deepPick && !alreadySubscribedDeep(deepPick.input, shows) ? deepPick : undefined;
+
+  const subscribeDeep = async () => {
+    if (!deepReady) return;
+    setBusy(true);
+    try {
+      const s = await api.addSubscription(deepReady.input);
+      await reloadShows();
+      notify(`已订阅精读版「${s.title}」`);
+      go({ kind: "show", id: s.id });
+    } catch (e) {
+      notify(errText(e));
+      set({ addOpen: true, addTab: "link" });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="page">
@@ -194,6 +218,16 @@ export function ShowView({ showId }: { showId: string }) {
           </div>
         </div>
       </div>
+
+      {deepReady && (
+        <button type="button" className="deep-hint" onClick={() => void subscribeDeep()} disabled={busy}>
+          <BookOpen size={16} />
+          <div>
+            <p className="deep-hint-t">这档节目有乔木精读版</p>
+            <p className="muted small">中文标题、每期精读长文和原文文稿，点击订阅</p>
+          </div>
+        </button>
+      )}
 
       <div className="list-head">
         <h2 className="section-title flush">{hits ? "搜索结果" : "全部单集"}</h2>

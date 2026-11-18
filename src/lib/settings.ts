@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.getSettings / setSettings
- * [OUTPUT]: Settings、PRESETS、ASR_SERVICES、读写与迁移
- * [POS]: 用户偏好；Key 在钥匙串；字段布局对齐 SubCast 设置三栏
+ * [OUTPUT]: Settings、PRESETS、VOICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、读写与迁移
+ * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词与朗读音色
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api } from "./api";
@@ -35,6 +35,13 @@ export type SubtitleMode = "bilingual" | "original" | "translation";
 export type SettingsSection = "subtitles" | "ai" | "general";
 export type LangSetting = "auto" | "zh-CN" | "zh-TW" | "en";
 
+export interface QuickPrompt {
+  id: string;
+  title: string;
+  body: string;
+  enabled: boolean;
+}
+
 export interface Settings {
   providers: Record<string, Provider>;
   chatProvider: string;
@@ -48,6 +55,11 @@ export interface Settings {
   asrModel: string;
   cloudAsr: Record<string, CloudAsr>;
   chatModel: string;
+  /** 问答全局指令；chatPromptOn 关闭时不注入。 */
+  chatPrompt: string;
+  chatPromptOn: boolean;
+  /** null = 用内置提示词。 */
+  quickPrompts: QuickPrompt[] | null;
   subtitleMode: SubtitleMode;
   subtitleSize?: "s" | "m" | "l" | "xl";
   subtitleFont?: "system" | "serif" | "kai" | "sans";
@@ -55,14 +67,56 @@ export interface Settings {
   chatSize?: "m" | "l";
   audioNextLine?: boolean;
   autoNext?: boolean;
+  /** 播放倍速（与控制条同步）。 */
+  playbackRate?: number;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   uiLang: LangSetting;
   youtubePromo: boolean;
   homeBannerHidden: boolean;
-  /** 偏好记住；MVP 暂不实际上传共享库。 */
+  /** 匿名分享字幕、译文与导读（阅读共享库始终开启）。 */
   shareTranscripts: boolean;
+  /** 豆包朗读音色 id。 */
+  ttsVoice: string;
+  /** seed-tts-2.0 或复刻 seed-icl-2.0。 */
+  ttsResource: string;
   /** YouTube 验证时借用哪个浏览器登录（"" = 先问我）。 */
   ytCookiesBrowser?: string;
+}
+
+/** 导读/精读朗读可选音色。 */
+export const VOICES: [string, string][] = [
+  ["zh_female_vv_uranus_bigtts", "Vivi 2.0"],
+  ["zh_male_liufei_uranus_bigtts", "刘飞 2.0"],
+  ["zh_female_xiaohe_uranus_bigtts", "小何 2.0"],
+  ["zh_male_m191_uranus_bigtts", "云舟 2.0"],
+  ["zh_male_taocheng_uranus_bigtts", "小天 2.0"],
+  ["zh_male_shenyeboke_uranus_bigtts", "深夜播客 2.0"],
+  ["zh_male_youyoujunzi_uranus_bigtts", "悠悠君子 2.0"],
+  ["zh_female_shuangkuaisisi_uranus_bigtts", "爽快思思 2.0"],
+  ["zh_female_cancan_uranus_bigtts", "知性灿灿 2.0"],
+  ["en_male_tim_uranus_bigtts", "Tim"],
+  ["en_female_dacey_uranus_bigtts", "Dacey"],
+];
+
+export const BUILTIN_PROMPTS: QuickPrompt[] = (
+  [
+    ["brief", "三分钟看懂这期", "用三分钟能读完的篇幅讲清这期节目：主要聊了什么、得出了什么结论、为什么值得关注。最后推荐 3 个最值得听的片段，附时间戳。"],
+    ["insights", "最有价值的观点", "列出这期最有信息量的 5–8 个观点，按重要性排序。每条写：一句加粗的观点、嘉宾给出的理由、原话时间戳。"],
+    ["guest", "嘉宾是谁", "嘉宾是谁？结合节目内容介绍他的身份、经历和代表作，说明他为什么有资格谈这个话题。节目里没提到、属于常识补充的内容请标出来。"],
+    ["debate", "反直觉和有争议的地方", "这期有哪些反直觉或有争议的观点？逐条说明：通常大家怎么看、嘉宾怎么说、他的理由站不站得住、可能漏掉了什么。"],
+    ["numbers", "数据和预测", "把节目里出现的具体数字、时间表和对未来的预测整理成表格，列：内容、谁说的、时间戳、可信度和理由。"],
+    ["resources", "提到的书和资源", "整理节目里提到的书、论文、公司、产品、工具和人物，按类别列出，每项一句话说明，并附时间戳。"],
+    ["action", "我能用上什么", "站在普通从业者的角度，这期有哪些马上能用到工作或生活里的方法和建议？写成具体可做的动作，每条附出处时间戳。"],
+    ["terms", "术语和黑话", "列出节目里出现的专业术语、缩写和圈内说法，给出英文原文、通俗的中文解释和出现的时间戳。"],
+    ["followup", "值得追问的问题", "如果我能采访这位嘉宾，最值得追问的 3 个问题是什么？说明为什么要问，以及节目里哪里没讲透。"],
+    ["share", "写一段分享", "把这期的精华写成一段适合发朋友圈的分享，200 字以内，口语化，突出一个最有冲击力的观点。"],
+  ] as const
+).map(([id, title, body]) => ({ id: `builtin-${id}`, title, body, enabled: true }));
+
+export const PROMPT_HINTS = ["先给结论，再展开", "简洁，不说套话", "多用列表和表格", "术语保留英文原文", "讲给外行听，多打比方"];
+
+export function quickPrompts(s: Settings): QuickPrompt[] {
+  return s.quickPrompts ?? BUILTIN_PROMPTS.map((p) => ({ ...p }));
 }
 
 type G = Provider["group"];
@@ -198,10 +252,13 @@ export const DEFAULTS: Settings = {
   translateMode: "auto",
   translateQuality: "fast",
   proxy: "",
-  asrEngine: "openai",
-  asrModel: "gpt-4o-mini-transcribe",
+  asrEngine: "local",
+  asrModel: "qwen3-asr",
   cloudAsr: Object.fromEntries(ASR_SERVICES.map((a) => [a.id, a])),
   chatModel: "",
+  chatPrompt: "",
+  chatPromptOn: true,
+  quickPrompts: null,
   subtitleMode: "bilingual",
   subtitleSize: "m",
   subtitleFont: "sans",
@@ -209,10 +266,13 @@ export const DEFAULTS: Settings = {
   chatSize: "m",
   audioNextLine: false,
   autoNext: false,
+  playbackRate: 1,
   uiLang: "auto",
   youtubePromo: true,
   homeBannerHidden: false,
-  shareTranscripts: false,
+  shareTranscripts: true,
+  ttsVoice: "zh_female_vv_uranus_bigtts",
+  ttsResource: "seed-tts-2.0",
   ytCookiesBrowser: "",
 };
 

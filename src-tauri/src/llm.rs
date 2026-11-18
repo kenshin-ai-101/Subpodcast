@@ -26,6 +26,50 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+fn net_err(e: reqwest::Error) -> anyhow::Error {
+    if e.is_timeout() {
+        anyhow!("模型响应超时，请检查网络或换一个更快的模型")
+    } else if e.is_connect() {
+        anyhow!("连不上模型服务，请检查网络或代理")
+    } else {
+        let s = e.to_string();
+        if s.contains("error decoding response body") {
+            anyhow!("模型连接中断，请重试")
+        } else {
+            anyhow!("连不上模型服务：{s}")
+        }
+    }
+}
+
+fn api_err(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    let msg = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            v["error"]["message"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .or_else(|| v["message"].as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.chars().take(200).collect());
+    match status.as_u16() {
+        401 | 403 => anyhow!("API Key 无效或没有权限：{msg}"),
+        404 => anyhow!("模型或地址不存在：{msg}"),
+        429 => anyhow!("请求太频繁或额度不足：{msg}"),
+        _ => anyhow!("模型服务出错（{status}）：{msg}"),
+    }
+}
+
+/// 从 OpenAI 兼容 delta / message 取可见正文（跳过 reasoning）。
+fn text_piece(v: &Value) -> Option<String> {
+    let d = &v["choices"][0]["delta"];
+    if let Some(t) = d["content"].as_str().filter(|s| !s.is_empty()) {
+        return Some(t.to_string());
+    }
+    let m = &v["choices"][0]["message"];
+    m["content"].as_str().filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 pub async fn chat_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String> {
     if cfg.protocol == "anthropic" {
         return anthropic_once(cfg, messages).await;
@@ -45,16 +89,18 @@ async fn openai_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String
         .bearer_auth(&cfg.api_key)
         .json(&body)
         .send()
-        .await?;
+        .await
+        .map_err(net_err)?;
     if !resp.status().is_success() {
         let status = resp.status();
         let t = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("模型 HTTP {status}: {t}"));
+        return Err(api_err(status, &t));
     }
-    let v: Value = resp.json().await?;
-    v["choices"][0]["message"]["content"]
-        .as_str()
-        .map(str::to_string)
+    let t = resp.text().await.map_err(net_err)?;
+    let v: Value = serde_json::from_str(&t).map_err(|e| anyhow!("模型返回无法解析：{e}"))?;
+    text_piece(&v)
+        .or_else(|| v["choices"][0]["message"]["content"].as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("模型没有返回正文"))
 }
 
@@ -74,13 +120,15 @@ async fn anthropic_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<Str
         .header("anthropic-version", "2023-06-01")
         .json(&body)
         .send()
-        .await?;
+        .await
+        .map_err(net_err)?;
     if !resp.status().is_success() {
         let status = resp.status();
         let t = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("Anthropic HTTP {status}: {t}"));
+        return Err(api_err(status, &t));
     }
-    let v: Value = resp.json().await?;
+    let t = resp.text().await.map_err(net_err)?;
+    let v: Value = serde_json::from_str(&t).map_err(|e| anyhow!("Anthropic 返回无法解析：{e}"))?;
     let mut out = String::new();
     for block in v["content"].as_array().into_iter().flatten() {
         if let Some(t) = block["text"].as_str() {
@@ -117,17 +165,18 @@ pub async fn chat_stream(
         .bearer_auth(&cfg.api_key)
         .json(&body)
         .send()
-        .await?;
+        .await
+        .map_err(net_err)?;
     if !resp.status().is_success() {
         let status = resp.status();
         let t = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("模型 HTTP {status}: {t}"));
+        return Err(api_err(status, &t));
     }
     let mut stream = resp.bytes_stream();
     let mut full = String::new();
     let mut buf = String::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
+        let chunk = chunk.map_err(net_err)?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(pos) = buf.find('\n') {
             let line = buf[..pos].trim().to_string();
@@ -140,9 +189,12 @@ pub async fn chat_stream(
                 continue;
             }
             if let Ok(v) = serde_json::from_str::<Value>(data) {
-                if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
-                    full.push_str(delta);
-                    on_delta(delta.to_string());
+                if let Some(e) = v["error"]["message"].as_str() {
+                    return Err(anyhow!("模型服务出错：{e}"));
+                }
+                if let Some(delta) = text_piece(&v) {
+                    full.push_str(&delta);
+                    on_delta(delta);
                 }
             }
         }

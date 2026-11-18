@@ -32,7 +32,19 @@ once_cell = "1"
 urlencoding = "2"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
 futures-util = "0.3"
+tiny_http = "0.12"
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav", "flac", "ogg", "vorbis", "pcm"] }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.14"
 
 [profile.release]
 codegen-units = 1

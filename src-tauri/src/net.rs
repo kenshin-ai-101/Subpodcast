@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 reqwest；可选代理字符串来自设置
- * [OUTPUT]: 统一 HTTP 客户端、文本/字节拉取
- * [POS]: 所有出站网络的唯一出口，绕开 WebView CORS
+ * [OUTPUT]: 统一 HTTP 客户端（connect 20s + read 120s，无总超时）、文本/字节拉取
+ * [POS]: 所有出站网络的唯一出口；流式 LLM 靠读超时续命，短请求可用 RequestBuilder::timeout
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Result};
@@ -27,9 +27,13 @@ const UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Subpodcast/0.1";
 
 fn build(proxy: Option<&str>) -> Result<Client> {
+    // 不用总超时：流式 LLM 生成常超 60s，reqwest 会中途掐断并报
+    // 「error decoding response body」。改用读超时——有数据就重置。
     let mut b = Client::builder()
-        .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(20))
+        .read_timeout(Duration::from_secs(120))
+        .pool_idle_timeout(Duration::from_secs(20))
+        .tcp_keepalive(Duration::from_secs(30))
         .user_agent(UA)
         .gzip(true)
         .brotli(true);
@@ -123,6 +127,11 @@ fn http_err(url: &str, status: reqwest::StatusCode) -> anyhow::Error {
     } else {
         anyhow!("HTTP {status} for {url}")
     }
+}
+
+pub async fn get_json(url: &str) -> Result<serde_json::Value> {
+    let text = get_text(url).await?;
+    Ok(serde_json::from_str(&text)?)
 }
 
 pub async fn get_text(url: &str) -> Result<String> {

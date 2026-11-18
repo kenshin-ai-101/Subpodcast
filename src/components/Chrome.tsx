@@ -1,30 +1,64 @@
 /**
- * [INPUT]: store、api
- * [OUTPUT]: Sidebar / TopBar / Toast — 与 SubCast 壳层信息架构对齐
+ * [INPUT]: store、api、layout（sideOpen → rail）
+ * [OUTPUT]: Sidebar（首页/发现/统计；收起为图标轨）/ TopBar / Toast
  * [POS]: 全局导航与搜索订阅入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronLeft, Inbox, Link2, Loader2, Plus, Search, Settings as Cog } from "lucide-react";
+import {
+  ChartColumn,
+  ChevronLeft,
+  Compass,
+  Inbox,
+  Link2,
+  Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Settings as Cog,
+} from "lucide-react";
 import { api, errText, type Show } from "../lib/api";
 import { looksLikeLink } from "../lib/feeds";
+import { useLayout } from "../lib/layout";
+import { showName } from "../lib/picks";
+import { IS_MAC } from "../lib/shortcuts";
 import { useStore, type View } from "../store";
 
 function isView(view: View, v: View) {
   if (view.kind !== v.kind) return false;
   if (v.kind === "show" && view.kind === "show") return view.id === v.id;
   if (v.kind === "episode" && view.kind === "episode") return view.id === v.id;
+  if (v.kind === "channel" && view.kind === "channel") return view.input === v.input;
   return true;
 }
+
+const SIDE_MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 export function Sidebar() {
   const { shows, view, go, set } = useStore(
     useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })),
   );
+  const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
+  const rail = !sideOpen;
+
+  // 渲染函数而非子组件：避免每次 Sidebar 重渲时按钮 remount 吞掉点击
+  const nav = (v: View, icon: React.ReactNode, label: string) => (
+    <button
+      key={v.kind}
+      className={`nav ${isView(view, v) ? "on" : ""}`}
+      onClick={() => go(v)}
+      title={rail ? label : undefined}
+      aria-label={label}
+    >
+      {icon}
+      <span className="label">{label}</span>
+    </button>
+  );
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${rail ? "rail" : ""}`}>
       <div className="traffic-space" data-tauri-drag-region />
       <div className="brand" data-tauri-drag-region>
         <div className="logo-mark">声</div>
@@ -34,39 +68,59 @@ export function Sidebar() {
         </div>
       </div>
       <nav>
-        <button className={`nav ${isView(view, { kind: "home" }) ? "on" : ""}`} onClick={() => go({ kind: "home" })}>
-          <Inbox size={16} />
-          <span>首页</span>
-        </button>
+        {nav({ kind: "home" }, <Inbox size={16} />, "首页")}
+        {nav({ kind: "discover" }, <Compass size={16} />, "发现")}
+        {nav({ kind: "stats" }, <ChartColumn size={16} />, "收听统计")}
       </nav>
       <div className="side-sep" />
       <div className="side-head">
-        <span>订阅</span>
-        <button className="icon-btn" title="添加节目" onClick={() => set({ addOpen: true })}>
+        <span className="label">订阅</span>
+        <button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}>
           <Plus size={14} />
         </button>
       </div>
       <div className="show-list">
-        {shows.map((s) => (
-          <button
-            key={s.id}
-            className={`show-item ${isView(view, { kind: "show", id: s.id }) ? "on" : ""}`}
-            onClick={() => go({ kind: "show", id: s.id })}
-            title={s.title}
-          >
-            <span className="show-cover">
-              {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
-            </span>
-            <span className="show-title">{s.title}</span>
-            {(s.unplayed ?? 0) > 0 && <span className="unplayed">{(s.unplayed ?? 0) > 99 ? "99+" : s.unplayed}</span>}
-          </button>
-        ))}
-        {!shows.length && <p className="muted small" style={{ padding: "4px 10px" }}>还没有订阅</p>}
+        {shows.map((s) => {
+          const unread = s.unplayed ?? 0;
+          return (
+            <button
+              key={s.id}
+              className={`show-item ${isView(view, { kind: "show", id: s.id }) ? "on" : ""}`}
+              onClick={() => go({ kind: "show", id: s.id })}
+              title={rail ? showName(s.title) : s.title}
+            >
+              <span className="show-cover">
+                {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
+                {rail && unread > 0 && <span className="rail-dot" />}
+              </span>
+              <span className="show-title">{showName(s.title)}</span>
+              {unread > 0 && <span className="unplayed">{unread > 99 ? "99+" : unread}</span>}
+            </button>
+          );
+        })}
+        {!shows.length && (
+          <p className="muted small side-empty" style={{ padding: "4px 10px" }}>
+            还没有订阅
+          </p>
+        )}
       </div>
       <div className="side-foot">
-        <button className="nav" onClick={() => set({ settingsOpen: true })}>
+        <button
+          className="nav settings-btn"
+          onClick={() => set({ settingsOpen: true })}
+          title={rail ? "设置" : undefined}
+          aria-label="设置"
+        >
           <Cog size={16} />
-          <span>设置</span>
+          <span className="label">设置</span>
+        </button>
+        <button
+          className="icon-btn side-toggle"
+          onClick={() => putLayout({ sideOpen: rail })}
+          title={rail ? `展开侧栏（${SIDE_MOD}B）` : `收起为图标（${SIDE_MOD}B）`}
+          aria-label={rail ? "展开侧栏" : "收起侧栏"}
+        >
+          {rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
       </div>
     </aside>

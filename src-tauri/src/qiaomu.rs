@@ -1,14 +1,16 @@
 /**
- * [INPUT]: 依赖 net、model；乔木精读站 *.qiaomu.ai 与 rss.qiaomu.ai
- * [OUTPUT]: 精读频道 Show+Episodes；按节目标题匹配精读源
- * [POS]: 与 SubCast qiaomu 对齐的精读订阅入口；feeds.resolve / search 可升格到此
+ * [INPUT]: 依赖 net、model、feeds、captions::split_timed；乔木精读站 *.qiaomu.ai 与 rss.qiaomu.ai
+ * [OUTPUT]: 精读频道、单集 Detail、rss 改写 HTML、transcript_segments / podscribe_transcript
+ * [POS]: 与 SubCast qiaomu 对齐的精读订阅与正文管线；官方字幕瀑布可消费原文/Podscribe
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+use crate::captions;
 use crate::feeds;
-use crate::model::{now_ms, short_hash, Episode, Show};
+use crate::model::{now_ms, short_hash, Episode, Segment, Show};
 use crate::net;
 use anyhow::{anyhow, Result};
 use regex::Regex;
+use serde::Serialize;
 
 /// 与 SubCast 一致：单档最多保留最近 300 期。
 pub const MAX_EPISODES: usize = 300;
@@ -207,6 +209,7 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
                 notes: e["ds"].as_str().map(str::to_string),
                 transcript_url: None,
                 transcript_type: Some("qiaomu".into()),
+                deep: true,
                 progress: 0.0,
                 has_transcript: false,
                 show_title: Some(show.title.clone()),
@@ -214,6 +217,220 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
         })
         .collect();
     Ok(feeds::Resolved { show, episodes })
+}
+
+#[derive(Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Detail {
+    pub audio: Option<String>,
+    pub deep_read: Option<String>,
+    pub transcript: Option<String>,
+}
+
+fn decode_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// 取 class 含指定名的首个块级元素的 inner HTML。
+fn inner_html(html: &str, class: &str) -> Option<String> {
+    let open = Regex::new(&format!(
+        r#"<(div|article|section|pre)[^>]*class="[^"]*\b{}\b[^"]*"[^>]*>"#,
+        regex::escape(class)
+    ))
+    .ok()?;
+    let m = open.captures(html)?;
+    let tag = m[1].to_string();
+    let start = m.get(0)?.end();
+    let tok = Regex::new(&format!(r"(?i)<(/?){tag}\b[^>]*>")).ok()?;
+    let mut depth = 1i32;
+    for t in tok.captures_iter(&html[start..]) {
+        depth += if t[1].is_empty() { 1 } else { -1 };
+        if depth == 0 {
+            return Some(html[start..start + t.get(0)?.start()].to_string());
+        }
+    }
+    None
+}
+
+/// 精读站单集页：音频、中文精读 HTML、原文。
+pub async fn detail(link: &str) -> Result<Detail> {
+    let html = net::get_text(link).await?;
+    let audio = Regex::new(r#"<audio[^>]+src="([^"]+)""#)
+        .ok()
+        .and_then(|re| re.captures(&html))
+        .map(|c| decode_entities(&c[1]))
+        .or_else(|| {
+            Regex::new(r#"(?:src|href)="(https://[^"]+\.(?:mp3|m4a)[^"]*)""#)
+                .ok()
+                .and_then(|re| re.captures(&html))
+                .map(|c| decode_entities(&c[1]))
+        });
+    let deep_read = inner_html(&html, "zh-article")
+        .map(|h| {
+            let h = Regex::new(r"(?is)<script.*?</script>|<style.*?</style>")
+                .unwrap()
+                .replace_all(&h, "");
+            Regex::new(r#"(?is)<p[^>]*class="zh-note"[^>]*>.*?</p>"#)
+                .unwrap()
+                .replace_all(&h, "")
+                .trim()
+                .to_string()
+        })
+        .filter(|h| h.len() > 40);
+    let transcript = inner_html(&html, "transcript-text")
+        .map(|t| {
+            let t = Regex::new(r"(?s)<[^>]+>").unwrap().replace_all(&t, "");
+            decode_entities(t.trim())
+        })
+        .filter(|t| t.len() > 200);
+    Ok(Detail {
+        audio,
+        deep_read,
+        transcript,
+    })
+}
+
+/// 无时间戳原文按时长摊成句段（精读站 transcript-text）。
+pub fn transcript_segments(text: &str, duration: f64) -> Vec<Segment> {
+    let body: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let skip = body
+        .iter()
+        .take(3)
+        .take_while(|l| {
+            l.len() < 160
+                && (l.contains("Podcast")
+                    || l.contains("transcri")
+                    || l.contains('#')
+                    || l.contains("May contain"))
+        })
+        .count();
+    let joined = body[skip..].join(" ");
+    if joined.is_empty() {
+        return vec![];
+    }
+    captions::split_timed(&joined, 0.0, duration.max(60.0))
+}
+
+/// Podscribe 带时间戳字幕。
+pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
+    let v = net::get_json(url).await?;
+    let segs = v["data"]["transcript"]["segments"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut out: Vec<Segment> = segs
+        .iter()
+        .filter_map(|s| {
+            let text = s["text"].as_str()?.trim().to_string();
+            (!text.is_empty()).then(|| Segment {
+                start: s["start_seconds"].as_f64().unwrap_or(0.0),
+                end: 0.0,
+                text,
+            })
+        })
+        .collect();
+    for i in 0..out.len() {
+        out[i].end = out
+            .get(i + 1)
+            .map(|n| n.start)
+            .unwrap_or(out[i].start + 8.0);
+    }
+    Ok(out)
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn inline_md(s: &str) -> String {
+    let s = Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap().replace_all(s, "");
+    let s = esc(&s);
+    let s = Regex::new(r"\*\*(.+?)\*\*")
+        .unwrap()
+        .replace_all(&s, "<strong>$1</strong>");
+    let s = Regex::new(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+        .unwrap()
+        .replace_all(&s, r#"<a href="$2">$1</a>"#);
+    Regex::new(r"`([^`]+)`")
+        .unwrap()
+        .replace_all(&s, "<code>$1</code>")
+        .into_owned()
+}
+
+/// 改写 Markdown → 简易 HTML（标题/列表/引用/段落）。
+pub fn markdown_html(md: &str) -> String {
+    let mut out = String::new();
+    let mut list = false;
+    for block in md.split("\n\n").map(str::trim).filter(|b| !b.is_empty()) {
+        let lines: Vec<&str> = block.lines().collect();
+        if lines
+            .iter()
+            .all(|l| l.trim_start().starts_with("- ") || l.trim_start().starts_with("* "))
+        {
+            if !list {
+                out.push_str("<ul>");
+                list = true;
+            }
+            for l in lines {
+                out.push_str(&format!(
+                    "<li>{}</li>",
+                    inline_md(l.trim_start()[2..].trim())
+                ));
+            }
+            continue;
+        }
+        if list {
+            out.push_str("</ul>");
+            list = false;
+        }
+        if let Some(h) = block.strip_prefix("### ") {
+            out.push_str(&format!("<h3>{}</h3>", inline_md(h)));
+        } else if let Some(h) = block.strip_prefix("## ") {
+            out.push_str(&format!("<h2>{}</h2>", inline_md(h)));
+        } else if let Some(h) = block.strip_prefix("# ") {
+            out.push_str(&format!("<h2>{}</h2>", inline_md(h)));
+        } else if block.starts_with('>') {
+            let q: Vec<String> = lines
+                .iter()
+                .map(|l| inline_md(l.trim_start_matches('>').trim()))
+                .collect();
+            out.push_str(&format!(
+                "<blockquote><p>{}</p></blockquote>",
+                q.join("<br>")
+            ));
+        } else {
+            out.push_str(&format!(
+                "<p>{}</p>",
+                lines.iter().map(|l| inline_md(l)).collect::<Vec<_>>().join("<br>")
+            ));
+        }
+    }
+    if list {
+        out.push_str("</ul>");
+    }
+    out
+}
+
+/// rss.qiaomu.ai 单集改写正文。
+pub async fn rss_rewrite(entry_id: &str) -> Result<Option<String>> {
+    let v = net::get_json(&format!(
+        "https://rss.qiaomu.ai/api/entry/{entry_id}/rewrite"
+    ))
+    .await?;
+    if v["status"].as_str() != Some("ready") {
+        return Ok(None);
+    }
+    let html = v["rewrite"]["bodyHtml"]
+        .as_str()
+        .filter(|h| !h.is_empty())
+        .map(String::from)
+        .or_else(|| v["rewrite"]["body"].as_str().map(markdown_html));
+    Ok(html.filter(|h| h.len() > 40))
 }
 
 /// 拉取 `rss.qiaomu.ai/sources/{id}`（分页 API，封顶 MAX_EPISODES）。
@@ -271,12 +488,21 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
             let guid = e["id"].as_str()?.to_string();
             let ep_title = e["title"].as_str()?.to_string();
             let audio = e["audio"]["url"].as_str().map(str::to_string);
-            let video = e["link"]
-                .as_str()
+            let link = e["link"].as_str().map(str::to_string);
+            let video = link
+                .as_deref()
                 .and_then(crate::feeds::youtube_id_from_url_pub);
-            if audio.is_none() && video.is_none() && !id.starts_with("podscribe-") {
+            let podscribe = id.starts_with("podscribe-");
+            if audio.is_none() && video.is_none() && !podscribe {
                 return None;
             }
+            let transcript_url = if podscribe {
+                link.as_deref()
+                    .and_then(|l| l.strip_prefix("https://podcasts.happyscribe.com/"))
+                    .map(|p| format!("https://api.qiaomu.ai/podscribe/v1/episodes/{p}/transcript"))
+            } else {
+                None
+            };
             Some(Episode {
                 id: short_hash(&format!("{show_id}|{guid}"), 20),
                 show_id: show_id.clone(),
@@ -292,13 +518,18 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
                 duration: None,
                 audio_url: audio,
                 video_id: video.clone(),
-                link: e["link"].as_str().map(str::to_string),
+                link,
                 cover: e["image"].as_str().map(str::to_string).or_else(|| {
                     video.map(|v| format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg"))
                 }),
                 notes: e["summary"].as_str().map(str::to_string),
-                transcript_url: None,
-                transcript_type: Some("qiaomu-rss".into()),
+                transcript_url,
+                transcript_type: Some(if podscribe {
+                    "podscribe".into()
+                } else {
+                    "qiaomu-rss".into()
+                }),
+                deep: e["rewriteReady"].as_bool().unwrap_or(false),
                 progress: 0.0,
                 has_transcript: false,
                 show_title: Some(title.clone()),

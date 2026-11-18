@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__
- * [OUTPUT]: 解析任意订阅输入为 Show+Episodes；iTunes 搜索；Apple 滞后源可升格到小宇宙
- * [POS]: 订阅归一层——YT / Apple / 小宇宙 / RSS 全部变成同一模型
+ * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源
+ * [OUTPUT]: 解析任意订阅输入为 Show+Episodes；YouTube twin 回填；iTunes 搜索
+ * [POS]: 订阅归一层——YT / Apple / 小宇宙 / RSS 全部变成同一模型；词元之类双形态开集即可官方字幕
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::{now_ms, short_hash, Episode, Show};
@@ -32,6 +32,10 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     if let Some(id) = qiaomu::site_id(raw) {
         return qiaomu::channel(&id).await;
     }
+    // 词元之外：Anchor / 小宇宙入口统一切乔木源（带 videoId，开集直接官方字幕）
+    if let Some(id) = qiaomu_preferred_source(raw, "") {
+        return qiaomu::rss_channel(id).await;
+    }
 
     if let Some(id) = apple_id(raw) {
         let feed = itunes_feed_url(&id).await?;
@@ -39,6 +43,9 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     }
 
     if let Some(pid) = xiaoyuzhou_podcast_id(raw) {
+        if let Some(id) = qiaomu_preferred_source(&format!("podcast/{pid}"), "") {
+            return qiaomu::rss_channel(id).await;
+        }
         return xiaoyuzhou_show(&pid).await;
     }
 
@@ -49,6 +56,9 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     }
 
     if raw.starts_with("http://") || raw.starts_with("https://") {
+        if let Some(id) = qiaomu_preferred_source(raw, "") {
+            return qiaomu::rss_channel(id).await;
+        }
         let kind = if is_xyzfm(raw) { "xiaoyuzhou" } else { "podcast" };
         return fetch_rss(raw, kind).await;
     }
@@ -115,6 +125,7 @@ pub async fn refresh(feed_url: &str, kind: &str) -> Result<Resolved> {
             return qiaomu::channel(&id).await;
         }
     }
+    // 已订阅源保持原 feed（避免 guid/id 漂移丢进度）；缺 videoId 由 fetch_official 里 fill_youtube_twin 补
     if kind == "xiaoyuzhou" {
         if let Some(pid) = xiaoyuzhou_podcast_id(feed_url) {
             return xiaoyuzhou_show(&pid).await;
@@ -134,8 +145,9 @@ async fn fetch_rss(feed_url: &str, kind_hint: &str) -> Result<Resolved> {
         show.kind = kind_hint.into();
     }
     // Apple/Anchor 常滞后于小宇宙；若节目主页挂了小宇宙链接，用其补全单集。
-    let resolved = Resolved { show, episodes };
-    Ok(prefer_xiaoyuzhou_if_richer(resolved).await)
+    let resolved = prefer_xiaoyuzhou_if_richer(Resolved { show, episodes }).await;
+    // 音频播客 ↔ YouTube 双形态：按标题把 videoId 填上，单集页才有「视频/仅音频」。
+    Ok(attach_youtube_twins(resolved).await)
 }
 
 fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
@@ -171,10 +183,15 @@ fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         let enclosure = item.children().find(|n| n.has_tag_name("enclosure"));
         let audio_url = enclosure.and_then(|e| e.attribute("url").map(str::to_string));
         let (transcript_url, transcript_type) = podcast_transcript(item);
+        let link = text_child(item, "link");
+        let notes = text_child(item, "description")
+            .or_else(|| text_ns(item, "summary"))
+            .or_else(|| text_ns(item, "encoded"));
         let video_id = audio_url
             .as_deref()
             .and_then(youtube_id_from_url)
-            .or_else(|| text_child(item, "link").as_deref().and_then(youtube_id_from_url));
+            .or_else(|| link.as_deref().and_then(youtube_id_from_url))
+            .or_else(|| notes.as_deref().and_then(youtube_id_from_url));
 
         episodes.push(Episode {
             id: short_hash(&format!("{show_id}|{guid}"), 20),
@@ -185,11 +202,12 @@ fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
             duration: text_ns(item, "duration").and_then(|d| parse_duration(&d)),
             audio_url,
             video_id,
-            link: text_child(item, "link"),
+            link,
             cover: attr_ns(item, "image", "href").or_else(|| cover.clone()),
-            notes: text_child(item, "description").or_else(|| text_ns(item, "summary")),
+            notes,
             transcript_url,
             transcript_type,
+            deep: false,
             progress: 0.0,
             has_transcript: false,
             show_title: Some(title.clone()),
@@ -259,6 +277,7 @@ fn parse_atom(doc: &Document, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
             notes: text_child(entry, "media:description").or_else(|| text_child(entry, "content")),
             transcript_url: None,
             transcript_type: None,
+            deep: false,
             progress: 0.0,
             has_transcript: false,
             show_title: Some(title.clone()),
@@ -280,11 +299,14 @@ fn parse_atom(doc: &Document, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
 }
 
 async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
+    if let Some(id) = qiaomu_preferred_source(&format!("podcast/{pid}"), "") {
+        return qiaomu::rss_channel(id).await;
+    }
     let page = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
     let html = net::get_text(&page).await?;
     if let Ok(r) = xiaoyuzhou_from_next_data(&html, &page) {
         if !r.episodes.is_empty() {
-            return Ok(r);
+            return Ok(attach_youtube_twins(r).await);
         }
     }
     // 短链 slug 的 xyz RSS 偶可用；hex pid 通常 404，失败则至少保住节目壳。
@@ -294,7 +316,7 @@ async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
             show.kind = "xiaoyuzhou".into();
             show.feed_url = page.clone();
             show.link = Some(page);
-            return Ok(Resolved { show, episodes });
+            return Ok(attach_youtube_twins(Resolved { show, episodes }).await);
         }
     }
     let title = Regex::new(r"<title>([^<]+)</title>")
@@ -389,6 +411,7 @@ fn xyz_episode(e: &serde_json::Value, show_id: &str) -> Option<Episode> {
             .map(str::to_string),
         transcript_url: None,
         transcript_type: None,
+        deep: false,
         progress: 0.0,
         has_transcript: false,
         show_title: e["podcast"]["title"].as_str().map(str::to_string),
@@ -501,8 +524,13 @@ fn preferred_xyz_pid(html: &str) -> Option<String> {
     None
 }
 
-fn episode_dedupe_key(title: &str) -> String {
-    if let Some(c) = Regex::new(r"#\s*0*(\d+)").ok().and_then(|re| re.captures(title)) {
+/// 同一期的稳定键（#010 / EP010 / 第10期 → `#10`）；跨源合并与库内去重共用。
+pub fn episode_dedupe_key(title: &str) -> String {
+    // #010 / EP010 / Ep 10 / 第10期 → 同一期
+    if let Some(c) = Regex::new(r"(?i)(?:#|ep|第)\s*0*(\d+)")
+        .ok()
+        .and_then(|re| re.captures(title))
+    {
         return format!("#{}", &c[1]);
     }
     title
@@ -510,6 +538,118 @@ fn episode_dedupe_key(title: &str) -> String {
         .filter(|c| !c.is_whitespace())
         .collect::<String>()
         .to_lowercase()
+}
+
+/// 已知双形态节目：订阅时优先乔木 RSS（自带 videoId / 精读），避免纯音频源开集只能 ASR。
+fn qiaomu_preferred_source(feed_or_input: &str, title: &str) -> Option<&'static str> {
+    let u = feed_or_input.to_lowercase();
+    let t = title.to_lowercase();
+    if u.contains("116d068f0")
+        || u.contains("6a9956fafbb9512fc83ddbb5")
+        || u.contains("nexttokentv")
+        || u.contains("sources/nexttoken")
+        || t.contains("词元之外")
+        || t.contains("next token")
+    {
+        return Some("nexttoken");
+    }
+    None
+}
+
+/// 音频源常无 videoId；对照 YouTube 频道按期号/标题配对，单集页才能切「视频/仅音频」。
+fn youtube_twin_handle(feed_url: &str, title: &str) -> Option<&'static str> {
+    let u = feed_url.to_lowercase();
+    let t = title.to_lowercase();
+    if qiaomu_preferred_source(feed_url, title).is_some()
+        || u.contains("116d068f0")
+        || u.contains("6a9956fafbb9512fc83ddbb5")
+        || u.contains("nexttokentv")
+        || u.contains("rss.qiaomu.ai/sources/nexttoken")
+        || t.contains("词元之外")
+        || t.contains("next token")
+    {
+        return Some("https://www.youtube.com/@nexttokentv");
+    }
+    if u.contains("lexfridman.com/feed") || t.contains("lex fridman") {
+        return Some("https://www.youtube.com/@lexfridman");
+    }
+    if u.contains("dwarkesh") || t.contains("dwarkesh") {
+        return Some("https://www.youtube.com/@DwarkeshPatel");
+    }
+    if t.contains("huberman lab") || u.contains("huberman") {
+        return Some("https://www.youtube.com/@hubermanlab");
+    }
+    if t.contains("joe rogan") || u.contains("joerogan") {
+        return Some("https://www.youtube.com/@joerogan");
+    }
+    None
+}
+
+async fn attach_youtube_twins(mut resolved: Resolved) -> Resolved {
+    if resolved.show.kind == "youtube" {
+        return resolved;
+    }
+    let have = resolved
+        .episodes
+        .iter()
+        .filter(|e| e.video_id.as_ref().is_some_and(|v| !v.is_empty()))
+        .count();
+    if have * 2 >= resolved.episodes.len().max(1) {
+        return resolved;
+    }
+    let Some(handle) = youtube_twin_handle(&resolved.show.feed_url, &resolved.show.title) else {
+        return resolved;
+    };
+    let Ok(channel_id) = youtube_channel_id(handle).await else {
+        return resolved;
+    };
+    let yt_feed = format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}");
+    let Ok(xml) = net::get_text(&yt_feed).await else {
+        return resolved;
+    };
+    let Ok((_, yt_eps)) = parse_feed(&xml, &yt_feed) else {
+        return resolved;
+    };
+    use std::collections::HashMap;
+    let mut by_key: HashMap<String, String> = HashMap::new();
+    for e in yt_eps {
+        let Some(vid) = e.video_id.filter(|v| !v.is_empty()) else {
+            continue;
+        };
+        by_key.entry(episode_dedupe_key(&e.title)).or_insert(vid);
+    }
+    for ep in &mut resolved.episodes {
+        if ep.video_id.as_ref().is_some_and(|v| !v.is_empty()) {
+            continue;
+        }
+        let key = episode_dedupe_key(&ep.title);
+        if let Some(vid) = by_key.get(&key) {
+            ep.video_id = Some(vid.clone());
+            // 列表统一用 16:9 封面，避免方图被拉扁后显得乱
+            ep.cover = Some(format!("https://i.ytimg.com/vi/{vid}/hqdefault.jpg"));
+        }
+    }
+    resolved
+}
+
+/// 开集补救：库里尚无 videoId 时，按节目标题与 YouTube 频道配对一期。
+pub async fn fill_youtube_twin(ep: &Episode, feed_url: &str, show_title: &str) -> Option<String> {
+    if ep.video_id.as_ref().is_some_and(|v| !v.is_empty()) {
+        return ep.video_id.clone();
+    }
+    let handle = youtube_twin_handle(feed_url, show_title)
+        .or_else(|| youtube_twin_handle(feed_url, &ep.title))?;
+    let channel_id = youtube_channel_id(handle).await.ok()?;
+    let yt_feed = format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}");
+    let xml = net::get_text(&yt_feed).await.ok()?;
+    let (_, yt_eps) = parse_feed(&xml, &yt_feed).ok()?;
+    let key = episode_dedupe_key(&ep.title);
+    yt_eps.into_iter().find_map(|e| {
+        (episode_dedupe_key(&e.title) == key)
+            .then_some(e.video_id)
+            .flatten()
+            .filter(|v| !v.is_empty())
+    })
 }
 
 fn merge_episodes(rss: Vec<Episode>, xyz: Vec<Episode>) -> Vec<Episode> {
@@ -574,6 +714,21 @@ async fn youtube_channel_id(input: &str) -> Result<String> {
         format!("https://www.youtube.com/@{input}")
     };
     let html = net::get_text(&url).await?;
+    // 页面里会混入推荐频道的 UC…，优先元数据里的本频道 ID
+    for pat in [
+        r#""externalId":"(UC[\w-]{22})""#,
+        r#""channelId":"(UC[\w-]{22})""#,
+        r#"youtube\.com/channel/(UC[\w-]{22})"#,
+        r#"channel_id=(UC[\w-]{22})"#,
+    ] {
+        if let Some(id) = Regex::new(pat)
+            .ok()
+            .and_then(|re| re.captures(&html))
+            .map(|c| c[1].to_string())
+        {
+            return Ok(id);
+        }
+    }
     RE_UC
         .find(&html)
         .map(|m| m.as_str().to_string())
@@ -744,7 +899,12 @@ mod tests {
             r.episodes.len()
         );
         for e in r.episodes.iter().take(3) {
-            eprintln!("- {} audio={}", e.title, e.audio_url.is_some());
+            eprintln!(
+                "- {} audio={} video={:?}",
+                e.title,
+                e.audio_url.is_some(),
+                e.video_id
+            );
         }
         assert!(
             r.episodes.len() >= 10,
@@ -752,6 +912,37 @@ mod tests {
             r.episodes.len()
         );
         assert!(r.episodes.iter().any(|e| e.title.contains("#010")));
+        let with_vid = r
+            .episodes
+            .iter()
+            .filter(|e| e.video_id.as_ref().is_some_and(|v| !v.is_empty()))
+            .count();
+        assert!(
+            with_vid >= 3,
+            "expected YouTube twin videoId on Next Token, got {with_vid}"
+        );
+    }
+
+    #[test]
+    fn twin_handle_for_next_token() {
+        assert!(youtube_twin_handle("https://anchor.fm/s/116d068f0/podcast/rss", "x").is_some());
+        assert!(youtube_twin_handle("https://x.com/feed", "Next Token｜词元之外").is_some());
+        assert!(youtube_twin_handle("https://lexfridman.com/feed/podcast/", "Lex").is_some());
+        assert_eq!(
+            qiaomu_preferred_source("https://anchor.fm/s/116d068f0/podcast/rss", ""),
+            Some("nexttoken")
+        );
+        assert_eq!(
+            qiaomu_preferred_source("https://www.xiaoyuzhoufm.com/podcast/6a9956fafbb9512fc83ddbb5", ""),
+            Some("nexttoken")
+        );
+    }
+
+    #[test]
+    fn dedupe_key_strips_leading_zeros() {
+        assert_eq!(episode_dedupe_key("#010 黄仁勋"), episode_dedupe_key("#10 hello"));
+        assert_eq!(episode_dedupe_key("#010 黄仁勋"), episode_dedupe_key("EP010 黄仁勋辞职"));
+        assert_eq!(episode_dedupe_key("Ep 9 foo"), episode_dedupe_key("#009 bar"));
     }
 
     #[test]

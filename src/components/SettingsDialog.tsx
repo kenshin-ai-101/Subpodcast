@@ -36,6 +36,7 @@ import {
 } from "../lib/settings";
 import { IS_MAC, kbd } from "../lib/shortcuts";
 import { useStore } from "../store";
+import { LocalAsrPicker } from "./LocalAsrSettings";
 import { ModelSettings } from "./ModelSettings";
 import { ReadingSettings } from "./ReadingSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
@@ -509,7 +510,16 @@ export function SettingsDialog() {
                     <p className="setup-title">如果没有字幕时</p>
                     <p className="muted small">先查节目自带的字幕；没有时才听写。</p>
                     <div className="engine-switch">
-                      <button type="button" className={`engine ${isLocal ? "on" : ""}`} onClick={() => void saveSettings({ asrEngine: "local" })}>
+                      <button
+                        type="button"
+                        className={`engine ${isLocal ? "on" : ""}`}
+                        onClick={() =>
+                          void saveSettings({
+                            asrEngine: "local",
+                            asrModel: settings.asrModel?.startsWith("gpt") || settings.asrModel?.includes("/") ? "qwen3-asr" : settings.asrModel || "qwen3-asr",
+                          })
+                        }
+                      >
                         <Cpu size={18} />
                         <div>
                           <p>本机模型</p>
@@ -529,12 +539,7 @@ export function SettingsDialog() {
                       </button>
                     </div>
                     {isLocal ? (
-                      <div className="provider-form">
-                        <p className="muted small">本机识别（Qwen3 / Whisper）安排在下一期。现在请改用云端服务生成字幕。</p>
-                        <button type="button" className="btn primary sm" onClick={() => void saveSettings({ asrEngine: "openai" })}>
-                          改用云端服务
-                        </button>
-                      </div>
+                      <LocalAsrPicker />
                     ) : (
                       <>
                         <div className="provider-tabs">
@@ -676,9 +681,9 @@ export function SettingsDialog() {
                         checked={settings.shareTranscripts}
                         onChange={(e) => void saveSettings({ shareTranscripts: e.target.checked })}
                       />{" "}
-                      匿名分享我生成的字幕、译文
+                      匿名分享我生成的字幕、译文和导读
                     </label>
-                    <p className="muted small">只分享文字，帮别人省去等待。MVP 暂不实际上传，偏好会先记下来。</p>
+                    <p className="muted small">只分享文字与匿名安装标识，帮别人跳过识别、机翻与导读。</p>
                   </section>
                   <section className="setup-block">
                     <button type="button" className="setting-row" aria-expanded={showKeys} onClick={() => setShowKeys(!showKeys)}>

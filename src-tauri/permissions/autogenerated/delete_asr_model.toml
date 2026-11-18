@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-asr-model"
+description = "Enables the delete_asr_model command without any pre-configured scope."
+commands.allow = ["delete_asr_model"]
+
+[[permission]]
+identifier = "deny-delete-asr-model"
+description = "Denies the delete_asr_model command without any pre-configured scope."
+commands.deny = ["delete_asr_model"]

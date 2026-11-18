@@ -351,6 +351,24 @@
           "markdownDescription": "Enables the add_subscription command without any pre-configured scope."
         },
         {
+          "description": "Enables the asr_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-asr-models",
+          "markdownDescription": "Enables the asr_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cached_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cached-show",
+          "markdownDescription": "Enables the cached_show command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-job",
+          "markdownDescription": "Enables the cancel_job command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_temp command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-temp",
@@ -361,6 +379,30 @@
           "type": "string",
           "const": "allow-cloud-transcribe",
           "markdownDescription": "Enables the cloud_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_asr_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-asr-model",
+          "markdownDescription": "Enables the delete_asr_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-download",
+          "markdownDescription": "Enables the delete_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_asr_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-asr-model",
+          "markdownDescription": "Enables the download_asr_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_episode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-episode",
+          "markdownDescription": "Enables the download_episode command without any pre-configured scope."
         },
         {
           "description": "Enables the export_opml command without any pre-configured scope.",
@@ -399,6 +441,12 @@
           "markdownDescription": "Enables the has_api_key command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-downloads",
+          "markdownDescription": "Enables the list_downloads command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_episodes command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-episodes",
@@ -417,6 +465,12 @@
           "markdownDescription": "Enables the list_shows command without any pre-configured scope."
         },
         {
+          "description": "Enables the listening_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-listening-stats",
+          "markdownDescription": "Enables the listening_stats command without any pre-configured scope."
+        },
+        {
           "description": "Enables the llm_chat command without any pre-configured scope.",
           "type": "string",
           "const": "allow-llm-chat",
@@ -429,6 +483,18 @@
           "markdownDescription": "Enables the load_transcript command without any pre-configured scope."
         },
         {
+          "description": "Enables the local_transcribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-transcribe",
+          "markdownDescription": "Enables the local_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the log_listen command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-log-listen",
+          "markdownDescription": "Enables the log_listen command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_data_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-data-folder",
@@ -439,6 +505,24 @@
           "type": "string",
           "const": "allow-open-privacy-settings",
           "markdownDescription": "Enables the open_privacy_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-show",
+          "markdownDescription": "Enables the preview_show command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the qiaomu_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-qiaomu-detail",
+          "markdownDescription": "Enables the qiaomu_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the recent_episodes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-recent-episodes",
+          "markdownDescription": "Enables the recent_episodes command without any pre-configured scope."
         },
         {
           "description": "Enables the refresh_all command without any pre-configured scope.",
@@ -457,6 +541,12 @@
           "type": "string",
           "const": "allow-remove-show",
           "markdownDescription": "Enables the remove_show command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rescan_asr_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rescan-asr-models",
+          "markdownDescription": "Enables the rescan_asr_models command without any pre-configured scope."
         },
         {
           "description": "Enables the search_podcasts command without any pre-configured scope.",
@@ -489,6 +579,36 @@
           "markdownDescription": "Enables the set_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the share_guide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-guide",
+          "markdownDescription": "Enables the share_guide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the share_translation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-translation",
+          "markdownDescription": "Enables the share_translation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shared_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shared-exists",
+          "markdownDescription": "Enables the shared_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shared_guide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shared-guide",
+          "markdownDescription": "Enables the shared_guide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shared_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shared-transcript",
+          "markdownDescription": "Enables the shared_transcript command without any pre-configured scope."
+        },
+        {
           "description": "Enables the storage_info command without any pre-configured scope.",
           "type": "string",
           "const": "allow-storage-info",
@@ -501,16 +621,58 @@
           "markdownDescription": "Enables the translate_batch command without any pre-configured scope."
         },
         {
+          "description": "Enables the translate_texts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-translate-texts",
+          "markdownDescription": "Enables the translate_texts command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the tts_speak command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tts-speak",
+          "markdownDescription": "Enables the tts_speak command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the use_youtube_track command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-use-youtube-track",
+          "markdownDescription": "Enables the use_youtube_track command without any pre-configured scope."
+        },
+        {
           "description": "Enables the youtube_subscriptions command without any pre-configured scope.",
           "type": "string",
           "const": "allow-youtube-subscriptions",
           "markdownDescription": "Enables the youtube_subscriptions command without any pre-configured scope."
         },
         {
+          "description": "Enables the youtube_tracks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-youtube-tracks",
+          "markdownDescription": "Enables the youtube_tracks command without any pre-configured scope."
+        },
+        {
           "description": "Denies the add_subscription command without any pre-configured scope.",
           "type": "string",
           "const": "deny-add-subscription",
           "markdownDescription": "Denies the add_subscription command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the asr_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-asr-models",
+          "markdownDescription": "Denies the asr_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cached_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cached-show",
+          "markdownDescription": "Denies the cached_show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-job",
+          "markdownDescription": "Denies the cancel_job command without any pre-configured scope."
         },
         {
           "description": "Denies the clear_temp command without any pre-configured scope.",
@@ -523,6 +685,30 @@
           "type": "string",
           "const": "deny-cloud-transcribe",
           "markdownDescription": "Denies the cloud_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_asr_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-asr-model",
+          "markdownDescription": "Denies the delete_asr_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-download",
+          "markdownDescription": "Denies the delete_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_asr_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-asr-model",
+          "markdownDescription": "Denies the download_asr_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_episode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-episode",
+          "markdownDescription": "Denies the download_episode command without any pre-configured scope."
         },
         {
           "description": "Denies the export_opml command without any pre-configured scope.",
@@ -561,6 +747,12 @@
           "markdownDescription": "Denies the has_api_key command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-downloads",
+          "markdownDescription": "Denies the list_downloads command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_episodes command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-episodes",
@@ -579,6 +771,12 @@
           "markdownDescription": "Denies the list_shows command without any pre-configured scope."
         },
         {
+          "description": "Denies the listening_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-listening-stats",
+          "markdownDescription": "Denies the listening_stats command without any pre-configured scope."
+        },
+        {
           "description": "Denies the llm_chat command without any pre-configured scope.",
           "type": "string",
           "const": "deny-llm-chat",
@@ -591,6 +789,18 @@
           "markdownDescription": "Denies the load_transcript command without any pre-configured scope."
         },
         {
+          "description": "Denies the local_transcribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-transcribe",
+          "markdownDescription": "Denies the local_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the log_listen command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-log-listen",
+          "markdownDescription": "Denies the log_listen command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_data_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-data-folder",
@@ -601,6 +811,24 @@
           "type": "string",
           "const": "deny-open-privacy-settings",
           "markdownDescription": "Denies the open_privacy_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_show command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-show",
+          "markdownDescription": "Denies the preview_show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the qiaomu_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-qiaomu-detail",
+          "markdownDescription": "Denies the qiaomu_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the recent_episodes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-recent-episodes",
+          "markdownDescription": "Denies the recent_episodes command without any pre-configured scope."
         },
         {
           "description": "Denies the refresh_all command without any pre-configured scope.",
@@ -619,6 +847,12 @@
           "type": "string",
           "const": "deny-remove-show",
           "markdownDescription": "Denies the remove_show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rescan_asr_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rescan-asr-models",
+          "markdownDescription": "Denies the rescan_asr_models command without any pre-configured scope."
         },
         {
           "description": "Denies the search_podcasts command without any pre-configured scope.",
@@ -651,6 +885,36 @@
           "markdownDescription": "Denies the set_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the share_guide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-guide",
+          "markdownDescription": "Denies the share_guide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the share_translation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-translation",
+          "markdownDescription": "Denies the share_translation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shared_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shared-exists",
+          "markdownDescription": "Denies the shared_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shared_guide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shared-guide",
+          "markdownDescription": "Denies the shared_guide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shared_transcript command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shared-transcript",
+          "markdownDescription": "Denies the shared_transcript command without any pre-configured scope."
+        },
+        {
           "description": "Denies the storage_info command without any pre-configured scope.",
           "type": "string",
           "const": "deny-storage-info",
@@ -663,10 +927,34 @@
           "markdownDescription": "Denies the translate_batch command without any pre-configured scope."
         },
         {
+          "description": "Denies the translate_texts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-translate-texts",
+          "markdownDescription": "Denies the translate_texts command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tts_speak command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tts-speak",
+          "markdownDescription": "Denies the tts_speak command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the use_youtube_track command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-use-youtube-track",
+          "markdownDescription": "Denies the use_youtube_track command without any pre-configured scope."
+        },
+        {
           "description": "Denies the youtube_subscriptions command without any pre-configured scope.",
           "type": "string",
           "const": "deny-youtube-subscriptions",
           "markdownDescription": "Denies the youtube_subscriptions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the youtube_tracks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-youtube-tracks",
+          "markdownDescription": "Denies the youtube_tracks command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

@@ -1,181 +1,277 @@
 /**
- * [INPUT]: jobs.transcript、settings、api.llmChat；可跳转到设置 › AI
- * [OUTPUT]: 右侧问答面板（.chat / .composer，对齐 SubCast）
- * [POS]: 理解层
+ * [INPUT]: chats.loadChat/askChat；jobs.transcript；settings.quickPrompts；ChatTools
+ * [OUTPUT]: 右侧问答面板（提示词、模型切换、会话持久化、历史）
+ * [POS]: 理解层；会话态在 lib/chats，切 tab 不丢流
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { listen } from "@tauri-apps/api/event";
-import { Send } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { api, errText, type Episode } from "../lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { ArrowUp, ChevronDown, Loader2, Settings2, Square, SquarePen } from "lucide-react";
+import type { ChatMessage, Episode } from "../lib/api";
+import {
+  askChat,
+  loadArchive,
+  loadChat,
+  saveArchive,
+  saveChat,
+  stopChat,
+  useChats,
+  type ArchivedChat,
+} from "../lib/chats";
 import { useJobs } from "../lib/jobs";
+import { quickPrompts } from "../lib/settings";
 import { useStore } from "../store";
+import { ChatPrefsDialog, ModelPicker, PromptMenu, useFixedUpMenu } from "./ChatTools";
+import { Markdown } from "./Markdown";
 
-interface Msg {
-  role: "user" | "assistant";
-  content: string;
-}
-
-const PROMPTS = [
-  "用三分钟讲清这期在说什么",
-  "最有价值的三个观点是什么？",
-  "嘉宾是谁，他们的立场？",
-  "有哪些反直觉或有争议的地方？",
-];
-
-function renderAnswer(text: string, onSeek: (sec: number) => void) {
-  const parts = text.split(/(\[\d{1,2}:\d{2}(?::\d{2})?\])/g);
-  return parts.map((p, i) => {
-    const m = p.match(/^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]$/);
-    if (!m) return <span key={i}>{p}</span>;
-    const sec = m[3] ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2];
-    return (
-      <button key={i} className="stamp" type="button" onClick={() => onSeek(sec)}>
-        {p}
-      </button>
-    );
-  });
-}
+const NO_MESSAGES: ChatMessage[] = [];
 
 export function ChatPane({ episode }: { episode: Episode }) {
   const transcript = useJobs((s) => s.transcripts[episode.id]);
-  const settings = useStore((s) => s.settings);
-  const player = useStore((s) => s.player);
-  const notify = useStore((s) => s.notify);
-  const set = useStore((s) => s.set);
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const { settings, player, set } = useStore(
+    useShallow((s) => ({ settings: s.settings, player: s.player, set: s.set })),
+  );
+  const messages = useChats((s) => s[episode.id]?.messages ?? NO_MESSAGES);
+  const streaming = useChats((s) => s[episode.id]?.streaming ?? null);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [archive, setArchive] = useState<ArchivedChat[]>([]);
+  const [allPrompts, setAllPrompts] = useState(false);
+  const [histOpen, setHistOpen] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const end = useRef<HTMLDivElement>(null);
+  const histBtn = useRef<HTMLButtonElement>(null);
+  const histStyle = useFixedUpMenu(histOpen, histBtn, 280, "right");
+  const prompts = useMemo(() => quickPrompts(settings).filter((p) => p.enabled), [settings]);
+  const shown = allPrompts ? prompts : prompts.slice(0, 4);
   const provider = settings.providers[settings.chatProvider];
+  const busy = streaming != null;
+  const blocked = !transcript?.segments.length;
 
   useEffect(() => {
-    setMessages([]);
+    void loadChat(episode.id);
+    void loadArchive(episode.id).then(setArchive);
   }, [episode.id]);
 
-  const context = useMemo(() => {
-    if (!transcript?.segments.length) return "";
-    return transcript.segments
-      .map((s) => {
-        const m = Math.floor(s.start / 60);
-        const sec = Math.floor(s.start % 60);
-        return `[${m}:${sec.toString().padStart(2, "0")}] ${s.text}`;
-      })
-      .join("\n");
-  }, [transcript]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [messages.length, streaming]);
 
-  const ask = async (question: string) => {
-    if (!question.trim() || !context || busy) return;
-    if (!provider) {
-      notify("请先在设置里选择模型");
-      set({ settingsOpen: true, settingsSection: "ai" });
-      return;
-    }
-    setMessages((m) => [...m, { role: "user", content: question.trim() }, { role: "assistant", content: "" }]);
+  const send = (text: string) => {
+    const q = text.trim();
+    if (!q || busy) return;
     setInput("");
-    setBusy(true);
-    let unlisten = () => {};
-    try {
-      unlisten = await listen<string>("llm-delta", ({ payload }) => {
-        setMessages((m) => {
-          const copy = [...m];
-          const last = copy[copy.length - 1];
-          if (last?.role === "assistant") copy[copy.length - 1] = { role: "assistant", content: last.content + payload };
-          return copy;
-        });
-      });
-      const system = `你是播客学习助手「声译」。根据带时间戳的文稿回答。
-用中文。引用观点时必须带 [mm:ss]。不要编造文稿没有的内容。
+    setSetupError(null);
+    void askChat(episode, [...messages, { role: "user", content: q }]).catch((e: Error & { setup?: boolean }) => {
+      setSetupError(e.message);
+      if (e.setup) set({ settingsOpen: true, settingsSection: "ai" });
+    });
+  };
 
-文稿：
-${context.slice(0, 120_000)}`;
-      const full = await api.llmChat({
-        provider: provider.id,
-        baseUrl: provider.baseUrl,
-        model: provider.model,
-        protocol: provider.protocol,
-        stream: true,
-        messages: [
-          { role: "system", content: system },
-          ...messages.map((m) => ({ role: m.role, content: m.content })),
-          { role: "user", content: question.trim() },
-        ],
-      });
-      setMessages((m) => {
-        const copy = [...m];
-        const last = copy[copy.length - 1];
-        if (last?.role === "assistant" && (!last.content || full.length > last.content.length)) {
-          copy[copy.length - 1] = { role: "assistant", content: full };
-        }
-        return copy;
-      });
-    } catch (e) {
-      notify(errText(e));
-      setMessages((m) => m.slice(0, -1));
-    } finally {
-      unlisten();
-      setBusy(false);
+  const pairStart = (i: number) =>
+    messages[i]?.role === "assistant" && messages[i - 1]?.role === "user" ? i - 1 : i;
+
+  const removePair = (i: number) => {
+    const a = pairStart(i);
+    const b = messages[a + 1]?.role === "assistant" ? a + 2 : a + 1;
+    saveChat(episode.id, [...messages.slice(0, a), ...messages.slice(b)]);
+  };
+
+  const retry = () => {
+    const i = messages.length - 1;
+    if (messages[i]?.role === "assistant" && !busy) {
+      void askChat(episode, messages.slice(0, i)).catch((e: Error) => setSetupError(e.message));
     }
   };
 
-  if (!transcript?.segments.length) {
-    return (
-      <div className="chat">
-        <div className="panel-empty">
-          <p className="lead">字幕准备好后就可以提问</p>
-          <p className="muted">回答会带可点击时间戳，点一下跳回原话。</p>
-        </div>
-      </div>
-    );
-  }
+  const newChat = () => {
+    if (!messages.length) return;
+    const next = [{ id: `${Date.now()}`, at: Date.now(), messages }, ...archive].slice(0, 30);
+    setArchive(next);
+    saveArchive(episode.id, next);
+    saveChat(episode.id, []);
+    setInput("");
+    box.current?.focus();
+  };
+
+  const restore = (id: string) => {
+    const c = archive.find((x) => x.id === id);
+    if (!c) return;
+    const rest = archive.filter((x) => x.id !== id);
+    const next = messages.length ? [{ id: `${Date.now()}`, at: Date.now(), messages }, ...rest] : rest;
+    setArchive(next);
+    saveArchive(episode.id, next);
+    saveChat(episode.id, c.messages);
+    setHistOpen(false);
+  };
+
+  const empty = !messages.length && !busy;
+  const seek = (sec: number) => player?.seek(sec);
 
   return (
     <div className="chat">
       <div className="chat-scroll">
-        {messages.length === 0 && (
+        {empty && (
           <div className="chat-intro">
             <p className="lead">问这期节目</p>
             <p className="muted small">基于整集字幕回答，引用可跳转</p>
-            <div className="chips">
-              {PROMPTS.map((p) => (
-                <button key={p} className="chip" onClick={() => void ask(p)}>
-                  {p}
+            {blocked && <p className="muted small">字幕准备好后就可以提问。</p>}
+            <div className="prompt-list">
+              {shown.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="prompt-row"
+                  title={p.body}
+                  disabled={blocked || busy}
+                  onClick={() => send(p.body)}
+                >
+                  <span className="pr-title">{p.title}</span>
+                  <span className="pr-sub">{p.body}</span>
                 </button>
               ))}
             </div>
+            <div className="prompt-foot">
+              {prompts.length > 4 && (
+                <button type="button" className="link-btn" onClick={() => setAllPrompts(!allPrompts)}>
+                  {allPrompts ? "收起" : `更多 ${prompts.length - 4} 个`}
+                  <ChevronDown size={12} className={allPrompts ? "flip" : ""} />
+                </button>
+              )}
+              <span className="spacer" />
+              <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}>
+                <Settings2 size={13} /> 自定义提示词
+              </button>
+            </div>
           </div>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            {m.role === "assistant" ? renderAnswer(m.content, (sec) => player?.seek(sec)) : m.content}
+        {messages.map((m, i) =>
+          m.role === "user" ? (
+            <div key={i} className="msg-wrap user">
+              <div className="msg user">{m.content}</div>
+              {!busy && (
+                <div className="msg-actions">
+                  <button type="button" className="link-btn" onClick={() => removePair(i)}>
+                    删除
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div key={i} className="msg-wrap assistant">
+              <div className="msg assistant">
+                <Markdown text={m.content} onSeek={seek} />
+              </div>
+              {!busy && (
+                <div className="msg-actions">
+                  {m.model && <span className="muted small">{m.model}</span>}
+                  {i === messages.length - 1 && !blocked && (
+                    <button type="button" className="link-btn" onClick={retry}>
+                      重试
+                    </button>
+                  )}
+                  <button type="button" className="link-btn" onClick={() => removePair(i)}>
+                    删除
+                  </button>
+                </div>
+              )}
+            </div>
+          ),
+        )}
+        {busy && (
+          <div className="msg assistant">
+            {streaming ? (
+              <Markdown text={streaming} onSeek={seek} />
+            ) : (
+              <p className="muted">
+                <Loader2 size={14} className="spin" /> 正在阅读文字稿…
+              </p>
+            )}
           </div>
-        ))}
+        )}
+        {setupError && (
+          <div className="setup-note">
+            <span>{setupError}</span>
+            <button type="button" className="btn primary sm" onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}>
+              去设置
+            </button>
+          </div>
+        )}
+        <div ref={end} />
       </div>
-      <div className="composer">
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(input);
+        }}
+      >
         <textarea
+          ref={box}
           value={input}
           rows={1}
-          placeholder="问这期节目任何问题…"
+          placeholder={blocked ? "字幕准备好后可以提问" : "问点什么，Enter 发送，Shift+Enter 换行"}
+          disabled={blocked && !busy}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              void ask(input);
+              send(input);
             }
           }}
         />
-        <button className="send" disabled={busy || !input.trim()} onClick={() => void ask(input)} aria-label="发送">
-          <Send size={15} />
-        </button>
-      </div>
+        <div className="composer-bar">
+          <ModelPicker />
+          <PromptMenu onPick={(b) => send(b)} onManage={() => setPrefsOpen(true)} disabled={blocked || busy} />
+          <span className="spacer" />
+          <div className="hist-wrap">
+            <button
+              ref={histBtn}
+              type="button"
+              className="btn ghost sm"
+              disabled={!archive.length && !messages.length}
+              title="对话历史"
+              aria-expanded={histOpen}
+              onClick={() => setHistOpen(!histOpen)}
+            >
+              历史
+            </button>
+            {histOpen && histStyle && (
+              <>
+                <div className="mp-backdrop" onClick={() => setHistOpen(false)} />
+                <div className="mp-menu hist-menu mp-fixed" style={histStyle}>
+                  {!archive.length && <p className="muted small">还没有历史对话</p>}
+                  {archive.map((a) => (
+                    <button key={a.id} type="button" onClick={() => restore(a.id)}>
+                      <span className="mp-name">{new Date(a.at).toLocaleString()}</span>
+                      <span className="mp-model">{a.messages.find((m) => m.role === "user")?.content.slice(0, 40) ?? "空对话"}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {messages.length > 0 && !busy && (
+            <button type="button" className="btn ghost sm" title="开始新对话" onClick={newChat}>
+              <SquarePen size={14} /> 新对话
+            </button>
+          )}
+          {busy ? (
+            <button type="button" className="send" title="停止" onClick={() => stopChat(episode.id)}>
+              <Square size={13} fill="currentColor" />
+            </button>
+          ) : (
+            <button type="submit" className="send" title="发送" disabled={!input.trim() || blocked}>
+              <ArrowUp size={16} />
+            </button>
+          )}
+        </div>
+      </form>
       <p className="model-note">
-        {provider ? (
-          `${provider.name} · ${provider.model}`
-        ) : (
-          <button type="button" className="link-btn" onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}>
-            去设置 › AI
-          </button>
-        )}
+        {provider ? `回答由 AI 生成 · ${provider.name}` : "回答由 AI 生成，可能有误"}
       </p>
+      {prefsOpen && <ChatPrefsDialog onClose={() => setPrefsOpen(false)} />}
     </div>
   );
 }

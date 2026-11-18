@@ -1,0 +1,109 @@
+/**
+ * [INPUT]: api.downloadEpisode / listDownloads / deleteDownload；event offline
+ * [OUTPUT]: useOffline、loadDownloads、audioSrc、downloadEpisode、cancelDownload、removeDownload、bytes
+ * [POS]: 单集页下载按钮与 PlayerBar 音频源；进度在面板外
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { create } from "zustand";
+import { api, errText, type Episode } from "./api";
+import { useStore } from "../store";
+
+export interface Saved {
+  episodeId: string;
+  path: string;
+  bytes: number;
+  savedAt: number;
+}
+
+interface OfflineState {
+  saved: Record<string, Saved>;
+  progress: Record<string, number | null>;
+  ready: boolean;
+}
+
+export const useOffline = create<OfflineState>(() => ({
+  saved: {},
+  progress: {},
+  ready: false,
+}));
+
+let listening = false;
+
+async function ensureListen() {
+  if (listening) return;
+  listening = true;
+  await listen<{ episodeId: string; progress: number | null }>("offline", ({ payload }) => {
+    useOffline.setState((s) => ({
+      progress: { ...s.progress, [payload.episodeId]: payload.progress },
+    }));
+  });
+}
+
+export async function loadDownloads() {
+  await ensureListen();
+  try {
+    const list = await api.listDownloads();
+    useOffline.setState({
+      saved: Object.fromEntries(list.map((x) => [x.episodeId, x])),
+      ready: true,
+    });
+  } catch {
+    useOffline.setState({ ready: true });
+  }
+}
+
+export const isSaved = (id: string) => !!useOffline.getState().saved[id];
+
+/** 播放优先用已下载文件，否则用远端 audioUrl。 */
+export function audioSrc(ep: Episode): string | undefined {
+  const saved = useOffline.getState().saved[ep.id];
+  return saved ? convertFileSrc(saved.path) : ep.audioUrl ?? undefined;
+}
+
+export async function downloadEpisode(ep: Episode) {
+  if (!ep.audioUrl && !ep.videoId) {
+    useStore.getState().notify("这集没有可下载的音频");
+    return;
+  }
+  await ensureListen();
+  useOffline.setState((s) => ({ progress: { ...s.progress, [ep.id]: null } }));
+  try {
+    const saved = await api.downloadEpisode(ep.id);
+    useOffline.setState((s) => {
+      const { [ep.id]: _, ...rest } = s.progress;
+      return { saved: { ...s.saved, [ep.id]: saved }, progress: rest };
+    });
+    useStore.getState().notify("已下载，可离线收听");
+  } catch (e) {
+    useOffline.setState((s) => {
+      const { [ep.id]: _, ...rest } = s.progress;
+      return { progress: rest };
+    });
+    useStore.getState().notify(errText(e));
+  }
+}
+
+export function cancelDownload(episodeId: string) {
+  void api.cancelJob(`dl:${episodeId}`);
+  useOffline.setState((s) => {
+    const { [episodeId]: _, ...rest } = s.progress;
+    return { progress: rest };
+  });
+}
+
+export async function removeDownload(episodeId: string) {
+  await api.deleteDownload(episodeId);
+  useOffline.setState((s) => {
+    const { [episodeId]: _, ...rest } = s.saved;
+    return { saved: rest };
+  });
+  useStore.getState().notify("已删除下载");
+}
+
+export function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}

@@ -12,7 +12,7 @@ interface QueueState {
   queue: Episode[];
 }
 
-const useQueue = create<QueueState>(() => ({ queue: [] }));
+export const useQueue = create<QueueState>(() => ({ queue: [] }));
 
 function start(ep: Episode) {
   useStore.getState().openEpisode(ep);

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 dirs、net；应用 data 目录
  * [OUTPUT]: 定位或下载 yt-dlp（导入 YouTube 订阅用）
- * [POS]: import 的工具依赖；本机 ASR 二期可复用
+ * [POS]: import 与本机 ASR 抽 YouTube 音轨共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Result};

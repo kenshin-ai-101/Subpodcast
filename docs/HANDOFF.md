@@ -6,7 +6,7 @@
 ## 上一轮已完成
 - 精读面板去掉说明文字；收起字幕栏图标放大；月份日历改为中性色+细强调条
 - 乔木精读去重：订阅了原版节目则侧栏不再重复显示，原版节目页顶部出现「这档节目有乔木精读版」入口（`deepPickFor`）
-- 本集简介移到播放器下方；去掉「导读」tab，AI 导读改为左侧可折叠卡片（`GuideCard`）
+- 本集简介移到播放器下方；（SubCast 曾把导读改左栏卡片；声译对齐附图后导读回到右栏「导读」Tab）
 - 划线工具条（复制带出处 / 翻译 / 生成海报），海报移植自 elon.qiaomu.ai kit.js（`src/lib/poster.ts`、`components/SelectionTools.tsx`、Rust `save_image` 存到「下载」）
 - 新增 rss.qiaomu.ai 普通源 + 乔木改写（`qiaomu.rs`：`rss_channel`、`rss_rewrite`（Markdown→HTML）、`podscribe_transcript`（带时间戳）；Podscribe 源无音频时按标题从原 RSS 借音频）。live 测试已通过（nexttoken、podscribe-pivot）
 - 发现页新增：Next Token、Joe Rogan、80k、Pivot、Freakonomics、ILTB、DOAC

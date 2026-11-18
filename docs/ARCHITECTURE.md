@@ -2,16 +2,17 @@
 
 ```
 ┌──────────────── WebView (React + TS) ────────────────┐
-│ 订阅列表 · 单集 · 播放器 · 双语字幕 · AI 问答 · 设置（字幕/AI/通用） │
+│ 订阅列表 · 单集 · 播放器 · 双语字幕 · 乔木精读 · 右栏导读 · AI 问答 · 设置 │
 └──────────────▲───────────────── invoke / events ─────┘
                │
 ┌──────────────┴──────── Rust (Tauri 2) ───────────────┐
 │ feeds     RSS/Atom、YouTube 频道、iTunes、小宇宙        │
 │ import    浏览器 YouTube 订阅 / OPML 等（前端解析文件） │
 │ captions  YouTube InnerTube + podcast:transcript     │
-│ translate 谷歌 / LLM 批次                            │
+│ shared    subcast.qiaomu.ai 匿名共享字幕库           │
+│ translate 谷歌（tr_cache）/ LLM 批次                 │
 │ llm       OpenAI 兼容流式代理                        │
-│ db        SQLite：订阅、单集、字幕、blobs、设置        │
+│ db        SQLite：订阅、单集、字幕、blobs、tr_cache   │
 │ secrets   API Key → 系统钥匙串                       │
 │ net       代理（http/socks5）                        │
 └──────────────────────────────────────────────────────┘
@@ -20,12 +21,17 @@
 ## 关键决策
 - 网络全在 Rust（CORS + 统一代理）
 - 订阅源归一为 Show + Episode
-- MVP 识别：官方字幕 → 用户触发的云端 Whisper 兼容接口；本机引擎二期再上
-- 翻译：默认谷歌；可切自有模型
-- 问答：整集带时间戳文稿进上下文；回答要求 `[mm:ss]`
+- 识别：官方字幕 → 共享库 → 用户触发本机（Qwen3/CrispASR 或 Whisper）或云端；ASR 成功可匿名上传（`shareTranscripts`）
+- 播放：有 `videoId` 可切「视频 / 仅音频」；音频 RSS 经 `attach_youtube_twins` 按标题配对 YouTube；有音轨时仅音频走 `<audio>`，否则隐藏 IFrame；发行版 UI 挂 `http://localhost:14427+`
+- 字幕瀑布：本地缓存 → `fetch_official_transcript`（缺 videoId 时 `fill_youtube_twin`；YouTube 选轨；中文轨对齐 blob `zh`；RSS / Podscribe / 乔木）→ `shared_transcript` → 空态 GenCard →「生成字幕」。词元等双形态新订阅优先乔木源，避免纯音频只能 ASR
+- 翻译：开集 `autoTranslate`；播放头优先 + 自适应并发；youtube/shared engine 只填缺口；完成后可 `share_translation`
+- 精读：`qiaomu_detail` 写 blob `deep-read`；`episodes.deep`；右栏 Tab；与导读分离
+- 导读：右栏 `SummaryPane`；blob `summary` / `summary-from`；共享查找+上传；豆包朗读；与问答共用 chat 模型
+- 离线：`offline.rs` 下载单集音频；事件 `offline`；前端 `lib/offline.ts`
+- 问答：整集带时间戳文稿进上下文；回答要求 `[mm:ss]`；blob `chat` / `chat-archive`；快捷提示词与全局指令在 settings
 
 ## 数据表
-`shows` · `episodes` · `transcripts` · `blobs` · `settings`
+`shows` · `episodes` · `transcripts` · `blobs` · `settings` · `tr_cache` · `listens`
 
 ## 对照说明
 产品理念与布局可参考 SubCast；本仓库实现为原创代码，标识符 `app.subpodcast.desktop`。

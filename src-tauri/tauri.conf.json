@@ -10,16 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Subpodcast · 声译",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 960,
-        "minHeight": 640
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

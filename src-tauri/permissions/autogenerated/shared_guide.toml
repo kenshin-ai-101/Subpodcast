@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shared-guide"
+description = "Enables the shared_guide command without any pre-configured scope."
+commands.allow = ["shared_guide"]
+
+[[permission]]
+identifier = "deny-shared-guide"
+description = "Denies the shared_guide command without any pre-configured scope."
+commands.deny = ["shared_guide"]

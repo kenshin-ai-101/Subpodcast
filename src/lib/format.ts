@@ -1,6 +1,6 @@
 /**
  * [INPUT]: Unix 秒时间戳、时长秒、可选 HTML 简介
- * [OUTPUT]: date / duration / clock / groupLabel / monthName / monthLabel / plainText
+ * [OUTPUT]: date / duration / clock / parseClock / groupLabel / monthName / monthLabel / plainText
  * [POS]: 展示格式化，无业务状态；月份文案供 MonthFilter 与单集分组共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -34,6 +34,21 @@ export function clock(sec: number): string {
   const h = Math.floor(sec / 3600);
   const pad = (n: number) => n.toString().padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+/** 解析 `m:ss` / `h:mm:ss`；非法返回 null。 */
+export function parseClock(text: string): number | null {
+  const m = text.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const a = +m[1];
+  const b = +m[2];
+  const c = m[3] != null ? +m[3] : null;
+  if (c != null) {
+    if (b >= 60 || c >= 60) return null;
+    return a * 3600 + b * 60 + c;
+  }
+  if (b >= 60) return null;
+  return a * 60 + b;
 }
 
 export function groupLabel(sec?: number | null): string {

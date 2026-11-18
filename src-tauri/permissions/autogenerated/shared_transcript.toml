@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shared-transcript"
+description = "Enables the shared_transcript command without any pre-configured scope."
+commands.allow = ["shared_transcript"]
+
+[[permission]]
+identifier = "deny-shared-transcript"
+description = "Denies the shared_transcript command without any pre-configured scope."
+commands.deny = ["shared_transcript"]
