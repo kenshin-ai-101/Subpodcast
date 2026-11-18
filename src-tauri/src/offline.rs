@@ -1,7 +1,7 @@
 /**
- * [INPUT]: asr.fetch_episode_audio；Episode
+ * [INPUT]: asr.fetch_episode_audio（enclosure 优先，否则 YouTube 原生 m4a）；Episode
  * [OUTPUT]: downloads/ 下按 episode_id 存的离线音频；list/find/remove/clear
- * [POS]: 单集页下载按钮；播放仍可走在线，离线文件供日后接播放源
+ * [POS]: 单集页下载；本机 ASR 优先复用 find() 结果
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::asr;
@@ -92,7 +92,7 @@ pub async fn download(
         &work,
         ep.audio_url.as_deref(),
         ep.video_id.as_deref(),
-        &cancel,
+        cancel.clone(),
         |p| progress(Some(p.clamp(0.0, 0.95))),
     )
     .await;

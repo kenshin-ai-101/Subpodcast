@@ -24,7 +24,7 @@ src-tauri/capabilities/default.json — 命令 ACL + remote http://localhost:144
 不含：设置「关于」、海报、OTA。
 
 ## 法则
-- 网络请求只在 Rust；Key 只进钥匙串
+- 网络请求只在 Rust；Key 只存本机（正式签名→钥匙串；开发/ad-hoc→Application Support 文件，不进仓库）
 - 界面文案说结果（「生成字幕」），云端上传须明示
 - 禁止 window.confirm/alert；用 `src/lib/confirm.ts`
 - store 用 `useShallow` 切片；不在组件内定义组件

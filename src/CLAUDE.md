@@ -34,7 +34,7 @@ lib/deepPicks.ts: 原版 → 乔木精读入口映射（ShowView banner）
 lib/recommend.ts: 首页「为你推荐」本地打分
 lib/showLinks.ts: 主推节目站外链接；mayHaveYoutubeTwin 触发单集页配对刷新
 components/Chrome.tsx: Sidebar（首页/发现/统计；收起为图标轨）/ TopBar / Toast
-components/Splitter.tsx: 列宽拖条（侧栏；过 snap 收起 / 双击恢复）
+components/Splitter.tsx: 列宽拖条（左栏 / 单集右栏；过 snap 收起 / 双击恢复）
 components/HomeView.tsx: 继续收听 / 接下来听 / 最新 / 推荐；共享 EpisodeRow
 components/RecentView.tsx: 最近播放 / 收藏
 components/DiscoverView.tsx: Topic + 精选网格 + 横幅
@@ -55,7 +55,7 @@ components/PlayerBar.tsx: 视频/仅音频（media-switch-row 靠右短条；有
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
 components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/实时识别行 + YouTube 语言切换 + 行列表
-components/EpisodeView.tsx: 开集 ensureTranscript/autoTranslate；标题动作 + 简介 + 订阅条 + 右四 Tab
+components/EpisodeView.tsx: 开集 ensureTranscript/autoTranslate；右栏拖宽/收起；标题动作 + 简介 + 右四 Tab
 components/DeepRead.tsx: 乔木精读 HTML（右栏精读 Tab）
 components/SummaryPane.tsx: 右栏导读（共享查找 / 生成 / 朗读脚注）
 components/ReadAloud.tsx: 豆包朗读按钮 + 音色/Key 弹层

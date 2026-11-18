@@ -1,6 +1,6 @@
 /**
  * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack
- * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard / 实时识别行 / 语言切换 / .line）
+ * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；下载·解码·识别分阶段文案 / 行列表）
  * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -433,9 +433,11 @@ function NoTranscript({
               <p className="muted">
                 {asrProgress?.stage === "download"
                   ? "先把音频取回来，马上开始听写"
-                  : settings.asrModel === "qwen3-asr"
-                    ? "识别完成后会一次性显示全部文字"
-                    : "识别出的文字会实时出现在这里"}
+                  : asrProgress?.message?.includes("解码")
+                    ? "正在把音频转成识别用的格式，稍等片刻"
+                    : settings.asrModel === "qwen3-asr"
+                      ? "识别完成后会一次性显示全部文字"
+                      : "识别出的文字会实时出现在这里"}
               </p>
             </div>
           )}

@@ -1,10 +1,10 @@
 /**
- * [INPUT]: api、jobs（ensureTranscript/autoTranslate）、library、offline、showLinks、PlayerBar、右四 Tab
- * [OUTPUT]: 单集页：标题动作 + 开集字幕瀑布 + 音视频切换 + 订阅条 + 右四 Tab
- * [POS]: 打开即拉官方字幕并自动译中文（与右栏 Tab 无关）；缺 videoId 时双形态配对
+ * [INPUT]: api、jobs、library、offline、showLinks、layout（panel）、Splitter、PlayerBar、右四 Tab
+ * [OUTPUT]: 单集页：标题动作 + 开集字幕瀑布 + 音视频切换 + 右栏拖宽/收起
+ * [POS]: 打开即拉官方字幕并自动译中文；右栏宽度与 panelOpen 走 layout
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   ArrowDownToLine,
@@ -25,6 +25,7 @@ import { api, type Episode } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { date, duration, parseClock, plainText } from "../lib/format";
 import { autoTranslate, ensureTranscript, useJobs } from "../lib/jobs";
+import { PANEL, useLayout } from "../lib/layout";
 import { toggleFavorite, useLibrary } from "../lib/library";
 import {
   bytes,
@@ -41,6 +42,7 @@ import { TopBar } from "./Chrome";
 import { DeepRead } from "./DeepRead";
 import { PlayerBar } from "./PlayerBar";
 import { YtVideoStrip, usePromo } from "./PromoBanner";
+import { Splitter } from "./Splitter";
 import { SummaryPane } from "./SummaryPane";
 import { TranscriptPane } from "./TranscriptPane";
 
@@ -169,11 +171,25 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
   );
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === episodeId));
   const ytPromo = usePromo();
+  const { panel, panelOpen, put: putLayout } = useLayout(
+    useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen, put: l.put })),
+  );
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [bodyW, setBodyW] = useState(0);
   const [ep, setEp] = useState<Episode | null>(current?.id === episodeId ? current : null);
   const [tab, setTab] = useState<Tab>("transcript");
-  const [panelOpen, setPanelOpen] = useState(true);
   const [notesOpen, setNotesOpen] = useState(true);
   const [noDeep, setNoDeep] = useState<string | null>(null);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => setBodyW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     void loadDownloads();
@@ -248,10 +264,17 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
   const epShow = shows.find((x) => x.id === ep.showId);
   const ytChannel = showLinks(epShow?.feedUrl).youtube;
   const isCurrent = current?.id === ep.id;
+  // 与 CSS --panel-eff 一致：拖条用可视宽度，避免存宽 > 可用时「空拖」再突然收起
+  const panelMax = Math.min(PANEL.max, Math.max(PANEL.min, (bodyW || PANEL.max + 460) - 460));
+  const panelVis = Math.min(panel, panelMax);
 
   return (
     <div className="episode">
-      <div className={`ep-body ${panelOpen ? "" : "panel-collapsed"}`}>
+      <div
+        ref={bodyRef}
+        className={`ep-body ${panelOpen ? "" : "panel-collapsed"}`}
+        style={{ "--panel-w": `${panelOpen ? panelVis : 0}px` } as CSSProperties}
+      >
         <div className="ep-leftcol">
           <TopBar />
           <section className="ep-left">
@@ -263,7 +286,12 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 <h1>{ep.title}</h1>
               </div>
               {!panelOpen && (
-                <button type="button" className="round-btn" title="显示字幕栏" onClick={() => setPanelOpen(true)}>
+                <button
+                  type="button"
+                  className="round-btn"
+                  title="显示字幕栏"
+                  onClick={() => putLayout({ panelOpen: true })}
+                >
                   <PanelRightOpen size={15} />
                 </button>
               )}
@@ -337,6 +365,20 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
           </section>
         </div>
         {panelOpen && (
+          <Splitter
+            value={panelVis}
+            min={PANEL.min}
+            max={panelMax}
+            def={Math.min(PANEL.def, panelMax)}
+            snap={PANEL.min}
+            edge="left"
+            label="字幕栏宽度"
+            onChange={(w) => putLayout({ panel: w, panelOpen: true })}
+            /* 右栏拖窄只贴最小宽，不整栏消失；收起靠 Tab 关闭 / ⌘\ */
+            onCollapse={() => putLayout({ panel: PANEL.min, panelOpen: true })}
+          />
+        )}
+        {panelOpen && (
           <section className="ep-right">
             <div className="tabs" role="tablist" data-tauri-drag-region>
               <button
@@ -382,7 +424,12 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 <span>问答</span>
               </button>
               <span className="spacer" data-tauri-drag-region />
-              <button type="button" className="icon-btn tabs-close" title="收起字幕栏" onClick={() => setPanelOpen(false)}>
+              <button
+                type="button"
+                className="icon-btn tabs-close"
+                title="收起字幕栏"
+                onClick={() => putLayout({ panelOpen: false })}
+              >
                 <PanelRightClose size={16} />
               </button>
             </div>

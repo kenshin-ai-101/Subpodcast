@@ -72,6 +72,12 @@ export default function App() {
           l.put({ sideOpen: !l.sideOpen });
           return;
         }
+        if (map.togglePanel.includes(combo)) {
+          e.preventDefault();
+          const l = useLayout.getState();
+          l.put({ panelOpen: !l.panelOpen });
+          return;
+        }
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "l") {
         e.preventDefault();

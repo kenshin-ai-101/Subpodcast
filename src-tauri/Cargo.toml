@@ -24,6 +24,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 roxmltree = "0.20"
 regex = "1"
 sha1 = "0.10"
+sha2 = "0.10"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

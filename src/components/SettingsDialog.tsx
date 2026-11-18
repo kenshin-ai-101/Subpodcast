@@ -133,7 +133,7 @@ function KeyRow({
   const [editing, setEditing] = useState(false);
   if (has && !editing) {
     return (
-      <div className="key-row key-saved" title="存于系统钥匙串">
+      <div className="key-row key-saved" title="已保存在本机（正式签名版用钥匙串；开发/未签名用本机文件）">
         <span className="key-state">
           <Check size={14} />
           <span>已保存</span>

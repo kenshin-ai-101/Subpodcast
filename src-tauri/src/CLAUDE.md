@@ -9,17 +9,17 @@ db.rs: SQLite WAL；tr_cache；sync_episodes / dedupe_show_episodes；listens / 
 feeds.rs: 订阅解析与搜索；词元入口优先乔木源；fill_youtube_twin；小宇宙也 attach twin
 qiaomu.rs: 精读频道 + detail / rss_rewrite；qiaomu_detail 写 deep-read
 import.rs: YouTube 浏览器订阅导入、隐私设置入口、OPML 导出
-ytdlp.rs: 定位或下载 yt-dlp
-asr.rs: 本机模型、下载、16k 解码、Qwen3/Whisper
+ytdlp.rs: yt-dlp 定位/镜像安装；ytdlp_command（proxy、socket-timeout、js-runtimes、bot fallback）
+asr.rs: 本机模型；ASR 选源 enclosure 优先 / youtube_audio（-N8 无 -x）；16k 解码进度；Qwen3/Whisper
 captions.rs: YouTube video_info/选轨/script_hint/official_chinese/align；VTT
-shared.rs: 共享字幕 + 共享导读（guides API）；匿名 install id
+shared.rs: 共享字幕（小宇宙/乔木 key 归一）+ 导读；命中则跳过 ASR 下载
 tts.rs: 豆包 unidirectional TTS → WAV
 ui.rs: 发行版 localhost:14427 挂载内嵌前端
 translate.rs: 谷歌 / LLM 翻译批次
 llm.rs: OpenAI/Anthropic 对话
 net.rs: 统一 HTTP 客户端与代理
-secrets.rs: 钥匙串 API Key
-offline.rs: 单集音频离线下载
+secrets.rs: API Key（正式签名→钥匙串；debug/ad-hoc→本机 secrets.json + 内存缓存）
+offline.rs: 单集音频离线；ASR 复用 find()
 
 命令补充：shared_guide / share_guide / tts_speak；shared_transcript / share_translation / translate_texts
 

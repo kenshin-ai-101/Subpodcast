@@ -1,7 +1,7 @@
 /**
  * [INPUT]: localStorage `subpodcast-layout`
- * [OUTPUT]: useLayout（sideOpen / sidebar / panel / panelOpen）、SIDEBAR / PANEL 常量
- * [POS]: 左右栏几何与收起态；侧栏 rail / 右栏折叠共用，非设置页数据
+ * [OUTPUT]: useLayout（sideOpen / sidebar / panel / panelOpen）、SIDEBAR / PANEL、clamp 宽
+ * [POS]: 左右栏几何与收起态；读写时钳制宽度，避免右栏被存成 0 后「消失」
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
@@ -18,15 +18,30 @@ interface Layout {
 
 const KEY = "subpodcast-layout";
 
+function clamp(n: unknown, min: number, max: number, fallback: number): number {
+  const v = typeof n === "number" && Number.isFinite(n) ? n : fallback;
+  return Math.round(Math.min(max, Math.max(min, v)));
+}
+
+function sanitize(raw: Partial<Layout>): Layout {
+  return {
+    sidebar: clamp(raw.sidebar, SIDEBAR.min, SIDEBAR.max, SIDEBAR.def),
+    sideOpen: raw.sideOpen !== false,
+    panel: clamp(raw.panel, PANEL.min, PANEL.max, PANEL.def),
+    panelOpen: raw.panelOpen !== false,
+  };
+}
+
 const read = (): Layout => {
   try {
-    return {
+    const parsed = JSON.parse(localStorage.getItem(KEY) ?? "{}") as Partial<Layout>;
+    return sanitize({
       sidebar: SIDEBAR.def,
       sideOpen: true,
       panel: PANEL.def,
       panelOpen: true,
-      ...JSON.parse(localStorage.getItem(KEY) ?? "{}"),
-    };
+      ...parsed,
+    });
   } catch {
     return { sidebar: SIDEBAR.def, sideOpen: true, panel: PANEL.def, panelOpen: true };
   }
@@ -37,7 +52,14 @@ let saveTimer = 0;
 export const useLayout = create<Layout & { put: (p: Partial<Layout>) => void }>((set, get) => ({
   ...read(),
   put: (p) => {
-    set(p);
+    const cur = get();
+    const next = sanitize({ ...cur, ...p });
+    // sideOpen / panelOpen 允许显式 false，不受 sanitize 里「缺省 true」影响
+    if ("sideOpen" in p) next.sideOpen = !!p.sideOpen;
+    if ("panelOpen" in p) next.panelOpen = !!p.panelOpen;
+    if ("sidebar" in p) next.sidebar = clamp(p.sidebar, SIDEBAR.min, SIDEBAR.max, cur.sidebar);
+    if ("panel" in p) next.panel = clamp(p.panel, PANEL.min, PANEL.max, cur.panel);
+    set(next);
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       const { sidebar, sideOpen, panel, panelOpen } = get();

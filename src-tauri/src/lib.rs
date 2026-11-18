@@ -1238,51 +1238,145 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
     };
 
     let run = async {
+        // 选源：缓存/离线 → 播客直链 → YouTube。共享库已在 take_shared 跳过整段。
         emit_asr("download", 0.0, Some("准备音频…"));
-        let audio = asr::fetch_episode_audio(
-            &state.data,
-            &work,
-            ep.audio_url.as_deref(),
-            ep.video_id.as_deref(),
-            &cancel,
-            |p| emit_asr("download", p, None),
-        )
-        .await
-        .map_err(e)?;
-
-        emit_asr("transcribe", 0.4, Some("识别中…"));
-        let (language_out, segments) = if resolved.engine == "qwen3" {
-            let bin = asr::ensure_crispasr(&state.data, &cancel, |_, _| {})
-                .await
-                .map_err(e)?;
-            let samples = tokio::task::spawn_blocking({
-                let audio = audio.clone();
-                move || asr::decode_16k_mono(&audio)
+        let audio = if let Some(cached) = asr::find_cached_audio(&state.data, &ep.id) {
+            emit_asr("download", 1.0, Some("使用已下载的音频"));
+            cached
+        } else if let Some(url) = ep.audio_url.as_deref().filter(|u| !u.is_empty()) {
+            emit_asr("download", 0.0, Some("正在下载音频…"));
+            let dest = work.join(format!(
+                "audio.{}",
+                asr::audio_ext(&shared::canonical_audio_url(url))
+            ));
+            asr::download_audio_url(url, &dest, &cancel, |p| {
+                emit_asr("download", p, Some("正在下载音频…"));
             })
             .await
-            .map_err(e)?
             .map_err(e)?;
-            let wav = work.join("audio.wav");
-            asr::write_wav(&wav, &samples).map_err(e)?;
+            // 落入 downloads/，下次 ASR / 离线听都不用再拉几百 MB
+            let ext = dest
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("m4a");
+            let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
+            let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
+            if tokio::fs::copy(&dest, &kept).await.is_ok() {
+                kept
+            } else {
+                dest
+            }
+        } else if let Some(vid) = ep.video_id.as_deref().filter(|v| !v.is_empty()) {
+            if crate::ytdlp::find_ytdlp(&state.data).is_none() {
+                emit_asr("download", 0.0, Some("正在准备 YouTube 下载工具…"));
+            } else {
+                emit_asr("download", 0.0, Some("正在从 YouTube 获取音轨…"));
+            }
+            let app_yt = app.clone();
+            let id_yt = ep.id.clone();
+            let got = asr::youtube_audio_with_progress(
+                &state.data,
+                vid,
+                &work,
+                cancel.clone(),
+                move |p| {
+                    let _ = app_yt.emit(
+                        "asr",
+                        serde_json::json!({
+                            "episodeId": id_yt,
+                            "stage": "download",
+                            "progress": p,
+                            "message": "正在从 YouTube 获取音轨…",
+                        }),
+                    );
+                },
+            )
+            .await
+            .map_err(e)?;
+            let ext = got
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("m4a");
+            let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
+            let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
+            if tokio::fs::copy(&got, &kept).await.is_ok() {
+                kept
+            } else {
+                got
+            }
+        } else {
+            return Err("这集没有音频地址".into());
+        };
+
+        let (language_out, segments) = if resolved.engine == "qwen3" {
+            let bin = match asr::find_crispasr(&state.data) {
+                Some(p) => p,
+                None => {
+                    emit_asr("download", 0.0, Some("正在准备 Qwen3-ASR 识别程序…"));
+                    asr::ensure_crispasr(&state.data, &cancel, |got, total| {
+                        let p = total.map(|t| got as f64 / t.max(1) as f64).unwrap_or(0.0);
+                        emit_asr("download", p, Some("正在准备 Qwen3-ASR 识别程序…"));
+                    })
+                    .await
+                    .map_err(e)?
+                }
+            };
+            emit_asr("transcribe", 0.02, Some("正在解码音频…"));
+            let wav = work.join("audio16k.wav");
+            let (src, wav2, cancel_dec) = (audio.clone(), wav.clone(), cancel.clone());
+            let (tx, rx) = std::sync::mpsc::channel::<f64>();
+            let decode_job = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let samples =
+                    asr::decode_16k_mono_progressive(src.as_path(), cancel_dec, Some(tx))?;
+                asr::write_wav(&wav2, &samples)
+            });
+            // 阻塞频道用 spawn_blocking 轮询，避免卡住 async runtime
+            let app_prog = app.clone();
+            let ep_prog = ep.id.clone();
+            let pump = tokio::task::spawn_blocking(move || {
+                while let Ok(p) = rx.recv() {
+                    let _ = app_prog.emit(
+                        "asr",
+                        serde_json::json!({
+                            "episodeId": ep_prog,
+                            "stage": "transcribe",
+                            "progress": 0.02 + p * 0.16,
+                            "message": "正在解码音频…",
+                        }),
+                    );
+                }
+            });
+            decode_job.await.map_err(e)?.map_err(e)?;
+            let _ = pump.await;
+            emit_asr("transcribe", 0.18, Some("识别中…"));
             let segs = asr::run_crispasr(
                 &bin,
                 &resolved.path,
                 &wav,
                 &language,
                 cancel.clone(),
-                |p| emit_asr("transcribe", 0.4 + p * 0.55, None),
+                |p| emit_asr("transcribe", 0.18 + p * 0.82, Some("识别中…")),
             )
             .await
             .map_err(e)?;
-            (language.clone(), segs)
+            let sample: String = segs.iter().take(5).map(|s| s.text.as_str()).collect();
+            let lang = if language != "auto" {
+                language.clone()
+            } else if sample.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) {
+                "zh".into()
+            } else {
+                "auto".into()
+            };
+            (lang, segs)
         } else {
+            emit_asr("transcribe", 0.01, Some("识别中…"));
             let result = asr::run_whisper_worker(
                 &audio,
                 &resolved.path,
                 &language,
                 cancel.clone(),
                 |ev| match ev {
-                    asr::WorkerEvent::Progress(p) => emit_asr("transcribe", 0.4 + p * 0.55, None),
+                    asr::WorkerEvent::Progress(p) => emit_asr("transcribe", p, Some("识别中…")),
                     asr::WorkerEvent::Segment(s) => {
                         let _ = app.emit(
                             "asr",

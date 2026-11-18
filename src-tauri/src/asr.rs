@@ -1,7 +1,7 @@
 /**
- * [INPUT]: net、model::Segment、symphonia、whisper-rs、CrispASR CLI
- * [OUTPUT]: 本机模型列表/下载/删除、16k 解码、Qwen3(CrispASR)/Whisper 转写
- * [POS]: 官方字幕之后的本机识别路径；音频不出本机
+ * [INPUT]: net、ytdlp、model::Segment、symphonia、whisper-rs、CrispASR CLI
+ * [OUTPUT]: 本机模型；youtube_audio（原生 m4a）；decode_16k_mono_progressive（字节进度）；Qwen3/Whisper
+ * [POS]: 官方字幕之后的本机识别；ASR 选源离线→enclosure 直链→YT（直链优先以免 twin 拖慢）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::Segment;
@@ -336,7 +336,9 @@ pub async fn download_file(
         file.write_all(&chunk).await?;
         received += chunk.len() as u64;
         if last.elapsed().as_millis() > 200 {
-            progress(received, total);
+            // 无 Content-Length 时用渐进估值，避免界面一直停在 0%
+            let report_total = total.or_else(|| Some((received * 5 / 4).max(received + 1)));
+            progress(received, report_total);
             last = std::time::Instant::now();
         }
     }
@@ -463,70 +465,228 @@ pub async fn ensure_crispasr(
     Ok(bin)
 }
 
-/// 拉取单集音频到 work 目录；优先 audio_url，否则用 yt-dlp 抽 YouTube 音轨。
+/// URL 末尾扩展名；播客 enclosure 常带 query，取不到时默认 mp3。
+pub fn audio_ext(url: &str) -> String {
+    url.split('?')
+        .next()
+        .and_then(|u| u.rsplit('/').next())
+        .and_then(|f| f.rsplit_once('.'))
+        .map(|(_, x)| x)
+        .filter(|x| (2..=5).contains(&x.len()) && x.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("mp3")
+        .to_lowercase()
+}
+
+/// 直下播客 enclosure 到 dest（带进度）。小宇宙 dts-api 先还原成 xyzcdn 直链。
+pub async fn download_audio_url(
+    url: &str,
+    dest: &Path,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f64),
+) -> Result<()> {
+    let url = crate::shared::canonical_audio_url(url);
+    download_file(&url, dest, cancel, |recv, total| {
+        if let Some(t) = total.filter(|t| *t > 0) {
+            progress((recv as f64 / t as f64).clamp(0.0, 1.0));
+        }
+    })
+    .await
+}
+
+/// 复用本集已下载过的音频：offline downloads/ 或未清理的 work/{id}-*/audio.*。
+pub fn find_cached_audio(data: &Path, episode_id: &str) -> Option<PathBuf> {
+    if let Some(s) = crate::offline::find(data, episode_id) {
+        let p = PathBuf::from(s.path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let work = data.join("work");
+    let Ok(rd) = std::fs::read_dir(&work) else {
+        return None;
+    };
+    let prefix = format!("{episode_id}-");
+    let mut best: Option<(u64, PathBuf)> = None;
+    for ent in rd.flatten() {
+        let dir = ent.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = ent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let p = f.path();
+            let Some(fname) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !fname.starts_with("audio.") || fname.ends_with(".part") || fname.ends_with(".wav") {
+                continue;
+            }
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            if len < 64_000 {
+                continue;
+            }
+            if best.as_ref().map(|(n, _)| len > *n).unwrap_or(true) {
+                best = Some((len, p));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// YouTube：直下原生 m4a / AAC，不经 ffmpeg `-x` remux。
+pub async fn youtube_audio(
+    data: &Path,
+    video_id: &str,
+    dir: &Path,
+    cancel: Arc<AtomicBool>,
+) -> Result<PathBuf> {
+    youtube_audio_with_progress(data, video_id, dir, cancel, |_| {}).await
+}
+
+/// 同上，并从 yt-dlp stderr 解析下载百分比（0–1）。
+pub async fn youtube_audio_with_progress(
+    data: &Path,
+    video_id: &str,
+    dir: &Path,
+    cancel: Arc<AtomicBool>,
+    on_progress: impl FnMut(f64) + Send + 'static,
+) -> Result<PathBuf> {
+    let ytdlp = crate::ytdlp::ensure_ytdlp(data).await?;
+    let progress = Arc::new(std::sync::Mutex::new(Box::new(on_progress)
+        as Box<dyn FnMut(f64) + Send>));
+    crate::ytdlp::with_bot_fallback(|extra| {
+        let (y, v, d, c, p) = (
+            ytdlp.clone(),
+            video_id.to_string(),
+            dir.to_path_buf(),
+            cancel.clone(),
+            progress.clone(),
+        );
+        async move {
+            let x: Vec<&str> = extra.iter().map(String::as_str).collect();
+            youtube_audio_with(&y, &v, &d, c, &x, p).await
+        }
+    })
+    .await
+}
+
+fn parse_ytdlp_pct(line: &str) -> Option<f64> {
+    // [download]  45.2% of …
+    let i = line.find('%')?;
+    let start = line[..i].rfind(|c: char| c.is_ascii_whitespace() || c == ']')? + 1;
+    line[start..i]
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|p| (p / 100.0).clamp(0.0, 0.99))
+}
+
+async fn youtube_audio_with(
+    ytdlp: &Path,
+    video_id: &str,
+    dir: &Path,
+    cancel: Arc<AtomicBool>,
+    extra: &[&str],
+    progress: Arc<std::sync::Mutex<Box<dyn FnMut(f64) + Send>>>,
+) -> Result<PathBuf> {
+    tokio::fs::create_dir_all(dir).await?;
+    let template = dir.join(format!("{video_id}.%(ext)s"));
+    crate::ytdlp::warm_ytdlp(ytdlp).await;
+    let mut cmd = crate::ytdlp::ytdlp_command(ytdlp);
+    // 只要音轨；-N 并发拉 DASH 分片，避免单连接被油管限速拖死。
+    cmd.args([
+        "-f",
+        "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best",
+        "-N",
+        "8",
+        "--no-playlist",
+        "--no-part",
+        "--newline",
+    ])
+    .args(extra)
+    .arg("-o")
+    .arg(&template)
+    .arg(format!("https://www.youtube.com/watch?v={video_id}"))
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("无法启动 yt-dlp")?;
+    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+    let mut last_line = String::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill().await;
+            return Err(anyhow!("已取消"));
+        }
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line? else { break };
+                if let Some(p) = parse_ytdlp_pct(&line) {
+                    if let Ok(mut f) = progress.lock() {
+                        f(p);
+                    }
+                }
+                last_line = line;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
+                if let Some(status) = child.try_wait()? {
+                    if !status.success() {
+                        return Err(anyhow!(
+                            "下载 YouTube 音频失败：{}",
+                            last_line.chars().take(200).collect::<String>()
+                        ));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    let status = child.wait().await?;
+    if !status.success() {
+        return Err(anyhow!(
+            "下载 YouTube 音频失败：{}",
+            last_line.chars().take(200).collect::<String>()
+        ));
+    }
+    if let Ok(mut f) = progress.lock() {
+        f(1.0);
+    }
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(e) = entries.next_entry().await? {
+        if e.file_name().to_string_lossy().starts_with(video_id) {
+            return Ok(e.path());
+        }
+    }
+    Err(anyhow!("没有找到下载的音频"))
+}
+
+/// 离线下载用：有 enclosure 先直链，否则 YouTube 音轨。
 pub async fn fetch_episode_audio(
     data: &Path,
     work: &Path,
     audio_url: Option<&str>,
     video_id: Option<&str>,
-    cancel: &AtomicBool,
+    cancel: Arc<AtomicBool>,
     mut progress: impl FnMut(f64),
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(work)?;
     if let Some(url) = audio_url.filter(|u| !u.is_empty()) {
-        let ext = url
-            .rsplit('.')
-            .next()
-            .and_then(|e| e.split(&['?', '#'][..]).next())
-            .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
-            .unwrap_or("m4a");
-        let dest = work.join(format!("audio.{ext}"));
-        download_file(url, &dest, cancel, |recv, total| {
-            if let Some(t) = total.filter(|t| *t > 0) {
-                progress((recv as f64 / t as f64).clamp(0.0, 1.0) * 0.35);
-            }
-        })
-        .await?;
+        let dest = work.join(format!("audio.{}", audio_ext(url)));
+        download_audio_url(url, &dest, &cancel, &mut progress).await?;
         return Ok(dest);
     }
-    let vid = video_id.filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("这集没有可识别的音频"))?;
-    let ytdlp = crate::ytdlp::ensure_ytdlp(data).await?;
-    let out = work.join("audio.%(ext)s");
-    let mut cmd = tokio::process::Command::new(&ytdlp);
-    cmd.args([
-        "-f",
-        "bestaudio/best",
-        "-x",
-        "--audio-format",
-        "m4a",
-        "--no-playlist",
-        "-o",
-    ])
-    .arg(&out)
-    .arg(format!("https://www.youtube.com/watch?v={vid}"))
-    .kill_on_drop(true);
-    let proxy = crate::net::effective_proxy();
-    if !proxy.is_empty() {
-        cmd.arg("--proxy").arg(proxy);
-    }
+    let vid = video_id
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("这集没有可识别的音频"))?;
     progress(0.05);
-    let status = cmd.status().await?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err(anyhow!("已取消"));
-    }
-    if !status.success() {
-        return Err(anyhow!("无法从 YouTube 取出音频"));
-    }
-    let found = std::fs::read_dir(work)?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("audio."))
-        })
-        .ok_or_else(|| anyhow!("未找到下载的音频文件"))?;
-    progress(0.35);
+    let found = youtube_audio(data, vid, work, cancel).await?;
+    progress(1.0);
     Ok(found)
 }
 
@@ -619,13 +779,76 @@ impl Resampler {
     }
 }
 
+/// 带字节进度的可读文件，供 symphonia 顺序解码时上报 0–1。
+/// MediaSource 要求 Sync，进度走 mpsc::Sender（Sync），不用 FnMut。
+struct ProgressFile {
+    inner: std::fs::File,
+    total: u64,
+    pos: u64,
+    last: std::time::Instant,
+    cancel: Arc<AtomicBool>,
+    progress: Option<std::sync::mpsc::Sender<f64>>,
+}
+
+impl std::io::Read for ProgressFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "已取消"));
+        }
+        let n = self.inner.read(buf)?;
+        self.pos = self.pos.saturating_add(n as u64);
+        if self.total > 0 && self.last.elapsed().as_millis() > 200 {
+            if let Some(tx) = &self.progress {
+                let _ = tx.send((self.pos as f64 / self.total as f64).clamp(0.0, 0.99));
+            }
+            self.last = std::time::Instant::now();
+        }
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for ProgressFile {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = self.inner.seek(pos)?;
+        Ok(self.pos)
+    }
+}
+
+impl symphonia::core::io::MediaSource for ProgressFile {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.total)
+    }
+}
+
 pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
+    decode_16k_mono_progressive(path, Arc::new(AtomicBool::new(false)), None)
+}
+
+/// 解码为 16 kHz 单声道；优先选带 sample_rate 的音轨（避开 mp4 里的视频轨）。
+/// `progress` 按已读字节发送 0–1。
+pub fn decode_16k_mono_progressive(
+    path: &Path,
+    cancel: Arc<AtomicBool>,
+    progress: Option<std::sync::mpsc::Sender<f64>>,
+) -> Result<Vec<f32>> {
     use symphonia::core::{
         audio::SampleBuffer, codecs::DecoderOptions, errors::Error, formats::FormatOptions,
         io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
     };
     let file = std::fs::File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let total = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let source = ProgressFile {
+        inner: file,
+        total,
+        pos: 0,
+        last: std::time::Instant::now(),
+        cancel: cancel.clone(),
+        progress,
+    };
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
@@ -634,10 +857,20 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| anyhow!("无法识别音频格式：{e}"))?;
     let mut format = probed.format;
+    // mp4 等容器里视频轨常排在前面；只认带采样率/声道的轨。
     let track = format
         .tracks()
         .iter()
-        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+        .find(|t| {
+            t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL
+                && (t.codec_params.sample_rate.is_some() || t.codec_params.channels.is_some())
+        })
+        .or_else(|| {
+            format
+                .tracks()
+                .iter()
+                .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+        })
         .ok_or_else(|| anyhow!("没有音轨"))?;
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs()
@@ -646,9 +879,15 @@ pub fn decode_16k_mono(path: &Path) -> Result<Vec<f32>> {
     let mut resampler: Option<Resampler> = None;
     let mut buf: Option<SampleBuffer<f32>> = None;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(anyhow!("已取消"));
+        }
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::Interrupted => {
+                return Err(anyhow!("已取消"));
+            }
             Err(Error::ResetRequired) => break,
             Err(e) => return Err(anyhow!("读取音频失败：{e}")),
         };
@@ -914,6 +1153,13 @@ mod tests {
     fn catalog_has_qwen_and_whisper() {
         assert!(spec("qwen3-asr").is_some_and(|m| m.engine == "qwen3"));
         assert!(spec("base").is_some_and(|m| m.engine == "whisper"));
+    }
+
+    #[test]
+    fn audio_ext_from_url() {
+        assert_eq!(audio_ext("https://a.com/x/ep.MP3?t=1"), "mp3");
+        assert_eq!(audio_ext("https://a.com/x/ep.m4a"), "m4a");
+        assert_eq!(audio_ext("https://a.com/x/redirect"), "mp3");
     }
 
     #[test]

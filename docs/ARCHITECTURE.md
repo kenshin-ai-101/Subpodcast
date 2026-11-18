@@ -13,7 +13,7 @@
 │ translate 谷歌（tr_cache）/ LLM 批次                 │
 │ llm       OpenAI 兼容流式代理                        │
 │ db        SQLite：订阅、单集、字幕、blobs、tr_cache   │
-│ secrets   API Key → 系统钥匙串                       │
+│ secrets   API Key → 钥匙串（签名包）/ 本机文件（开发） │
 │ net       代理（http/socks5）                        │
 └──────────────────────────────────────────────────────┘
 ```

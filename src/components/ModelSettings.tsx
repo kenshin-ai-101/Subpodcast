@@ -148,7 +148,7 @@ export function ModelSettings({
                 <div>
                   <p className="ms-title">{p.name}</p>
                   <p className="muted small">
-                    {p.needsKey ? "用你自己的 API Key，按用量付费给服务商。Key 只存在本机钥匙串。" : "在你电脑上运行的模型服务，不需要 Key。"}
+                    {p.needsKey ? "用你自己的 API Key，按用量付费给服务商。Key 只保存在本机。" : "在你电脑上运行的模型服务，不需要 Key。"}
                   </p>
                 </div>
               </div>

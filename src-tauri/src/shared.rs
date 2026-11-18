@@ -1,7 +1,7 @@
 /**
  * [INPUT]: net、model::Episode/Segment/Transcript；subcast.qiaomu.ai 共享字幕 API
- * [OUTPUT]: keys / lookup / existing / upload_with / into_transcript / lookup_guide / upload_guide
- * [POS]: 官方字幕与 ASR 之前的共享库捷径；导读同库 guides API；上传受 shareTranscripts 约束
+ * [OUTPUT]: keys（小宇宙 guid/audio 归一）/ canonical_audio_url / lookup / upload_*
+ * [POS]: 官方字幕与 ASR 之前的共享库捷径——命中则跳过整集下载；导读同库
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::{Episode, Segment, Transcript};
@@ -16,24 +16,47 @@ fn sha1_hex(s: &str) -> String {
     hex::encode(sha1::Sha1::digest(s.as_bytes()))
 }
 
+/// 小宇宙单集 id：24 位 hex（RSS guid 常不带 `.html`，乔木/SubCast 上传用带 `.html`）。
+fn xyz_eid(guid: &str) -> Option<&str> {
+    let g = guid.strip_suffix(".html").unwrap_or(guid);
+    (g.len() == 24 && g.chars().all(|c| c.is_ascii_hexdigit())).then_some(g)
+}
+
+/// 把 dts-api 包装链还原成 `media.xyzcdn.net/…`，与乔木库里的 audio key 对齐。
+pub fn canonical_audio_url(url: &str) -> String {
+    let bare = url.split(['?', '#']).next().unwrap_or(url);
+    if let Some(i) = bare.find("media.xyzcdn.net/") {
+        return format!("https://{}", &bare[i..]);
+    }
+    bare.to_string()
+}
+
 /// 1–4 个跨安装标识同一集的 key（服务端任一命中即可）。
+/// 小宇宙订阅与乔木源 guid/audio URL 写法不同，这里做归一，才能命中共享库、跳过整集下载。
 pub fn keys(ep: &Episode) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    if let Some(v) = &ep.video_id {
+    if let Some(v) = ep.video_id.as_deref().filter(|v| !v.is_empty()) {
         out.push(format!("yt:{v}"));
     }
-    if matches!(
+    let guid = ep.guid.trim();
+    let qm = matches!(
         ep.transcript_type.as_deref(),
         Some("qiaomu") | Some("qiaomu-rss") | Some("podscribe")
-    ) && !ep.guid.is_empty()
-    {
-        out.push(format!("qm:{}", ep.guid));
+    );
+    if let Some(eid) = xyz_eid(guid) {
+        // SubCast/乔木上传固定用 `qm:{eid}.html`
+        out.push(format!("qm:{eid}.html"));
+    } else if qm && !guid.is_empty() {
+        out.push(format!("qm:{guid}"));
     }
-    if !ep.guid.is_empty() {
-        out.push(format!("guid:{}", sha1_hex(&ep.guid)));
+    if let Some(a) = ep.audio_url.as_deref().filter(|u| !u.is_empty()) {
+        out.push(format!("audio:{}", sha1_hex(&canonical_audio_url(a))));
     }
-    if let Some(a) = &ep.audio_url {
-        out.push(format!("audio:{}", sha1_hex(a)));
+    if let Some(eid) = xyz_eid(guid) {
+        // 与乔木 guid（带 .html）的 sha1 对齐
+        out.push(format!("guid:{}", sha1_hex(&format!("{eid}.html"))));
+    } else if !guid.is_empty() {
+        out.push(format!("guid:{}", sha1_hex(guid)));
     }
     out.truncate(4);
     out
@@ -287,8 +310,8 @@ mod tests {
         assert_eq!(ks.len(), 4, "{ks:?}");
         assert_eq!(ks[0], "yt:tBMlXQIrYK4");
         assert_eq!(ks[1], "qm:abc123");
-        assert!(ks[2].starts_with("guid:") && ks[2].len() == 5 + 40);
-        assert!(ks[3].starts_with("audio:") && ks[3].len() == 6 + 40);
+        assert!(ks[2].starts_with("audio:") && ks[2].len() == 6 + 40);
+        assert!(ks[3].starts_with("guid:") && ks[3].len() == 5 + 40);
         let ep2 = Episode {
             guid: "g".into(),
             audio_url: Some("a".into()),
@@ -298,11 +321,50 @@ mod tests {
         assert!(keys(&Episode::default()).is_empty());
     }
 
+    #[test]
+    fn xiaoyuzhou_keys_match_qiaomu_upload() {
+        let eid = "6af5debf14d01a26f8a900ac";
+        let ep = Episode {
+            guid: eid.into(), // 小宇宙 RSS：无 .html、无 transcript_type
+            audio_url: Some(format!(
+                "https://dts-api.xiaoyuzhoufm.com/track/626b46ea9cbbf0451cf5a962/{eid}/media.xyzcdn.net/626b46ea9cbbf0451cf5a962/lvnhry4gLCC3Ut_6NMJN7QRmdDaN.m4a"
+            )),
+            ..Default::default()
+        };
+        let ks = keys(&ep);
+        assert!(ks.contains(&format!("qm:{eid}.html")), "{ks:?}");
+        let cdn = "https://media.xyzcdn.net/626b46ea9cbbf0451cf5a962/lvnhry4gLCC3Ut_6NMJN7QRmdDaN.m4a";
+        assert!(
+            ks.contains(&format!("audio:{}", sha1_hex(cdn))),
+            "{ks:?}"
+        );
+        assert_eq!(
+            canonical_audio_url(ep.audio_url.as_deref().unwrap()),
+            cdn
+        );
+    }
+
     #[tokio::test]
     #[ignore = "需要网络"]
     async fn live_lex_shared_hit() {
         let hit = lookup(&["yt:2hJkprFnzhY".into()]).await;
         assert!(hit.is_some(), "expected shared hit for Lex #504");
         assert!(!hit.unwrap().segments.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "需要网络"]
+    async fn live_xiaoyuzhou_via_normalized_qm() {
+        let ep = Episode {
+            guid: "6af5debf14d01a26f8a900ac".into(),
+            audio_url: Some(
+                "https://dts-api.xiaoyuzhoufm.com/track/626b46ea9cbbf0451cf5a962/6af5debf14d01a26f8a900ac/media.xyzcdn.net/626b46ea9cbbf0451cf5a962/x.m4a"
+                    .into(),
+            ),
+            ..Default::default()
+        };
+        let hit = lookup(&keys(&ep)).await;
+        assert!(hit.is_some(), "小宇宙 guid 归一后应命中乔木共享库");
+        assert!(hit.unwrap().segments.len() > 100);
     }
 }
