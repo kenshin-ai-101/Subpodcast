@@ -1,6 +1,6 @@
 /**
  * [INPUT]: @tauri-apps/api invoke
- * [OUTPUT]: 类型化后端命令封装（含 shared_guide / share_guide / tts_speak / shared_transcript）
+ * [OUTPUT]: 类型化后端命令封装（含 shared_guide / share_guide / tts_speak / shared_transcript / saveDownload）
  * [POS]: 前后端边界；字段名与 Rust camelCase 对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -16,7 +16,8 @@ export interface Show {
   link?: string | null;
   description?: string | null;
   updatedAt: number;
-  unplayed?: number;
+  /** 入库单集总数；侧栏角标与详情「全部」同源。 */
+  episodeCount?: number;
 }
 
 export interface Episode {
@@ -196,6 +197,9 @@ export const api = {
   listModels: (req: { provider: string; baseUrl: string; protocol: string }) =>
     invoke<string[]>("list_models", { req }),
   exportOpml: () => invoke<string>("export_opml"),
+  /** 写到系统「下载」；binary 时 data 为 base64。 */
+  saveDownload: (name: string, data: string, binary = false) =>
+    invoke<string>("save_download", { name, data, binary }),
   storageInfo: () =>
     invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
   openDataFolder: (kind: string) => invoke<void>("open_data_folder", { kind }),

@@ -1,14 +1,20 @@
 /**
- * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack
- * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；下载·解码·识别分阶段文案 / 行列表）
+ * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack；exportTranscript
+ * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 MD·PDF；下载·解码·识别分阶段文案 / 行列表）
  * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Languages, Loader2 } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ChevronDown, Download, FileText, Languages, Loader2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errText, type Episode } from "../lib/api";
 import { useAsrModels, type AsrModel } from "../lib/asrModels";
+import {
+  runTranscriptExport,
+  type ExportFormat,
+  type ExportMode,
+} from "../lib/exportTranscript";
 import { clock } from "../lib/format";
 import {
   cancelAsr,
@@ -568,6 +574,96 @@ function NoTranscript({
 /** 错误文案可读化：长 URL 对听者无意义，完整内容留在 title。 */
 const plainError = (m: string) => m.replace(/[：:]?\s*https?:\/\/\S+/g, "").trim() || m;
 
+function ExportMenu({
+  episode,
+  segments,
+  translations,
+  mode,
+  foreign,
+  source,
+}: {
+  episode: Episode;
+  segments: { start: number; end: number; text: string }[];
+  translations?: (string | null)[];
+  mode: ExportMode;
+  foreign: boolean;
+  source: string;
+}) {
+  const notify = useStore((s) => s.notify);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", h);
+    document.addEventListener("keydown", k);
+    return () => {
+      document.removeEventListener("pointerdown", h);
+      document.removeEventListener("keydown", k);
+    };
+  }, [open]);
+
+  const run = async (format: ExportFormat) => {
+    setOpen(false);
+    setBusy(true);
+    try {
+      const path = await runTranscriptExport({
+        format,
+        episode,
+        segments,
+        translations,
+        mode,
+        foreign,
+        sourceLabel: sourceLabel(source),
+      });
+      notify(`已导出到「下载」：${path.split(/[\\/]/).pop() ?? ""}`);
+      void revealItemInDir(path).catch(() => {});
+    } catch (e) {
+      notify(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel-menu" ref={box}>
+      <button
+        type="button"
+        className="track-pick"
+        title="导出字幕"
+        aria-label="导出字幕"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={busy || !segments.length}
+        onClick={() => setOpen(!open)}
+      >
+        {busy ? <Loader2 size={13} className="spin" /> : <Download size={14} />}
+        <span>导出</span>
+        <ChevronDown size={12} className={open ? "flip" : ""} />
+      </button>
+      {open && (
+        <div className="panel-menu-pop export-pop" role="menu">
+          <button type="button" role="menuitem" onClick={() => void run("md")}>
+            <FileText size={14} />
+            <span>Markdown</span>
+          </button>
+          <button type="button" role="menuitem" onClick={() => void run("pdf")}>
+            <FileText size={14} />
+            <span>PDF</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 无字幕时居中空态卡：插画 + 标题 + 说明 + 动作。 */
 function GenCard({
   icon,
@@ -649,6 +745,14 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           />
         )}
         <div className="spacer" />
+        <ExportMenu
+          episode={episode}
+          segments={segs}
+          translations={translation?.items}
+          mode={mode}
+          foreign={foreign}
+          source={transcript!.source}
+        />
         {foreign && (
           <div className="seg-control" role="group" aria-label="字幕显示">
             {(

@@ -50,6 +50,7 @@
     "allow-cancel-job",
     "allow-list-models",
     "allow-export-opml",
+    "allow-save-download",
     "allow-storage-info",
     "allow-open-data-folder",
     "allow-clear-temp",

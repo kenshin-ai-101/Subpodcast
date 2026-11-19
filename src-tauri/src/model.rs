@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 无外部 crate 业务依赖，仅 serde
- * [OUTPUT]: Show / Episode / Segment / Transcript 领域模型与短哈希工具
+ * [OUTPUT]: Show（含 episode_count）/ Episode / Segment / Transcript 与短哈希工具
  * [POS]: 数据契约中枢，被 db、feeds、captions、前端 JSON 共同消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -19,8 +19,9 @@ pub struct Show {
     pub link: Option<String>,
     pub description: Option<String>,
     pub updated_at: i64,
+    /// 该节目已入库的单集总数（侧栏与详情「全部」同源）。
     #[serde(default)]
-    pub unplayed: i64,
+    pub episode_count: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

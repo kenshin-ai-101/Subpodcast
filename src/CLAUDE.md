@@ -6,7 +6,8 @@ App.tsx: 应用壳；首页/发现/统计/频道路由；收藏 + 离线清单�
 main.tsx: React 挂载入口
 store.ts: Zustand（View: home/discover/stats/recent/channel/show/episode；history/back；播放；settings）
 styles.css: 暖纸底 + 橙强调；单集页 yt-strip / 右四 Tab / 叠字幕
-lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；离线下载）
+lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；离线下载）
+lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
 lib/settings.ts: Settings / PRESETS / VOICES；shareTranscripts；ttsVoice
 lib/reading.ts: 字幕/问答 CSS 变量
@@ -41,7 +42,7 @@ components/DiscoverView.tsx: Topic + 精选网格 + 横幅
 components/ChannelView.tsx: 订阅前预览（cached/preview）
 components/PromoBanner.tsx: HomeShowBanner / YtButton / YtVideoStrip（单集订阅条）
 components/StatsView.tsx: 收听统计 + AI 画像
-components/ShowView.tsx: 订阅详情；精读入口 banner
+components/ShowView.tsx: 订阅详情；侧栏单集总数同源；精读入口 banner
 components/MonthFilter.tsx: 按年月热力筛选单集
 components/AddDialog.tsx: 添加节目
 components/ImportPanel.tsx: 浏览器 YouTube + OPML 导入
@@ -54,7 +55,7 @@ components/ShortcutSettings.tsx: 快捷键
 components/PlayerBar.tsx: 视频/仅音频（media-switch-row 靠右短条；有文件走 audio，否则隐藏 YT）
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
-components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/实时识别行 + YouTube 语言切换 + 行列表
+components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出 MD·PDF / 实时识别行 + YouTube 语言切换 + 行列表
 components/EpisodeView.tsx: 开集 ensureTranscript/autoTranslate；右栏拖宽/收起；标题动作 + 简介 + 右四 Tab
 components/DeepRead.tsx: 乔木精读 HTML（右栏精读 Tab）
 components/SummaryPane.tsx: 右栏导读（共享查找 / 生成 / 朗读脚注）

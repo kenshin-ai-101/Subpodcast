@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "cancel_job",
     "list_models",
     "export_opml",
+    "save_download",
     "storage_info",
     "open_data_folder",
     "clear_temp",

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store、api、layout（sideOpen → rail）
- * [OUTPUT]: Sidebar（首页/发现/统计；收起为图标轨）/ TopBar / Toast
+ * [INPUT]: store、api、layout（sideOpen → rail）；Show.episodeCount
+ * [OUTPUT]: Sidebar（首页/发现/统计；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
  * [POS]: 全局导航与搜索订阅入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -81,7 +81,7 @@ export function Sidebar() {
       </div>
       <div className="show-list">
         {shows.map((s) => {
-          const unread = s.unplayed ?? 0;
+          const n = s.episodeCount ?? 0;
           return (
             <button
               key={s.id}
@@ -91,10 +91,10 @@ export function Sidebar() {
             >
               <span className="show-cover">
                 {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
-                {rail && unread > 0 && <span className="rail-dot" />}
+                {rail && n > 0 && <span className="rail-dot" />}
               </span>
               <span className="show-title">{showName(s.title)}</span>
-              {unread > 0 && <span className="unplayed">{unread > 99 ? "99+" : unread}</span>}
+              {n > 0 && <span className="show-count">{n}</span>}
             </button>
           );
         })}

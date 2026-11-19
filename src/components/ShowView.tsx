@@ -1,7 +1,7 @@
 /**
- * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll
- * [OUTPUT]: 订阅节目详情页（封面头图、筛选、月份轴、分组单集）
- * [POS]: Sidebar 点选订阅后的主面板；含「有乔木精读版」入口
+ * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll；store.shows.episodeCount
+ * [OUTPUT]: 订阅节目详情页（封面头图、筛选计数、月份轴、分组单集）；打开时回写侧栏单集总数
+ * [POS]: Sidebar 点选订阅后的主面板；侧栏数量=入库单集总数（与「全部」同源）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,11 +27,18 @@ import { MonthFilter, useMonthFilter } from "./MonthFilter";
 
 type Filter = "all" | "unplayed" | "subs";
 
+/** 「未听」筛选：进度不足 5 秒视为未听（仅筛选条，不进侧栏角标）。 */
+const UNPLAYED_SEC = 5;
+
 function kindLabel(show: Show): string {
   if (show.kind === "youtube") return "YouTube 频道";
   if (show.kind === "xiaoyuzhou") return "小宇宙";
   if (show.kind === "qiaomu") return "乔木精读";
   return "播客";
+}
+
+function isUnplayed(ep: Episode): boolean {
+  return ep.progress < UNPLAYED_SEC;
 }
 
 function isFinished(ep: Episode): boolean {
@@ -68,7 +75,20 @@ export function ShowView({ showId }: { showId: string }) {
     setExpanded(false);
     setMenu(false);
     setQuery("");
-    void api.listEpisodes(showId, 5000).then(setEps).catch((e) => notify(errText(e)));
+    void api
+      .listEpisodes(showId, 5000)
+      .then((list) => {
+        setEps(list);
+        // 打开详情时用列表长度回写侧栏，避免刷新后角标与本页「全部」漂移
+        const n = list.length;
+        const cur = useStore.getState().shows;
+        if (cur.some((s) => s.id === showId && (s.episodeCount ?? 0) !== n)) {
+          useStore.getState().set({
+            shows: cur.map((s) => (s.id === showId ? { ...s, episodeCount: n } : s)),
+          });
+        }
+      })
+      .catch((e) => notify(errText(e)));
   }, [showId, notify]);
 
   useEffect(() => {
@@ -85,10 +105,21 @@ export function ShowView({ showId }: { showId: string }) {
 
   const desc = useMemo(() => plainText(show?.description), [show?.description]);
 
+  const counts = useMemo(() => {
+    if (!eps) return { all: 0, unplayed: 0, subs: 0 };
+    let unplayed = 0;
+    let subs = 0;
+    for (const e of eps) {
+      if (isUnplayed(e)) unplayed += 1;
+      if (e.hasTranscript || e.transcriptUrl) subs += 1;
+    }
+    return { all: eps.length, unplayed, subs };
+  }, [eps]);
+
   const byFilter = useMemo(() => {
     if (!eps) return null;
     return eps.filter((e) => {
-      if (filter === "unplayed") return e.progress < 5;
+      if (filter === "unplayed") return isUnplayed(e);
       if (filter === "subs") return e.hasTranscript || !!e.transcriptUrl;
       return true;
     });
@@ -265,11 +296,11 @@ export function ShowView({ showId }: { showId: string }) {
           <div className="seg-control">
             {(
               [
-                ["all", "全部"],
-                ["unplayed", "未听"],
-                ["subs", "有字幕"],
-              ] as [Filter, string][]
-            ).map(([k, label]) => (
+                ["all", "全部", counts.all],
+                ["unplayed", "未听", counts.unplayed],
+                ["subs", "有字幕", counts.subs],
+              ] as [Filter, string, number][]
+            ).map(([k, label, n]) => (
               <button
                 key={k}
                 type="button"
@@ -277,6 +308,7 @@ export function ShowView({ showId }: { showId: string }) {
                 onClick={() => setFilter(k)}
               >
                 {label}
+                {eps && <span className="seg-n">{n}</span>}
               </button>
             ))}
           </div>

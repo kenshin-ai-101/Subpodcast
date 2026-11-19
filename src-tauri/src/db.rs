@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 model、rusqlite
- * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / dedupe_show_episodes
- * [POS]: 本机持久化唯一入口；刷新用 sync 删孤儿；详情列表按期号键去重合并进度
+ * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / dedupe_show_episodes；list_shows.episode_count
+ * [POS]: 本机持久化唯一入口；刷新用 sync 删孤儿；详情列表按期号键去重合并进度；侧栏数量=入库单集总数
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::*;
@@ -293,14 +293,14 @@ fn show_from(r: &rusqlite::Row) -> rusqlite::Result<Show> {
         link: r.get(6)?,
         description: r.get(7)?,
         updated_at: r.get(8)?,
-        unplayed: r.get(9).unwrap_or(0),
+        episode_count: r.get(9).unwrap_or(0),
     })
 }
 
 pub fn list_shows(conn: &Connection) -> Result<Vec<Show>> {
     let mut st = conn.prepare(
         "SELECT s.id,s.kind,s.title,s.author,s.cover,s.feed_url,s.link,s.description,s.updated_at,
-         (SELECT COUNT(*) FROM episodes e WHERE e.show_id=s.id AND e.progress=0)
+         (SELECT COUNT(*) FROM episodes e WHERE e.show_id=s.id)
          FROM shows s WHERE s.kind != 'single' ORDER BY s.title COLLATE NOCASE",
     )?;
     let rows = st.query_map([], show_from)?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -310,7 +310,9 @@ pub fn list_shows(conn: &Connection) -> Result<Vec<Show>> {
 pub fn get_show(conn: &Connection, id: &str) -> Result<Option<Show>> {
     Ok(conn
         .query_row(
-            "SELECT id,kind,title,author,cover,feed_url,link,description,updated_at,0 FROM shows WHERE id=?1",
+            "SELECT id,kind,title,author,cover,feed_url,link,description,updated_at,
+             (SELECT COUNT(*) FROM episodes e WHERE e.show_id=shows.id)
+             FROM shows WHERE id=?1",
             [id],
             show_from,
         )

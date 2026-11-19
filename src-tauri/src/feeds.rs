@@ -87,7 +87,7 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
             link: None,
             description: Some("乔木精读 · 中文标题与精读长文".into()),
             updated_at: now_ms(),
-            unplayed: 0,
+            episode_count: 0,
         });
     }
     for item in v["results"].as_array().into_iter().flatten() {
@@ -109,7 +109,7 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
             link: item["collectionViewUrl"].as_str().map(str::to_string),
             description: None,
             updated_at: now_ms(),
-            unplayed: 0,
+            episode_count: 0,
         });
     }
     Ok(out)
@@ -224,7 +224,7 @@ fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         link: text_child(channel, "link"),
         description: text_child(channel, "description"),
         updated_at: now_ms(),
-        unplayed: 0,
+        episode_count: 0,
     };
     Ok((show, episodes))
 }
@@ -293,7 +293,7 @@ fn parse_atom(doc: &Document, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         link: None,
         description: None,
         updated_at: now_ms(),
-        unplayed: 0,
+        episode_count: 0,
     };
     Ok((show, episodes))
 }
@@ -335,7 +335,7 @@ async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
             link: Some(page),
             description: None,
             updated_at: now_ms(),
-            unplayed: 0,
+            episode_count: 0,
         },
         episodes: vec![],
     })
@@ -371,7 +371,7 @@ fn xiaoyuzhou_from_next_data(html: &str, page: &str) -> Result<Resolved> {
             link: Some(page.into()),
             description: p["description"].as_str().map(str::to_string),
             updated_at: now_ms(),
-            unplayed: 0,
+            episode_count: 0,
         },
         episodes,
     })

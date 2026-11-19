@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline
- * [OUTPUT]: Tauri 命令面（含 shared_* / share_guide / tts_speak / translate_texts / fetch_official）与启动
+ * [OUTPUT]: Tauri 命令面（含 shared_* / share_guide / tts_speak / translate_texts / save_download / fetch_official）与启动
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -1010,6 +1010,37 @@ async fn list_models(req: ListModelsReq) -> Res<Vec<String>> {
     Ok(ids)
 }
 
+fn downloads_dir() -> Res<PathBuf> {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| "找不到下载文件夹".to_string())
+}
+
+/// 文件名只留最后一段，去掉路径分隔与 Windows 非法字符。
+fn safe_download_name(name: &str) -> Res<String> {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .trim();
+    let cleaned: String = base
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cleaned = cleaned.chars().take(120).collect::<String>();
+    if cleaned.is_empty() {
+        return Err("文件名无效".into());
+    }
+    Ok(cleaned)
+}
+
 /// 把订阅写成 OPML，落到系统「下载」。
 #[tauri::command]
 fn export_opml(state: State<'_, AppState>) -> Res<String> {
@@ -1020,14 +1051,28 @@ fn export_opml(state: State<'_, AppState>) -> Res<String> {
         .filter(|s| s.feed_url.starts_with("http"))
         .map(|s| (s.title, s.feed_url))
         .collect();
-    let dir = dirs::download_dir()
-        .or_else(dirs::home_dir)
-        .ok_or_else(|| "找不到下载文件夹".to_string())?;
-    let path = dir.join(format!(
+    let path = downloads_dir()?.join(format!(
         "Subpodcast-{}.opml",
         chrono::Local::now().format("%Y%m%d")
     ));
     std::fs::write(&path, import::opml(&list)).map_err(e)?;
+    Ok(path.to_string_lossy().into())
+}
+
+/// 把文本或 base64 二进制写到系统「下载」；字幕 MD/PDF 与其它导出共用。
+#[tauri::command]
+fn save_download(name: String, data: String, binary: bool) -> Res<String> {
+    let name = safe_download_name(&name)?;
+    let path = downloads_dir()?.join(name);
+    if binary {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let bytes = STANDARD
+            .decode(data.trim())
+            .map_err(|_| "文件内容无效".to_string())?;
+        std::fs::write(&path, bytes).map_err(e)?;
+    } else {
+        std::fs::write(&path, data).map_err(e)?;
+    }
     Ok(path.to_string_lossy().into())
 }
 
@@ -1532,6 +1577,7 @@ pub fn run() {
             cancel_job,
             list_models,
             export_opml,
+            save_download,
             storage_info,
             open_data_folder,
             clear_temp,

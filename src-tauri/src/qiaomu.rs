@@ -170,7 +170,7 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
         link: Some(base.clone()),
         description: meta(&home, "description").or_else(|| meta(&home, "og:description")),
         updated_at: now_ms(),
-        unplayed: 0,
+        episode_count: 0,
     };
     let episodes = list
         .iter()
@@ -479,7 +479,7 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
         link: Some(feed),
         description: None,
         updated_at: now_ms(),
-        unplayed: 0,
+        episode_count: 0,
     };
     let episodes = entries
         .iter()

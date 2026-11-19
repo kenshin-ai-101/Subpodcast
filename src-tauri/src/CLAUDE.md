@@ -2,10 +2,10 @@
 > L2 | 父级: /CLAUDE.md
 
 成员清单
-lib.rs: Tauri 命令面与启动（shared_* / share_guide / tts_speak / translate_texts；youtube_tracks；ASR 上传共享库）
+lib.rs: Tauri 命令面与启动（shared_* / share_guide / tts_speak / translate_texts；save_download；youtube_tracks；ASR 上传共享库）
 main.rs: 二进制入口
 model.rs: Show/Episode/Segment/Transcript 契约
-db.rs: SQLite WAL；tr_cache；sync_episodes / dedupe_show_episodes；listens / recent
+db.rs: SQLite WAL；tr_cache；sync_episodes / dedupe_show_episodes；list_shows.episode_count；listens / recent
 feeds.rs: 订阅解析与搜索；词元入口优先乔木源；fill_youtube_twin；小宇宙也 attach twin
 qiaomu.rs: 精读频道 + detail / rss_rewrite；qiaomu_detail 写 deep-read
 import.rs: YouTube 浏览器订阅导入、隐私设置入口、OPML 导出
@@ -21,6 +21,6 @@ net.rs: 统一 HTTP 客户端与代理
 secrets.rs: API Key（正式签名→钥匙串；debug/ad-hoc→本机 secrets.json + 内存缓存）
 offline.rs: 单集音频离线；ASR 复用 find()
 
-命令补充：shared_guide / share_guide / tts_speak；shared_transcript / share_translation / translate_texts
+命令补充：shared_guide / share_guide / tts_speak；shared_transcript / share_translation / translate_texts；save_download
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
