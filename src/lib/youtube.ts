@@ -1,7 +1,7 @@
 /**
  * [INPUT]: youtube.com/iframe_api
  * [OUTPUT]: loadYouTube() → window.YT
- * [POS]: YouTube IFrame Player API 一次性加载；播放器组件消费
+ * [POS]: YouTube IFrame Player API 一次性加载；App 启动预热；YtEngine 换片复用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -27,6 +27,8 @@ export interface YtPlayer {
   setVolume(vol: number): void;
   mute(): void;
   unMute(): void;
+  /** 换集复用同一 iframe，避免 destroy + 重建的秒级冷启动。 */
+  loadVideoById(opts: string | { videoId: string; startSeconds?: number }): void;
   unloadModule?(name: string): void;
   setOption?(module: string, option: string, value: unknown): void;
 }

@@ -2,10 +2,14 @@
 > L2 | 父级: /CLAUDE.md
 
 成员清单
-App.tsx: 应用壳；首页/发现/统计/生词本/频道路由；收藏 + 离线清单加载与收听 flush；remindReview
+App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / 离线 / remindReview
 main.tsx: React 挂载入口
-store.ts: Zustand（View: home/discover/stats/recent/words/channel/show/episode；history/back；播放；settings）
-styles.css: 暖纸底 + 橙强调；单集页 yt-strip / 右四 Tab / 叠字幕；学英语词卡/生词本/复习
+store.ts: Zustand；openEpisode 只导航；load 装载+预缓冲；playWhenReady 按集
+styles.css: 暖纸底 + 橙强调；yt-dock；mini 迷你条；单集右四 Tab / 叠字幕
+lib/media.ts: preferAudio / usesAudioEngine / usesYtEngine — App 根引擎互斥
+lib/audioHost.ts: 单例 Audio；prepareAudio 预缓冲+offer；play 交给 playSoon
+lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
+lib/playback.ts: playSoon + armPlayerIntentListener（App mount 挂；禁模块顶层以免环导入白屏）
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
@@ -26,20 +30,20 @@ lib/chats.ts: 问答会话/历史持久化 + 流式 ask
 lib/llmGate.ts: 串行化 llm-delta
 lib/playback.ts: 进度心跳 track/flush、缓冲 waiting、playSoon（就绪后开播）、activeIndex
 lib/listening.ts: 墙钟收听累计 noteListening / flushListening
-lib/youtube.ts: YouTube IFrame API + 关闭自带 CC
+lib/youtube.ts: YouTube IFrame API + loadVideoById 换片 + 关自带 CC
 lib/format.ts: 日期/时长/clock/parseClock/月份文案
 lib/confirm.ts: 应用内确认替代 window.confirm
-lib/queue.ts: 会话级连播 + settings.autoNext
+lib/queue.ts: start=load+openEpisode+playSoon；连播 / autoNext
 lib/volume.ts: 全局音量
 lib/library.ts: 收藏（blob `_app`/`favorites`）
 lib/offline.ts: 单集音频离线下载进度与清单
 lib/picks.ts: Discover 精选目录与 Topic
 lib/deepPicks.ts: 原版 → 乔木精读入口映射（ShowView banner）
 lib/recommend.ts: 首页「为你推荐」本地打分
-lib/showLinks.ts: 主推节目站外链接；mayHaveYoutubeTwin 触发单集页配对刷新
+lib/showLinks.ts: 主推节目站外链接；mayHaveYoutubeTwin 后台配对（不堵起播）
 components/Chrome.tsx: Sidebar（首页/发现/统计/生词本；收起为图标轨）/ TopBar / Toast
 components/Splitter.tsx: 列宽拖条（左栏 / 单集右栏；过 snap 收起 / 双击恢复）
-components/HomeView.tsx: 继续收听 / 接下来听 / 最新 / 推荐；共享 EpisodeRow
+components/HomeView.tsx: 卡片只打开；▶ / 继续听走 playAll
 components/RecentView.tsx: 最近播放 / 收藏
 components/DiscoverView.tsx: Topic + 精选网格 + 横幅
 components/ChannelView.tsx: 订阅前预览（cached/preview）
@@ -60,11 +64,14 @@ components/LocalAsrSettings.tsx: 本机 Qwen3/Whisper
 components/ReadingSettings.tsx: 阅读预览与字号/字体
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
-components/PlayerBar.tsx: 视频/仅音频（media-switch-row 靠右短条；有文件走 audio，否则隐藏 YT）
+components/AudioEngine.tsx: App 根哨兵；prepareAudio 预缓冲
+components/YtEngine.tsx: App 根持久 iframe + VideoSlot；loadVideoById 换片
+components/MiniPlayer.tsx: 非单集页音频迷你条
+components/PlayerBar.tsx: 单集播控 UI + 视频槽；封面 toggle/load+playSoon
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
 components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出 MD·PDF / 学英语标词词卡 / 实时识别行 + YouTube 语言切换 + 行列表
-components/EpisodeView.tsx: 开集 ensureTranscript/autoTranslate；右栏拖宽/收起；标题动作 + 简介 + 右四 Tab
+components/EpisodeView.tsx: 打开不抢播；后台配对/字幕；右栏拖宽/收起
 components/DeepRead.tsx: 乔木精读 HTML（右栏精读 Tab）
 components/SummaryPane.tsx: 右栏导读（共享查找 / 生成 / 朗读脚注）
 components/ReadAloud.tsx: 豆包朗读按钮 + 音色/Key 弹层

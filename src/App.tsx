@@ -1,7 +1,7 @@
 /**
- * [INPUT]: store、Chrome、layout、Splitter；useReadingSettings；library / listening
+ * [INPUT]: store、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；library / listening
  * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由
- * [POS]: 前端根组件；挂载阅读 CSS 变量与 --sidebar-w；启动后 remindReview
+ * [POS]: 前端根组件；音/视频引擎 + MiniPlayer 常驻；mount 时挂 playWhenReady 订阅（禁模块顶层）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { Suspense, lazy, useEffect, type CSSProperties } from "react";
@@ -12,19 +12,24 @@ import { useReadingSettings } from "./lib/reading";
 import { loadFavorites } from "./lib/library";
 import { flushListening, noteListening } from "./lib/listening";
 import { loadDownloads } from "./lib/offline";
+import { armPlayerIntentListener } from "./lib/playback";
 import { comboOf, keymap } from "./lib/shortcuts";
+import { loadYouTube } from "./lib/youtube";
 import { AddDialog } from "./components/AddDialog";
+import { AudioEngine } from "./components/AudioEngine";
 import { ConfirmHost } from "./components/ConfirmHost";
 import { Sidebar, Toast, TopBar } from "./components/Chrome";
 import { ChannelView } from "./components/ChannelView";
 import { DiscoverView } from "./components/DiscoverView";
 import { EpisodeView } from "./components/EpisodeView";
 import { HomeView } from "./components/HomeView";
+import { MiniPlayer } from "./components/MiniPlayer";
 import { RecentView } from "./components/RecentView";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShowView } from "./components/ShowView";
 import { Splitter } from "./components/Splitter";
 import { remindReview, WordsView } from "./components/WordsBook";
+import { YtEngine } from "./components/YtEngine";
 
 const StatsView = lazy(() => import("./components/StatsView").then((m) => ({ default: m.StatsView })));
 
@@ -41,14 +46,17 @@ export default function App() {
     void init().then(() => {
       loadFavorites();
       void loadDownloads();
+      // 预热 iframe API，视频首点少等一轮脚本
+      void loadYouTube().catch(() => {});
       window.setTimeout(() => void remindReview(), 4000);
     });
   }, [init]);
 
   useEffect(() => {
-    const off = useStore.subscribe((s, prev) => {
+    const offListen = useStore.subscribe((s, prev) => {
       if (prev.playing && !s.playing && s.current) noteListening(s.current, false);
     });
+    const offIntent = armPlayerIntentListener();
     const onUnload = () => {
       const c = useStore.getState().current;
       if (c) noteListening(c, false);
@@ -56,7 +64,8 @@ export default function App() {
     };
     window.addEventListener("beforeunload", onUnload);
     return () => {
-      off();
+      offListen();
+      offIntent();
       window.removeEventListener("beforeunload", onUnload);
     };
   }, []);
@@ -137,6 +146,9 @@ export default function App() {
         {view.kind === "show" && <ShowView showId={view.id} />}
         {view.kind === "episode" && <EpisodeView episodeId={view.id} />}
       </main>
+      <AudioEngine />
+      <YtEngine />
+      <MiniPlayer />
       <AddDialog />
       <SettingsDialog />
       <ConfirmHost />

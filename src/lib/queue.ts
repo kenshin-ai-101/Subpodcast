@@ -1,12 +1,13 @@
 /**
- * [INPUT]: Episode、store.openEpisode / settings.autoNext；api.listEpisodes
+ * [INPUT]: Episode、store.load / openEpisode；playback.playSoon；api.listEpisodes
  * [OUTPUT]: playAll / playNext / clearQueue — 会话级连播与「播完自动下一集」
- * [POS]: 节目页「播放全部」与 PlayerBar ended 钩子共用
+ * [POS]: start = load + openEpisode + playSoon；浏览与起播拆开
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
 import { api, type Episode } from "./api";
 import { useStore } from "../store";
+import { playSoon } from "./playback";
 
 interface QueueState {
   queue: Episode[];
@@ -14,8 +15,12 @@ interface QueueState {
 
 export const useQueue = create<QueueState>(() => ({ queue: [] }));
 
+/** 装载 → 打开单集页 → 挂起播意图。 */
 function start(ep: Episode) {
-  useStore.getState().openEpisode(ep);
+  const s = useStore.getState();
+  s.load(ep);
+  s.openEpisode(ep);
+  playSoon(ep.id);
 }
 
 /** 从列表头部开播，余下入队；过滤条件由调用方决定。 */

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: store、api.setProgress
- * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY — 进度心跳与就绪后开播
- * [POS]: 音频与 YouTube 共用的播放进度心跳
+ * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY — 进度心跳与按集起播意图
+ * [POS]: armPlayerIntentListener 由 App mount 挂上；与引擎 offer 解耦
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api, type Episode } from "./api";
@@ -10,7 +10,6 @@ import { useStore } from "../store";
 export const SAVE_EVERY = 10;
 
 let lastSaved = 0;
-let playSoonOff: (() => void) | undefined;
 
 /** 播放中周期性写进度；换集时重置。 */
 export function track(ep: Episode, time: number, length?: number) {
@@ -39,41 +38,48 @@ export function waiting(on: boolean) {
 }
 
 /**
- * 打开单集后尽快开播：同集已有 player 则下一拍 play；
- * 换集则等 PlayerBar 挂上新 handle（YouTube 冷启动尤其需要）。
+ * 起播意图：同集已有 player 则立刻 play；
+ * 否则 playWhenReady=id，等 offerPlayer 后由模块订阅触发。
  */
 export function playSoon(episodeId: string) {
-  playSoonOff?.();
-  playSoonOff = undefined;
   waiting(true);
-  useStore.getState().set({ playWhenReady: true });
+  const s = useStore.getState();
+  if (s.current?.id === episodeId && s.player?.episodeId === episodeId) {
+    s.player.play();
+    s.set({ playWhenReady: null });
+    return;
+  }
+  // 兼容尚未带 episodeId 的旧 handle
+  if (s.current?.id === episodeId && s.player) {
+    s.player.play();
+    s.set({ playWhenReady: null });
+    return;
+  }
+  s.set({ playWhenReady: episodeId });
+}
 
-  const kick = () => {
-    const cur = useStore.getState();
-    if (cur.current?.id !== episodeId || !cur.player || !cur.playWhenReady) return false;
-    cur.player.play();
-    cur.set({ playing: true, playWhenReady: false });
-    waiting(false);
-    return true;
-  };
-
-  playSoonOff = useStore.subscribe((next, prev) => {
-    if (!next.player || next.player === prev.player) return;
-    if (next.current?.id !== episodeId) return;
-    window.setTimeout(() => {
-      if (kick()) {
-        playSoonOff?.();
-        playSoonOff = undefined;
-      }
-    }, 0);
-  });
-
-  window.setTimeout(() => {
-    if (kick()) {
-      playSoonOff?.();
-      playSoonOff = undefined;
+/**
+ * 消费 playWhenReady / seekWhenReady。必须在 App mount 后挂，
+ * 禁止模块顶层 subscribe——store→audioHost→playback→store 环会在冷启动白屏。
+ */
+export function armPlayerIntentListener(): () => void {
+  return useStore.subscribe((s, prev) => {
+    if (!s.player || s.player === prev.player) return;
+    const p = s.player;
+    if (s.seekWhenReady && s.current?.id === s.seekWhenReady.id) {
+      const { at } = s.seekWhenReady;
+      useStore.setState({ seekWhenReady: null, playWhenReady: null });
+      window.setTimeout(() => p.seek(at), 0);
+      return;
     }
-  }, 0);
+    if (s.playWhenReady && s.current?.id === s.playWhenReady) {
+      useStore.setState({ playWhenReady: null });
+      window.setTimeout(() => {
+        p.play();
+        waiting(false);
+      }, 0);
+    }
+  });
 }
 
 export function activeIndex(starts: number[], time: number) {

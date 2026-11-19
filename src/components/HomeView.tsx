@@ -1,7 +1,7 @@
 /**
- * [INPUT]: api、recommend、library、queue、playback.playSoon
+ * [INPUT]: api、recommend、library、queue.playAll
  * [OUTPUT]: HomeView；共享 EpisodeRow
- * [POS]: 默认首页（继续听 / 最新 / 推荐）；ContinueHero 打开未完播并自动播放
+ * [POS]: 默认首页；卡片只打开，▶ / 继续听走 playAll（load+导航+playSoon）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useState } from "react";
@@ -11,18 +11,15 @@ import { api, errText, type Episode, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
 import { useLibrary } from "../lib/library";
 import { isSubscribed, pickName, showName, type Pick } from "../lib/picks";
-import { playSoon } from "../lib/playback";
 import { playAll } from "../lib/queue";
 import { recommend, type Recommendation } from "../lib/recommend";
 import { useStore } from "../store";
 
 function ContinueHero({ ep }: { ep: Episode }) {
-  const openEpisode = useStore((s) => s.openEpisode);
   const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   const resume = () => {
-    openEpisode(ep);
-    playSoon(ep.id);
+    playAll([ep]);
   };
   return (
     <div

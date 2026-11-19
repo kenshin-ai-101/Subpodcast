@@ -1,12 +1,28 @@
 /**
- * [INPUT]: api、settings
- * [OUTPUT]: 全局导航（含 words）、播放态（含 speaking/seekSoon）、settingsOpen/settingsSection
- * [POS]: UI 状态总线；与 SubCast 壳层行为对齐
+ * [INPUT]: api、settings、media.preferAudio、audioHost / ytKick
+ * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly）；offerPlayer
+ * [POS]: view 与 current 正交；openEpisode 只导航；load 只装载+预缓冲
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
+import { prepareAudio, pauseAudioHost, releaseAudioHost } from "./lib/audioHost";
+import { preferAudio, usesAudioEngine, usesYtEngine } from "./lib/media";
 import { DEFAULTS, loadSettings, saveSettings, type Settings, type SettingsSection } from "./lib/settings";
+import { kickYoutube } from "./lib/ytKick";
+
+/** load 当下预缓冲；play 留给 playSoon。 */
+function prepareEngines(ep: Episode, audioOnly: boolean) {
+  if (usesAudioEngine(ep, audioOnly)) {
+    prepareAudio(ep);
+    return;
+  }
+  pauseAudioHost();
+  releaseAudioHost();
+  if (usesYtEngine(ep, audioOnly)) {
+    kickYoutube(ep, { play: false });
+  }
+}
 
 export type View =
   | { kind: "home" }
@@ -23,6 +39,8 @@ export interface PlayerHandle {
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
+  /** 该 handle 服务的单集；用于防误触 */
+  episodeId?: string;
 }
 
 interface State {
@@ -38,14 +56,17 @@ interface State {
   rate: number;
   /** 缓冲开始时间戳；null 表示未缓冲 */
   loadingSince: number | null;
-  /** 媒体就绪后是否自动播放（换集时 true） */
-  playWhenReady: boolean;
+  /** 就绪后自动播放的单集 id；null=无意图 */
+  playWhenReady: string | null;
+  /** 播放器出现后 seek 到此 */
+  seekWhenReady: { id: string; at: number } | null;
+  /** true=仅音频引擎；false=视频（YouTube）。有音轨时默认 true。 */
+  audioOnly: boolean;
   /** 导读/精读朗读中 */
   speaking: boolean;
   player: PlayerHandle | null;
   toast: string | null;
   settingsOpen: boolean;
-  /** 打开设置时落到哪一栏；关对话框后清掉。 */
   settingsSection: SettingsSection | null;
   addOpen: boolean;
   addTab: "search" | "link" | "import";
@@ -54,7 +75,9 @@ interface State {
   back(): void;
   reloadShows(): Promise<void>;
   saveSettings(patch: Partial<Settings>): Promise<void>;
+  /** 只导航到单集页，不装载、不起播 */
   openEpisode(ep: Episode): void;
+  /** 装入播放器并预缓冲；不起播（起播用 playSoon） */
   load(ep: Episode): void;
   notify(text: string): void;
   set(patch: Partial<State>): void;
@@ -74,7 +97,9 @@ export const useStore = create<State>((set, get) => ({
   playing: false,
   rate: 1,
   loadingSince: null,
-  playWhenReady: true,
+  playWhenReady: null,
+  seekWhenReady: null,
+  audioOnly: true,
   speaking: false,
   player: null,
   toast: null,
@@ -113,21 +138,39 @@ export const useStore = create<State>((set, get) => ({
     await saveSettings(settings);
   },
   openEpisode(ep) {
-    get().load(ep);
     get().go({ kind: "episode", id: ep.id });
   },
   load(ep) {
-    const same = get().current?.id === ep.id;
+    const prev = get().current;
+    // 同集后台补全只合并元数据，不打断播放
+    if (prev?.id === ep.id) {
+      set({
+        current: {
+          ...prev,
+          ...ep,
+          videoId: ep.videoId ?? prev.videoId,
+          audioUrl: ep.audioUrl ?? prev.audioUrl,
+          cover: ep.cover ?? prev.cover,
+        },
+        length: ep.duration || get().length,
+      });
+      return;
+    }
+    const audioOnly = preferAudio(ep);
+    const keep =
+      get().player?.episodeId === ep.id ? get().player : null;
     set({
       current: ep,
       time: ep.progress || 0,
       length: ep.duration || 0,
       playing: false,
       loadingSince: null,
-      playWhenReady: true,
-      // 换集清掉旧 handle，避免 playSoon 误点上一家播放器
-      player: same ? get().player : null,
+      playWhenReady: null,
+      seekWhenReady: null,
+      audioOnly,
+      player: keep,
     });
+    prepareEngines(ep, audioOnly);
   },
   notify(text) {
     set({ toast: text });
@@ -139,12 +182,21 @@ export const useStore = create<State>((set, get) => ({
   },
 }));
 
-/** 播放器尚未挂上时先写入 time；挂上后由 PlayerBar 按 time 起播。 */
+/** 播放器尚未挂上时先排队；挂上后按集 seek。 */
 export function seekSoon(seconds: number) {
   const s = useStore.getState();
-  if (s.player) {
+  if (s.player && s.current && s.player.episodeId === s.current.id) {
     s.player.seek(seconds);
     return;
   }
-  if (s.current) s.set({ time: seconds });
+  if (s.current) s.set({ time: seconds, seekWhenReady: { id: s.current.id, at: seconds } });
+}
+
+export function offerPlayer(handle: PlayerHandle) {
+  useStore.getState().set({ player: handle });
+}
+
+export function withdrawPlayer(handle: PlayerHandle) {
+  const s = useStore.getState();
+  if (s.player === handle) s.set({ player: null });
 }

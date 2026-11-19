@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api、jobs、library、offline、showLinks、layout（panel）、Splitter、PlayerBar、右四 Tab
  * [OUTPUT]: 单集页：标题动作 + 开集字幕瀑布 + 音视频切换 + 右栏拖宽/收起
- * [POS]: 打开即拉官方字幕并自动译中文；右栏宽度与 panelOpen 走 layout
+ * [POS]: 打开页不抢播；别人在播时只看；配对/字幕后台补全
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -197,44 +197,70 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
 
   useEffect(() => {
     setNoDeep(null);
+    let cancelled = false;
+    let transcriptTimer = 0;
     void (async () => {
+      // 先用本地单集起播；乔木详情 / YouTube 双形态配对放到后面，不堵第一声
       let e = await api.getEpisode(episodeId);
-      if (!e) return;
+      if (!e || cancelled) return;
+      setEp(e);
+      // 别人正在播时只看页，不抢播放器
+      const maybeLoad = (x: Episode) => {
+        const st = useStore.getState();
+        if (st.current?.id === x.id || !st.playing) load(x);
+      };
+      maybeLoad(e);
+      if (e.deep) setTab((t) => (t === "transcript" ? "deep" : t));
+
       if (e.transcriptType === "qiaomu" && !e.audioUrl) {
         try {
           await api.qiaomuDetail(e.id);
           e = (await api.getEpisode(episodeId)) ?? e;
+          if (!cancelled) {
+            setEp(e);
+            maybeLoad(e);
+          }
         } catch {
           /* 仍可播视频 */
         }
       }
-      // 音频 RSS 常缺 videoId：双形态节目刷一次，按标题配对后才出现「视频/仅音频」
-      if (!e.videoId) {
+      // 音频 RSS 常缺 videoId：后台刷一次配对，只补切换能力，不打断当前音轨
+      if (!cancelled && !e.videoId) {
         const show = useStore.getState().shows.find((s) => s.id === e!.showId);
         if (show && mayHaveYoutubeTwin(show.feedUrl, show.title)) {
           try {
             await api.refreshShow(show.id);
             e = (await api.getEpisode(episodeId)) ?? e;
+            if (!cancelled) {
+              setEp(e);
+              maybeLoad(e);
+            }
           } catch {
             /* 网络失败仍可听音频 */
           }
         }
       }
-      setEp(e);
-      load(e);
-      void ensureTranscript(e).then(async () => {
-        // 官方拉取可能刚补上 videoId：刷新单集，播放器才能切视频/叠字幕
-        const fresh = await api.getEpisode(episodeId).catch(() => null);
-        if (fresh && (fresh.videoId !== e.videoId || fresh.hasTranscript !== e.hasTranscript)) {
-          setEp(fresh);
-          load(fresh);
-          autoTranslate(fresh);
-        } else {
-          autoTranslate(e);
-        }
-      });
-      if (e.deep) setTab((t) => (t === "transcript" ? "deep" : t));
+      if (cancelled) return;
+      // 字幕瀑布下一宏任务，让出起播帧
+      transcriptTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        void ensureTranscript(e).then(async () => {
+          const fresh = await api.getEpisode(episodeId).catch(() => null);
+          if (cancelled) return;
+          if (fresh && (fresh.videoId !== e.videoId || fresh.hasTranscript !== e.hasTranscript)) {
+            setEp(fresh);
+            maybeLoad(fresh);
+            autoTranslate(fresh);
+          } else {
+            autoTranslate(e);
+          }
+        });
+      }, 0);
     })();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(transcriptTimer);
+    };
   }, [episodeId, load]);
 
   const transcript = useJobs((s) => (ep ? s.transcripts[ep.id] : undefined));

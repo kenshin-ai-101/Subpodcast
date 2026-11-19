@@ -6,7 +6,7 @@ Tauri 2 + React/TypeScript + Rust + SQLite
 > 设计可对照 [`../Subcast`](../Subcast)，**代码全部原创，禁止照抄**。
 
 <directory>
-src/ — WebView 前端（首页/发现/收听统计/生词本、播放器、字幕叠层、本机 ASR、导读问答、学英语）
+src/ — WebView 前端（首页/发现/统计/生词本；view⊥current；playSoon 按集起播；MiniPlayer；字幕/ASR/导读/学英语）
 src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、收听统计、频道预览、翻译、LLM、SQLite、learn_clip/export_anki；发行版 localhost UI）
 docs/ — PRD / 架构 / 发布说明
 </directory>
