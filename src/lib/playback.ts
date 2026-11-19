@@ -8,8 +8,8 @@ import { api, type Episode } from "./api";
 import { useStore } from "../store";
 
 export const SAVE_EVERY = 10;
-/** 缓冲超过此时长仍无 playing → 再试一次起播 */
-const STUCK_MS = 15_000;
+/** 大 m4a moov 常 >1MB：首段缓冲可能超过 15s，看门狗只静默续命 */
+const STUCK_MS = 20_000;
 
 let lastSaved = 0;
 let stuckTimer: number | undefined;

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: Episode、offline.audioSrc、store、playback、volume
  * [OUTPUT]: prepareAudio / pauseAudioHost / releaseAudioHost / getAudioEl / recoverStuckPlay
- * [POS]: 单例 Audio；load 预缓冲+offer；play 等 canplay；错误可见；同集不重绑
+ * [POS]: 单例 Audio；立刻 play（大 m4a 不等 canplay）；续听延后 seek；同集不重绑
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Episode } from "./api";
@@ -19,6 +19,9 @@ let epId: string | null = null;
 /** 当前挂上的逻辑 src（归一后），用于幂等 prepare */
 let boundSrc: string | null = null;
 let playGen = 0;
+/** 超长单集：先出声再跳进度，避免 moov+中段 Range 堵死首播 */
+let pendingSeek: number | null = null;
+let recoverCount = 0;
 
 export function getAudioEl(): HTMLAudioElement {
   if (!el) {
@@ -34,12 +37,27 @@ function failPlay(msg: string) {
   useStore.getState().notify(msg);
 }
 
+function applyPendingSeek(a: HTMLAudioElement) {
+  const t = pendingSeek;
+  if (t == null) return;
+  pendingSeek = null;
+  try {
+    if (t > 0.5 && Number.isFinite(a.duration) && t < a.duration - 1) {
+      if (Math.abs(a.currentTime - t) > 0.75) a.currentTime = t;
+    }
+  } catch {
+    /* 未就绪则丢弃，下次用户拖进度条 */
+  }
+}
+
 function wire(a: HTMLAudioElement) {
   if (wired) return;
   wired = true;
   a.addEventListener("play", () => {
-    waiting(false);
+    // play 事件早于足够缓冲；仍缺数据时保持转圈
     useStore.getState().set({ playing: true });
+    if (a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) waiting(true);
+    else waiting(false);
   });
   a.addEventListener("pause", () => {
     useStore.getState().set({ playing: false });
@@ -47,7 +65,12 @@ function wire(a: HTMLAudioElement) {
     if (cur && epId === cur.id) flushProgress(cur, a.currentTime);
   });
   a.addEventListener("waiting", () => waiting(true));
-  a.addEventListener("playing", () => waiting(false));
+  a.addEventListener("playing", () => {
+    waiting(false);
+    recoverCount = 0;
+    // 首段已经出声后再跳续听点——大 m4a 的 moov 常 >1MB，先 seek 会空等
+    applyPendingSeek(a);
+  });
   a.addEventListener("timeupdate", () => {
     const cur = useStore.getState().current;
     if (!cur || epId !== cur.id) return;
@@ -71,49 +94,21 @@ function wire(a: HTMLAudioElement) {
   });
 }
 
-/** 等有可播数据再 play；失败必须清 waiting，禁止静默吞掉。 */
-function playWhenReady(a: HTMLAudioElement) {
+/**
+ * 立刻 play，不等 canplay。
+ * 小宇宙超长 m4a 的 moov 可达数 MB：等 canplay 再 play 只会 12s 误报「再点一次」。
+ */
+function playNow(a: HTMLAudioElement) {
   waiting(true);
   const gen = ++playGen;
-
-  const go = () => {
+  void a.play().then(() => {
     if (gen !== playGen) return;
-    void a.play().then(() => {
-      if (gen !== playGen) return;
-      if (!a.paused) waiting(false);
-    }).catch((err: DOMException) => {
-      if (gen !== playGen) return;
-      if (err?.name === "AbortError") return;
-      failPlay("音频暂时播不了，请再点一次或检查网络");
-    });
-  };
-
-  if (a.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-    go();
-    return;
-  }
-
-  let settled = false;
-  const finish = (fn: () => void) => {
-    if (settled || gen !== playGen) return;
-    settled = true;
-    a.removeEventListener("canplay", onCan);
-    a.removeEventListener("error", onErr);
-    window.clearTimeout(timer);
-    fn();
-  };
-  const onCan = () => finish(go);
-  const onErr = () => finish(() => failPlay("音频加载失败，可能是网络问题或地址已失效"));
-  // 大文件 / 中段续播：等 canplay；超时仍试一次，避免「点了没反应」
-  const timer = window.setTimeout(() => {
-    finish(() => {
-      if (a.readyState >= HTMLMediaElement.HAVE_METADATA) go();
-      else failPlay("音频缓冲较慢，请再点播放；很长的单集会多等一会儿");
-    });
-  }, 12_000);
-
-  a.addEventListener("canplay", onCan);
-  a.addEventListener("error", onErr);
+    if (!a.paused && a.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) waiting(false);
+  }).catch((err: DOMException) => {
+    if (gen !== playGen) return;
+    if (err?.name === "AbortError") return;
+    failPlay("音频暂时播不了，请再点一次或检查网络");
+  });
 }
 
 function bindHandle(a: HTMLAudioElement, id: string) {
@@ -122,19 +117,20 @@ function bindHandle(a: HTMLAudioElement, id: string) {
   const h: PlayerHandle = {
     episodeId: id,
     seek(seconds) {
+      pendingSeek = null;
       useStore.getState().set({ time: seconds });
       try {
         a.currentTime = seconds;
       } catch {
-        /* 未就绪 */
+        pendingSeek = seconds;
       }
     },
     toggle() {
-      if (a.paused) playWhenReady(a);
+      if (a.paused) playNow(a);
       else a.pause();
     },
     play() {
-      playWhenReady(a);
+      playNow(a);
     },
     setRate(r) {
       useStore.getState().set({ rate: r });
@@ -150,7 +146,7 @@ function bindHandle(a: HTMLAudioElement, id: string) {
 
 /**
  * load 路径：换源 + preload + offer，不自动 play。
- * 同集同源已绑定则跳过，避免 AudioEngine 重跑打断 playSoon。
+ * 续听进度 >5s：先挂 pendingSeek，等 playing 后再跳，缩短「点播放到出声」。
  */
 export function prepareAudio(ep: Episode): boolean {
   const src = audioSrc(ep);
@@ -174,7 +170,10 @@ export function prepareAudio(ep: Episode): boolean {
     : ep.progress || 0;
 
   resetTrackSave();
-  playGen += 1; // 作废上一次等 canplay 的 play
+  playGen += 1;
+  recoverCount = 0;
+  pendingSeek = null;
+
   const same = a.src === resolved || (a.src.length > 0 && (a.src === src || a.src.endsWith(src)));
   if (!same) {
     a.src = src;
@@ -185,38 +184,54 @@ export function prepareAudio(ep: Episode): boolean {
   a.playbackRate = useStore.getState().rate;
   bindHandle(a, ep.id);
 
-  const seek = () => {
-    try {
-      // 续听：等 metadata 再 seek；避免未就绪时赋值被忽略后「以为在播其实停在 0」
-      if (time > 0.5 && Number.isFinite(a.duration) && time < a.duration - 1) {
-        if (Math.abs(a.currentTime - time) > 0.75) a.currentTime = time;
+  // 本地文件 / 短偏移：metadata 后立刻 seek；远程长续听延到出声后
+  const remote = /^https?:/i.test(src);
+  if (time > 5 && remote) {
+    pendingSeek = time;
+  } else if (time > 0.5) {
+    const seek = () => {
+      try {
+        if (Number.isFinite(a.duration) && time < a.duration - 1 && Math.abs(a.currentTime - time) > 0.75) {
+          a.currentTime = time;
+        }
+      } catch {
+        pendingSeek = time;
       }
-    } catch {
-      /* 未就绪 */
-    }
-  };
-  if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
-  else a.addEventListener("loadedmetadata", seek, { once: true });
+    };
+    if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
+    else a.addEventListener("loadedmetadata", seek, { once: true });
+  }
 
   return true;
 }
 
-/** waiting 卡住时由 playback 看门狗调用：再试一次 play，不擅自清进度。 */
+/**
+ * waiting 看门狗：静默再 play；多次仍卡住才轻提示（不要求用户「再点」）。
+ */
 export function recoverStuckPlay() {
   const a = el;
   const s = useStore.getState();
-  if (!a || !s.current || epId !== s.current.id) {
-    s.notify("音频还在缓冲，请再点播放");
+  if (!a || !s.current || epId !== s.current.id) return;
+  if (!a.paused && a.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    waiting(false);
     return;
   }
-  playWhenReady(a);
+  recoverCount += 1;
+  // 中段 pending 太久：先保证片头能出声，playing 后再跳
+  if (recoverCount >= 2 && pendingSeek != null && a.currentTime < 1) {
+    /* 保持 pendingSeek，继续从 0 缓冲 */
+  }
+  playNow(a);
+  if (recoverCount >= 2) {
+    s.notify("超长单集仍在缓冲，马上就好");
+  }
 }
 
 /** @deprecated 用 prepareAudio；保留别名以免旧调用崩 */
 export function kickAudio(ep: Episode, opts?: { time?: number; play?: boolean }): boolean {
   const ok = prepareAudio(ep);
   if (!ok) return false;
-  if (opts?.play) playWhenReady(getAudioEl());
+  if (opts?.play) playNow(getAudioEl());
   return true;
 }
 
@@ -226,6 +241,8 @@ export function pauseAudioHost() {
 
 export function releaseAudioHost() {
   playGen += 1;
+  pendingSeek = null;
+  recoverCount = 0;
   if (handle) {
     withdrawPlayer(handle);
     handle = null;

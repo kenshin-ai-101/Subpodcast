@@ -7,9 +7,9 @@ main.tsx: React 挂载入口
 store.ts: Zustand；openEpisode 只导航；load 装载+预缓冲；playWhenReady 按集
 styles.css: 暖纸底 + 橙强调；yt-dock；mini 迷你条；单集右四 Tab / 叠字幕
 lib/media.ts: preferAudio / usesAudioEngine / usesYtEngine — App 根引擎互斥
-lib/audioHost.ts: 单例 Audio；幂等 prepare；play 等 canplay；错误/超时可见
+lib/audioHost.ts: 单例 Audio；立刻 play；远程续听延后 seek；看门狗静默续命
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
-lib/playback.ts: track/flush、waiting（15s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
+lib/playback.ts: track/flush、waiting（20s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
 lib/offline.ts: 离线下载；audioSrc 把小宇宙 dts-api 归一成 xyzcdn 直链
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
