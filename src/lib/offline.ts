@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.downloadEpisode / listDownloads / deleteDownload；event offline
- * [OUTPUT]: useOffline、loadDownloads、audioSrc、downloadEpisode、cancelDownload、removeDownload、bytes
- * [POS]: 单集页下载按钮与 PlayerBar 音频源；进度在面板外
+ * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、downloadEpisode、cancelDownload、removeDownload、bytes
+ * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -56,10 +56,24 @@ export async function loadDownloads() {
 
 export const isSaved = (id: string) => !!useOffline.getState().saved[id];
 
-/** 播放优先用已下载文件，否则用远端 audioUrl。 */
+/**
+ * 与 Rust shared::canonical_audio_url 对齐：
+ * dts-api.xiaoyuzhoufm.com/.../media.xyzcdn.net/... → https://media.xyzcdn.net/...
+ * WebView 跟 302+Range 续播时偶发卡住；直链可秒开。
+ */
+export function canonicalAudioUrl(url: string): string {
+  const bare = url.split(/[?#]/, 1)[0] ?? url;
+  const i = bare.indexOf("media.xyzcdn.net/");
+  if (i >= 0) return `https://${bare.slice(i)}`;
+  return bare;
+}
+
+/** 播放优先用已下载文件，否则用归一后的远端 audioUrl。 */
 export function audioSrc(ep: Episode): string | undefined {
   const saved = useOffline.getState().saved[ep.id];
-  return saved ? convertFileSrc(saved.path) : ep.audioUrl ?? undefined;
+  if (saved) return convertFileSrc(saved.path);
+  if (!ep.audioUrl) return undefined;
+  return canonicalAudioUrl(ep.audioUrl);
 }
 
 export async function downloadEpisode(ep: Episode) {

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api、jobs、library、offline、showLinks、layout（panel）、Splitter、PlayerBar、右四 Tab
  * [OUTPUT]: 单集页：标题动作 + 开集字幕瀑布 + 音视频切换 + 右栏拖宽/收起
- * [POS]: 打开页不抢播；别人在播时只看；配对/字幕后台补全
+ * [POS]: openEpisode 只导航；别人在播时本页不抢 load；PlayerBar 绑页内 ep，点播放再接管
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -352,7 +352,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
               )}
             </div>
 
-            <PlayerBar />
+            <PlayerBar episode={ep} />
 
             {ytPromo && ytChannel && (
               <YtVideoStrip

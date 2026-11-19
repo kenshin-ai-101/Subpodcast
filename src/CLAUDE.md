@@ -7,9 +7,10 @@ main.tsx: React 挂载入口
 store.ts: Zustand；openEpisode 只导航；load 装载+预缓冲；playWhenReady 按集
 styles.css: 暖纸底 + 橙强调；yt-dock；mini 迷你条；单集右四 Tab / 叠字幕
 lib/media.ts: preferAudio / usesAudioEngine / usesYtEngine — App 根引擎互斥
-lib/audioHost.ts: 单例 Audio；prepareAudio 预缓冲+offer；play 交给 playSoon
+lib/audioHost.ts: 单例 Audio；幂等 prepare；play 等 canplay；错误/超时可见
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
-lib/playback.ts: playSoon + armPlayerIntentListener（App mount 挂；禁模块顶层以免环导入白屏）
+lib/playback.ts: track/flush、waiting（15s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
+lib/offline.ts: 离线下载；audioSrc 把小宇宙 dts-api 归一成 xyzcdn 直链
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
@@ -28,7 +29,6 @@ lib/guides.ts: 导读任务态；共享查找/上传；blob summary + summary-fr
 lib/tts.ts: 豆包朗读切块与播控
 lib/chats.ts: 问答会话/历史持久化 + 流式 ask
 lib/llmGate.ts: 串行化 llm-delta
-lib/playback.ts: 进度心跳 track/flush、缓冲 waiting、playSoon（就绪后开播）、activeIndex
 lib/listening.ts: 墙钟收听累计 noteListening / flushListening
 lib/youtube.ts: YouTube IFrame API + loadVideoById 换片 + 关自带 CC
 lib/format.ts: 日期/时长/clock/parseClock/月份文案
@@ -36,7 +36,6 @@ lib/confirm.ts: 应用内确认替代 window.confirm
 lib/queue.ts: start=load+openEpisode+playSoon；连播 / autoNext
 lib/volume.ts: 全局音量
 lib/library.ts: 收藏（blob `_app`/`favorites`）
-lib/offline.ts: 单集音频离线下载进度与清单
 lib/picks.ts: Discover 精选目录与 Topic
 lib/deepPicks.ts: 原版 → 乔木精读入口映射（ShowView banner）
 lib/recommend.ts: 首页「为你推荐」本地打分
@@ -67,7 +66,7 @@ components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio 预缓冲
 components/YtEngine.tsx: App 根持久 iframe + VideoSlot；loadVideoById 换片
 components/MiniPlayer.tsx: 非单集页音频迷你条
-components/PlayerBar.tsx: 单集播控 UI + 视频槽；封面 toggle/load+playSoon
+components/PlayerBar.tsx: 绑页内 episode；live 时控 current，非 live 点播放 load+playSoon；视频盾点击 toggle
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
 components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出 MD·PDF / 学英语标词词卡 / 实时识别行 + YouTube 语言切换 + 行列表

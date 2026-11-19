@@ -1,12 +1,12 @@
 /**
- * [INPUT]: store.current / time / audioOnly / playing；jobs 字幕；offline；YtEngine.VideoSlot
+ * [INPUT]: 页内 episode；store.current / time / audioOnly / playing；jobs；offline；YtEngine.VideoSlot
  * [OUTPUT]: 媒体切换 + 封面舞台 / 视频槽 + Controls（引擎在 App 根）
- * [POS]: 单集左栏播控 UI；音/视频由 AudioEngine / YtEngine 起播
+ * [POS]: 单集左栏播控；页 episode 与 store.current 正交——别人在播时本页可先看，点播放再接管
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
+import { Loader2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
 import type { Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { useJobs } from "../lib/jobs";
@@ -60,8 +60,8 @@ function VolumeControl() {
   );
 }
 
-export function PlayerBar() {
-  const { current, time, length, playing, rate, audioOnly, set } = useStore(
+export function PlayerBar({ episode }: { episode: Episode }) {
+  const { current, time, length, playing, rate, audioOnly, loadingSince, set } = useStore(
     useShallow((s) => ({
       current: s.current,
       time: s.time,
@@ -69,48 +69,64 @@ export function PlayerBar() {
       playing: s.playing,
       rate: s.rate,
       audioOnly: s.audioOnly,
+      loadingSince: s.loadingSince,
       set: s.set,
     })),
   );
-  const [source, setSource] = useState<Episode | null>(current);
-  const transcript = useJobs((s) => (current ? s.transcripts[current.id] : undefined));
-  const items = useJobs((s) => (current ? s.translations[current.id]?.items : undefined));
+  const live = current?.id === episode.id;
+  const [source, setSource] = useState<Episode>(episode);
+  const transcript = useJobs((s) => s.transcripts[episode.id]);
+  const items = useJobs((s) => s.translations[episode.id]?.items);
   const mode = useStore((s) => s.settings.subtitleMode);
   const nextLine = useStore((s) => s.settings.audioNextLine === true);
-  const saved = useOffline((s) => (source ? s.saved[source.id] : undefined));
+  const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
 
   useEffect(() => {
-    if (!current) {
-      setSource(null);
-      return;
-    }
     setSource((prev) => {
-      if (!prev || prev.id !== current.id) return current;
+      const base = live && current ? current : episode;
+      if (prev.id !== base.id) return base;
       return {
-        ...current,
-        videoId: current.videoId ?? prev.videoId,
-        audioUrl: current.audioUrl ?? prev.audioUrl,
-        cover: current.cover ?? prev.cover,
+        ...prev,
+        ...base,
+        videoId: base.videoId ?? prev.videoId,
+        audioUrl: base.audioUrl ?? prev.audioUrl,
+        cover: base.cover ?? prev.cover,
       };
     });
-  }, [current?.id, current?.videoId, current?.audioUrl, current?.cover]);
-
-  if (!current || !source) return null;
+  }, [episode, live, current?.id, current?.videoId, current?.audioUrl, current?.cover]);
 
   const videoId = source.videoId ?? undefined;
   const canVideo = !!videoId;
   const hasFile = !!audioSrc(source) || !!saved;
-  const canSwitch = canVideo;
-  const showVideo = canVideo && !audioOnly;
+  // 浏览他集时用本集默认形态展示，不借用正在播那集的 audioOnly
+  const pageAudioOnly = live ? audioOnly : preferAudio(source);
+  const showVideo = canVideo && !pageAudioOnly;
+  const shownTime = live ? time : source.progress || 0;
+  const shownLength = live ? length || source.duration || 0 : source.duration || 0;
+  const shownPlaying = live && playing;
+  const busy = live && !!loadingSince;
+
+  const takeOver = () => {
+    const s = useStore.getState();
+    s.load(source);
+    playSoon(source.id);
+  };
+
+  const playToggle = () => {
+    if (live) {
+      useStore.getState().player?.toggle();
+      return;
+    }
+    takeOver();
+  };
 
   const switchTo = (audio: boolean, why?: string) => {
-    if (!canVideo || audio === audioOnly) return;
+    if (!canVideo || !live || audio === audioOnly) return;
     const s = useStore.getState();
     const t = s.time;
     flushProgress(source, t);
     const wanted = !!s.loadingSince || s.playing;
-    // 无独立音轨：视频↔仅音频仍是同一 YT 引擎
     const sameYt = !preferAudio(source);
     const ep = { ...source, progress: t };
     set({
@@ -137,26 +153,16 @@ export function PlayerBar() {
     if (why) s.notify(why);
   };
 
-  const coverToggle = () => {
-    const s = useStore.getState();
-    if (s.current?.id === source.id) {
-      s.player?.toggle();
-      return;
-    }
-    s.load(source);
-    playSoon(source.id);
-  };
-
-  const fill = `${length ? Math.min(100, (time / length) * 100) : 0}%`;
+  const fill = `${shownLength ? Math.min(100, (shownTime / shownLength) * 100) : 0}%`;
   const segs = transcript?.segments ?? [];
-  const i = segs.length ? activeIndex(segs.map((s) => s.start), time) : -1;
+  const i = segs.length ? activeIndex(segs.map((s) => s.start), shownTime) : -1;
   const showI = nextLine && i >= 0 && i + 1 < segs.length ? i + 1 : i;
   const seg = showI >= 0 ? segs[showI] : null;
   const zh = showI >= 0 ? items?.[showI] : null;
 
   return (
     <>
-      {canSwitch && (
+      {canVideo && live && (
         <div className="media-switch-row">
           <div className="media-switch seg-control" role="radiogroup" aria-label="播放方式">
             <button
@@ -181,11 +187,22 @@ export function PlayerBar() {
         </div>
       )}
 
-      {showVideo && (
+      {showVideo && live && (
         <div className="video">
           <VideoSlot />
-          <div className="yt-shield" aria-hidden />
-          <SubtitleOverlay episodeId={current.id} />
+          <button
+            type="button"
+            className="yt-shield"
+            aria-label={shownPlaying ? "暂停" : "播放"}
+            title={shownPlaying ? "暂停" : "播放"}
+            onClick={playToggle}
+          />
+          {!shownPlaying && !busy && (
+            <span className="yt-center-play" aria-hidden>
+              <Play size={36} fill="currentColor" />
+            </span>
+          )}
+          <SubtitleOverlay episodeId={episode.id} />
           {ytError && !hasFile && (
             <div className="yt-fallback">
               <p>{ytError}</p>
@@ -194,18 +211,18 @@ export function PlayerBar() {
         </div>
       )}
 
-      {!showVideo && (
+      {(!showVideo || !live) && (
         <div className="audio-stage">
           <button
             type="button"
             className="cover-play"
-            onClick={coverToggle}
-            title={playing ? "暂停（空格）" : "播放（空格）"}
-            aria-label={playing ? "暂停" : "播放"}
+            onClick={playToggle}
+            title={shownPlaying ? "暂停（空格）" : live ? "播放（空格）" : "播放这一集"}
+            aria-label={shownPlaying ? "暂停" : "播放"}
           >
             {source.cover ? <img src={source.cover} alt="" /> : <span className="cover-fallback" />}
-            <span className={`cover-play-btn ${playing ? "playing" : ""}`}>
-              {playing ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
+            <span className={`cover-play-btn ${shownPlaying ? "playing" : ""}`}>
+              {shownPlaying ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
             </span>
           </button>
           {seg && (
@@ -218,32 +235,58 @@ export function PlayerBar() {
       )}
 
       <div className="controls">
-        <button type="button" className="icon-btn" title="后退 15 秒" onClick={() => useStore.getState().player?.seek(Math.max(0, time - 15))}>
+        <button
+          type="button"
+          className="icon-btn"
+          title="后退 15 秒"
+          disabled={!live}
+          onClick={() => useStore.getState().player?.seek(Math.max(0, shownTime - 15))}
+        >
           <RotateCcw size={16} />
         </button>
-        <button type="button" className="play-btn" onClick={() => useStore.getState().player?.toggle()} aria-label={playing ? "暂停" : "播放"}>
-          {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+        <button
+          type="button"
+          className="play-btn"
+          onClick={playToggle}
+          aria-label={busy ? "缓冲中" : shownPlaying ? "暂停" : "播放"}
+          aria-busy={busy || undefined}
+        >
+          {busy ? (
+            <Loader2 size={18} className="spin" />
+          ) : shownPlaying ? (
+            <Pause size={18} fill="currentColor" />
+          ) : (
+            <Play size={18} fill="currentColor" />
+          )}
         </button>
-        <button type="button" className="icon-btn" title="前进 30 秒" onClick={() => useStore.getState().player?.seek(time + 30)}>
+        <button
+          type="button"
+          className="icon-btn"
+          title="前进 30 秒"
+          disabled={!live}
+          onClick={() => useStore.getState().player?.seek(shownTime + 30)}
+        >
           <RotateCw size={16} />
         </button>
-        <span className="time">{clock(time)}</span>
+        <span className="time">{clock(shownTime)}</span>
         <input
           className="seek"
           type="range"
           min={0}
-          max={Math.max(length, 1)}
+          max={Math.max(shownLength, 1)}
           step={0.1}
-          value={Math.min(time, length || time)}
+          value={Math.min(shownTime, shownLength || shownTime)}
           style={{ "--fill": fill } as React.CSSProperties}
+          disabled={!live}
           onChange={(e) => useStore.getState().player?.seek(Number(e.target.value))}
         />
-        <span className="time">{clock(length)}</span>
+        <span className="time">{clock(shownLength)}</span>
         <VolumeControl />
         <button
           type="button"
           className={`rate-btn${rate >= 2 ? " fast" : ""}`}
           title="播放速度"
+          disabled={!live}
           onClick={() => {
             const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length] ?? 1;
             useStore.getState().player?.setRate(next);

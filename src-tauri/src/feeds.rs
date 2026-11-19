@@ -7,6 +7,7 @@
 use crate::model::{now_ms, short_hash, Episode, Show};
 use crate::net;
 use crate::qiaomu;
+use crate::shared;
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use roxmltree::Document;
@@ -181,7 +182,9 @@ fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let ep_title = text_child(item, "title").unwrap_or_else(|| "未命名单集".into());
         let enclosure = item.children().find(|n| n.has_tag_name("enclosure"));
-        let audio_url = enclosure.and_then(|e| e.attribute("url").map(str::to_string));
+        let audio_url = enclosure
+            .and_then(|e| e.attribute("url").map(str::to_string))
+            .map(|u| shared::canonical_audio_url(&u));
         let (transcript_url, transcript_type) = podcast_transcript(item);
         let link = text_child(item, "link");
         let notes = text_child(item, "description")
@@ -382,7 +385,7 @@ fn xyz_episode(e: &serde_json::Value, show_id: &str) -> Option<Episode> {
     let audio = e["enclosure"]["url"]
         .as_str()
         .or_else(|| e["media"]["source"]["url"].as_str())
-        .map(str::to_string);
+        .map(shared::canonical_audio_url);
     Some(Episode {
         id: short_hash(&format!("{show_id}|{eid}"), 20),
         show_id: show_id.into(),

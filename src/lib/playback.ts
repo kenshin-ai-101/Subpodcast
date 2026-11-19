@@ -1,15 +1,18 @@
 /**
- * [INPUT]: store、api.setProgress
+ * [INPUT]: store、api.setProgress；audioHost.recoverStuckPlay
  * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY — 进度心跳与按集起播意图
- * [POS]: armPlayerIntentListener 由 App mount 挂上；与引擎 offer 解耦
+ * [POS]: armPlayerIntentListener 由 App mount 挂上；waiting 超时看门狗防「点了没反应」
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api, type Episode } from "./api";
 import { useStore } from "../store";
 
 export const SAVE_EVERY = 10;
+/** 缓冲超过此时长仍无 playing → 再试一次起播 */
+const STUCK_MS = 15_000;
 
 let lastSaved = 0;
+let stuckTimer: number | undefined;
 
 /** 播放中周期性写进度；换集时重置。 */
 export function track(ep: Episode, time: number, length?: number) {
@@ -31,10 +34,16 @@ export function flushProgress(ep: Episode, time: number) {
   void api.setProgress(ep.id, time);
 }
 
-/** 缓冲中：控制条可显示等待态。 */
+/** 缓冲中：控制条可显示等待态；超时则恢复一次，避免一直转圈无声。 */
 export function waiting(on: boolean) {
   const s = useStore.getState();
   if (on ? !s.loadingSince : s.loadingSince) s.set({ loadingSince: on ? Date.now() : null });
+  window.clearTimeout(stuckTimer);
+  if (!on) return;
+  stuckTimer = window.setTimeout(() => {
+    if (!useStore.getState().loadingSince) return;
+    void import("./audioHost").then((m) => m.recoverStuckPlay());
+  }, STUCK_MS);
 }
 
 /**
@@ -74,10 +83,8 @@ export function armPlayerIntentListener(): () => void {
     }
     if (s.playWhenReady && s.current?.id === s.playWhenReady) {
       useStore.setState({ playWhenReady: null });
-      window.setTimeout(() => {
-        p.play();
-        waiting(false);
-      }, 0);
+      // waiting 由引擎 PLAYING / playing 事件清除，此处勿抢先 false
+      window.setTimeout(() => p.play(), 0);
     }
   });
 }

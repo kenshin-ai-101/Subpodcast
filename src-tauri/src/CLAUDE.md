@@ -6,7 +6,7 @@ lib.rs: Tauri 命令面与启动（shared_* / share_guide / tts_speak / translat
 main.rs: 二进制入口
 model.rs: Show/Episode/Segment/Transcript 契约
 db.rs: SQLite WAL；tr_cache；sync_episodes / dedupe_show_episodes；list_shows.episode_count；listens / recent
-feeds.rs: 订阅解析与搜索；词元入口优先乔木源；fill_youtube_twin；小宇宙也 attach twin
+feeds.rs: 订阅解析与搜索；词元入口优先乔木源；fill_youtube_twin；小宇宙 enclosure 入库前 canonical_audio_url
 qiaomu.rs: 精读频道 + detail / rss_rewrite；qiaomu_detail 写 deep-read
 import.rs: YouTube 浏览器订阅导入、隐私设置入口、OPML 导出
 ytdlp.rs: yt-dlp 定位/镜像安装；ytdlp_command（proxy、socket-timeout、js-runtimes、bot fallback）

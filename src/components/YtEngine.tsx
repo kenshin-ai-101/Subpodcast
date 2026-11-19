@@ -205,7 +205,17 @@ export function YtEngine() {
         p.playVideo();
         useStore.getState().set({ playWhenReady: null });
       }
-      waiting(false);
+      // 复用 iframe 时 effect cleanup 会把旧 cancelled 置真；用真实播放态对齐按钮
+      try {
+        if (window.YT && p.getPlayerState() === window.YT.PlayerState.PLAYING) {
+          waiting(false);
+          useStore.getState().set({ playing: true });
+        } else {
+          waiting(false);
+        }
+      } catch {
+        waiting(false);
+      }
     };
 
     // 复用：只换 videoId
@@ -265,7 +275,8 @@ export function YtEngine() {
               onReady(e.target);
             },
             onStateChange: (e: { data: number; target: YtPlayer }) => {
-              if (cancelled || !window.YT) return;
+              // 不看 cancelled：iframe 跨音视频切换复用，cleanup 会误杀后续态
+              if (!window.YT || e.target !== ytRef.current) return;
               const cur = epRef.current;
               if (!cur || cur.videoId !== videoIdRef.current) return;
               hideYouTubeCaptions(e.target);
@@ -294,7 +305,8 @@ export function YtEngine() {
               }
             },
             onError: () => {
-              if (cancelled) return;
+              // iframe 复用期忽略已销毁实例的迟到错误
+              if (!ytRef.current) return;
               waiting(false);
               useStore.getState().set({ playing: false });
               const cur = epRef.current;
