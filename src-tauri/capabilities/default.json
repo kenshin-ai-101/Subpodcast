@@ -57,7 +57,11 @@
     "allow-log-listen",
     "allow-listening-stats",
     "allow-preview-show",
-    "allow-cached-show"
+    "allow-cached-show",
+    "dialog:allow-save",
+    "allow-learn-clip",
+    "allow-export-anki",
+    "allow-save-text"
   ],
   "remote": {
     "urls": [

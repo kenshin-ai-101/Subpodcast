@@ -1,15 +1,16 @@
 /**
  * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack；exportTranscript
- * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 MD·PDF；下载·解码·识别分阶段文案 / 行列表）
+ * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 MD·PDF；学英语标词/词卡/跟读听写 / 行列表）
  * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronDown, Download, FileText, Languages, Loader2 } from "lucide-react";
+import { ChevronDown, Download, Ellipsis, FileText, Languages, ListChecks, Loader2, Mic, PenLine } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { api, errText, type Episode } from "../lib/api";
+import { api, errText, type Episode, type Segment } from "../lib/api";
 import { useAsrModels, type AsrModel } from "../lib/asrModels";
+import { looksEnglish } from "../lib/dict";
 import {
   runTranscriptExport,
   type ExportFormat,
@@ -28,6 +29,8 @@ import { activeIndex } from "../lib/playback";
 import { activeCloudAsr, ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { useStore } from "../store";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
+import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
+import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
 
 type Mode = "bilingual" | "translation" | "original";
 
@@ -692,10 +695,91 @@ function GenCard({
   );
 }
 
+interface LearnMenuState {
+  segments: Segment[];
+  zh: (string | null | undefined)[] | undefined;
+  active: number;
+  shadow: boolean;
+  setShadow: (v: boolean) => void;
+  canShadow: boolean;
+}
+
+function LearnPanelMenu({ ep, learn }: { ep: Episode; learn: LearnMenuState }) {
+  const [menu, setMenu] = useState(false);
+  const [words, setWords] = useState(false);
+  const [dictation, setDictation] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const h = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setMenu(false);
+    };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [menu]);
+
+  return (
+    <div className="panel-menu" ref={box}>
+      <button
+        type="button"
+        className="icon-btn"
+        title="更多"
+        aria-label="更多"
+        aria-expanded={menu}
+        onClick={() => setMenu(!menu)}
+      >
+        <Ellipsis size={15} />
+      </button>
+      {menu && (
+        <div className="panel-menu-pop" role="menu">
+          <button type="button" role="menuitem" onClick={() => { setMenu(false); setWords(true); }}>
+            <ListChecks size={14} /> 本期生词…
+          </button>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={learn.shadow}
+            disabled={!learn.canShadow}
+            title={learn.canShadow ? undefined : "先播放这一集"}
+            onClick={() => {
+              setMenu(false);
+              learn.setShadow(!learn.shadow);
+            }}
+          >
+            <Mic size={14} /> {learn.shadow ? "退出跟读模式" : "跟读模式"}
+          </button>
+          <button type="button" role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}>
+            <PenLine size={14} /> 听写练习…
+          </button>
+        </div>
+      )}
+      {words && (
+        <EpisodeWords ep={ep} segments={learn.segments} zh={learn.zh} onClose={() => setWords(false)} />
+      )}
+      {dictation && (
+        <Dictation
+          ep={ep}
+          segments={learn.segments}
+          from={Math.max(0, learn.active)}
+          onClose={() => setDictation(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 export function TranscriptPane({ episode }: { episode: Episode }) {
   const time = useStore((s) => s.time);
   const player = useStore((s) => s.player);
-  const subtitleMode = useStore((s) => s.settings.subtitleMode);
+  const currentId = useStore((s) => s.current?.id);
+  const { subtitleMode, learnOn, learnCard } = useStore(
+    useShallow((s) => ({
+      subtitleMode: s.settings.subtitleMode,
+      learnOn: s.settings.learnOn,
+      learnCard: s.settings.learnCard,
+    })),
+  );
   const saveSettings = useStore((s) => s.saveSettings);
   const { transcript, official, error, translation } = useJobs(
     useShallow((s) => ({
@@ -708,6 +792,9 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const mode: Mode = subtitleMode;
   const listRef = useRef<HTMLDivElement>(null);
   const setMode = (next: Mode) => void saveSettings({ subtitleMode: next });
+  const [card, setCard] = useState<CardTarget | null>(null);
+  const [shadow, setShadow] = useState(false);
+  const closeCard = useCallback(() => setCard(null), []);
 
   useEffect(() => {
     void ensureTranscript(episode);
@@ -719,13 +806,41 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const foreign = transcript
     ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
     : false;
+  const english = transcript
+    ? looksEnglish(transcript.language, segs.slice(0, 20).map((x) => x.text).join(" "))
+    : false;
+  const marks = useLearnMarks(english);
+  const learning = !!marks || (english && learnOn);
+  const isCurrent = currentId === episode.id;
   const zhTag = engineLabel(translation?.engine);
+
+  useShadowing(shadow && isCurrent, episode.id, segs);
+  useEffect(() => {
+    if (!learning) setShadow(false);
+  }, [learning]);
 
   useEffect(() => {
     const root = listRef.current;
     if (!root || active < 0) return;
     root.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [active]);
+
+  const onWordClick = (e: React.MouseEvent) => {
+    if (!marks || !learnCard) return;
+    const el = (e.target as HTMLElement).closest<HTMLElement>(".lw");
+    if (!el || window.getSelection()?.toString()) return;
+    const i = Number(el.closest<HTMLElement>("[data-i]")?.dataset.i);
+    const seg = segs[i];
+    if (!seg) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setCard({
+      el,
+      token: el.textContent ?? "",
+      seg,
+      zh: typeof translation?.items?.[i] === "string" ? translation.items[i] : null,
+    });
+  };
 
   // 与原站一致：有字幕先渲染行；无字幕才进查找 / GenCard
   if (!segs.length) {
@@ -753,6 +868,19 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           foreign={foreign}
           source={transcript!.source}
         />
+        {learning && (
+          <LearnPanelMenu
+            ep={episode}
+            learn={{
+              segments: segs,
+              zh: translation?.items,
+              active,
+              shadow,
+              setShadow,
+              canShadow: isCurrent,
+            }}
+          />
+        )}
         {foreign && (
           <div className="seg-control" role="group" aria-label="字幕显示">
             {(
@@ -771,11 +899,26 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
       </div>
       {translation?.running && <div className="translate-bar">正在翻译成中文…</div>}
       {translation?.error && <div className="translate-bar">{translation.error}</div>}
-      <div className="lines" ref={listRef}>
+      {shadow && isCurrent && (
+        <div className="shadow-bar">
+          <Mic size={13} />
+          <span>跟读模式：每句说完会停一下，跟着说一遍</span>
+          <button type="button" className="btn ghost sm" onClick={() => setShadow(false)}>
+            退出
+          </button>
+        </div>
+      )}
+      <div
+        className={`lines${marks && learnCard ? " learning" : ""}`}
+        ref={listRef}
+        onClickCapture={onWordClick}
+      >
+        {english && <LearnTip />}
         {segs.map((s, i) => {
           const zh = translation?.items?.[i];
           const showZh = foreign && zh && mode !== "original";
-          const showOrig = mode !== "translation" || !zh;
+          // 学英语时中文模式仍保留原文，方便点词
+          const showOrig = mode !== "translation" || !zh || !!marks;
           return (
             <div
               key={`${s.start}-${i}`}
@@ -786,11 +929,16 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
               <div className="line-time">{clock(s.start)}</div>
               <div className="line-text">
                 {showZh && <div className="zh">{zh}</div>}
-                {showOrig && <div className="orig">{s.text}</div>}
+                {showOrig && (
+                  <div className="orig">
+                    {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
+        {card && <WordCard target={card} ep={episode} onClose={closeCard} />}
       </div>
     </div>
   );

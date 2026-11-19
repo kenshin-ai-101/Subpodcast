@@ -6,20 +6,20 @@ Tauri 2 + React/TypeScript + Rust + SQLite
 > 设计可对照 [`../Subcast`](../Subcast)，**代码全部原创，禁止照抄**。
 
 <directory>
-src/ — WebView 前端（首页/发现/收听统计、播放器、字幕叠层、本机 ASR、导读问答）
-src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、收听统计、频道预览、翻译、LLM、SQLite；发行版 localhost UI）
+src/ — WebView 前端（首页/发现/收听统计/生词本、播放器、字幕叠层、本机 ASR、导读问答、学英语）
+src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、收听统计、频道预览、翻译、LLM、SQLite、learn_clip/export_anki；发行版 localhost UI）
 docs/ — PRD / 架构 / 发布说明
 </directory>
 
 <config>
-package.json — 前端依赖与脚本
+package.json — 前端依赖与脚本（含 ts-fsrs、plugin-dialog）
 src-tauri/Cargo.toml — Rust 依赖（tiny_http、symphonia、whisper-rs）
 src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建
 src-tauri/capabilities/default.json — 命令 ACL + remote http://localhost:14427–14446
 </config>
 
 ## MVP 范围
-订阅 → 首页/发现/收听统计 → 播放（视频/仅音频 + 叠字幕）→ 官方字幕 / 本机识别（Qwen3·Whisper）或云端 → 双语翻译 → 右栏字幕/精读/导读/问答 → 收藏/离线下载/YouTube 外开 → 设置（字幕 / AI / 通用）。  
+订阅 → 首页/发现/收听统计 → 播放（视频/仅音频 + 叠字幕）→ 官方字幕 / 本机识别（Qwen3·Whisper）或云端 → 双语翻译 → 右栏字幕/精读/导读/问答 → 收藏/离线下载/YouTube 外开 → 设置（字幕 / AI / 通用 / 学英语）→ 生词本复习。  
 发现页不含「乔木精读」专题（精读入口仍可在节目页与单集右栏出现）。  
 不含：设置「关于」、海报、OTA。
 

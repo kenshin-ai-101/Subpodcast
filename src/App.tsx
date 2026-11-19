@@ -1,7 +1,7 @@
 /**
  * [INPUT]: store、Chrome、layout、Splitter；useReadingSettings；library / listening
- * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/频道/单集路由
- * [POS]: 前端根组件；挂载阅读 CSS 变量与 --sidebar-w
+ * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由
+ * [POS]: 前端根组件；挂载阅读 CSS 变量与 --sidebar-w；启动后 remindReview
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { Suspense, lazy, useEffect, type CSSProperties } from "react";
@@ -24,6 +24,7 @@ import { RecentView } from "./components/RecentView";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShowView } from "./components/ShowView";
 import { Splitter } from "./components/Splitter";
+import { remindReview, WordsView } from "./components/WordsBook";
 
 const StatsView = lazy(() => import("./components/StatsView").then((m) => ({ default: m.StatsView })));
 
@@ -40,6 +41,7 @@ export default function App() {
     void init().then(() => {
       loadFavorites();
       void loadDownloads();
+      window.setTimeout(() => void remindReview(), 4000);
     });
   }, [init]);
 
@@ -130,6 +132,7 @@ export default function App() {
           </Suspense>
         )}
         {view.kind === "recent" && <RecentView />}
+        {view.kind === "words" && <WordsView />}
         {view.kind === "channel" && <ChannelView key={view.input} input={view.input} />}
         {view.kind === "show" && <ShowView showId={view.id} />}
         {view.kind === "episode" && <EpisodeView episodeId={view.id} />}

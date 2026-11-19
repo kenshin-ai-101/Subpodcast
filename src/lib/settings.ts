@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.getSettings / setSettings
- * [OUTPUT]: Settings、PRESETS、VOICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、读写与迁移
- * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词与朗读音色
+ * [OUTPUT]: Settings、LearnLevel、PRESETS、VOICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、读写与迁移
+ * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词、朗读音色与学英语开关
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api } from "./api";
@@ -32,8 +32,9 @@ export interface CloudAsr {
 }
 
 export type SubtitleMode = "bilingual" | "original" | "translation";
-export type SettingsSection = "subtitles" | "ai" | "general";
+export type SettingsSection = "subtitles" | "ai" | "general" | "learn";
 export type LangSetting = "auto" | "zh-CN" | "zh-TW" | "en";
+export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";
 
 export interface QuickPrompt {
   id: string;
@@ -81,6 +82,20 @@ export interface Settings {
   ttsResource: string;
   /** YouTube 验证时借用哪个浏览器登录（"" = 先问我）。 */
   ytCookiesBrowser?: string;
+  /** 英语学习模式（设置 › 学英语）。默认关；下列项仅开启后生效。 */
+  learnOn: boolean;
+  /** 听众水平：字幕里标出超过该水平的词。 */
+  learnLevel: LearnLevel;
+  learnMark: boolean;
+  learnCard: boolean;
+  /** 用默认模型解释「在这句里」的意思。 */
+  learnAi: boolean;
+  learnSide: boolean;
+  /** 每天新学词数。 */
+  learnDaily: number;
+  learnRemind: boolean;
+  /** 是否已回答过「想顺便学英语吗？」。 */
+  learnAsked: boolean;
 }
 
 /** 导读/精读朗读可选音色。 */
@@ -274,6 +289,15 @@ export const DEFAULTS: Settings = {
   ttsVoice: "zh_female_vv_uranus_bigtts",
   ttsResource: "seed-tts-2.0",
   ytCookiesBrowser: "",
+  learnOn: false,
+  learnLevel: "cet6",
+  learnMark: true,
+  learnCard: true,
+  learnAi: true,
+  learnSide: true,
+  learnDaily: 20,
+  learnRemind: false,
+  learnAsked: false,
 };
 
 /** 当前选用的云端识别配置。 */

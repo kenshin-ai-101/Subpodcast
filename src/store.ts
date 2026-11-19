@@ -1,6 +1,6 @@
 /**
  * [INPUT]: api、settings
- * [OUTPUT]: 全局导航、播放态（含 speaking/seekSoon）、settingsOpen/settingsSection
+ * [OUTPUT]: 全局导航（含 words）、播放态（含 speaking/seekSoon）、settingsOpen/settingsSection
  * [POS]: UI 状态总线；与 SubCast 壳层行为对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -13,6 +13,7 @@ export type View =
   | { kind: "discover" }
   | { kind: "stats" }
   | { kind: "recent" }
+  | { kind: "words" }
   | { kind: "channel"; input: string }
   | { kind: "show"; id: string }
   | { kind: "episode"; id: string };

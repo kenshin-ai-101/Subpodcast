@@ -2,7 +2,7 @@
 
 ```
 ┌──────────────── WebView (React + TS) ────────────────┐
-│ 订阅列表 · 单集 · 播放器 · 双语字幕 · 乔木精读 · 右栏导读 · AI 问答 · 设置 │
+│ 订阅 · 单集 · 播放器 · 双语字幕 · 精读/导读/问答 · 学英语/生词本 · 设置 │
 └──────────────▲───────────────── invoke / events ─────┘
                │
 ┌──────────────┴──────── Rust (Tauri 2) ───────────────┐
@@ -12,6 +12,8 @@
 │ shared    subcast.qiaomu.ai 匿名共享字幕库           │
 │ translate 谷歌（tr_cache）/ LLM 批次                 │
 │ llm       OpenAI 兼容流式代理                        │
+│ clip      句级原声剪辑（Range / 本地 / YouTube 音轨）   │
+│ anki      生词本 .apkg（schema-11）                   │
 │ db        SQLite：订阅、单集、字幕、blobs、tr_cache   │
 │ secrets   API Key → 钥匙串（签名包）/ 本机文件（开发） │
 │ net       代理（http/socks5）                        │
@@ -29,6 +31,7 @@
 - 导读：右栏 `SummaryPane`；blob `summary` / `summary-from`；共享查找+上传；豆包朗读；与问答共用 chat 模型
 - 离线：`offline.rs` 下载单集音频；事件 `offline`；前端 `lib/offline.ts`
 - 问答：整集带时间戳文稿进上下文；回答要求 `[mm:ss]`；blob `chat` / `chat-archive`；快捷提示词与全局指令在 settings
+- 学英语：`settings.learn*` 默认关；ECDICT（`public/dict/en.json`）；生词本 blob `learn/words` + FSRS；`learn_clip` / `export_anki` / `save_text`
 
 ## 数据表
 `shows` · `episodes` · `transcripts` · `blobs` · `settings` · `tr_cache` · `listens`

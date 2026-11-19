@@ -1,7 +1,7 @@
 /**
  * [INPUT]: store；api；ReadingSettings / ModelSettings / ShortcutSettings；plugin-opener
- * [OUTPUT]: 设置对话框（字幕 / AI / 通用）；KeyRow / KeyField / DefaultButton / ProviderEditor
- * [POS]: 与 SubCast 三栏设置项与布局对齐的原创实现；不做「关于」
+ * [OUTPUT]: 设置对话框（字幕 / AI / 通用 / 学英语）；KeyRow / KeyField / DefaultButton / ProviderEditor
+ * [POS]: 与 SubCast 设置项与布局对齐的原创实现；不做「关于」；保持对话框不改成页面
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
@@ -17,6 +17,7 @@ import {
   Keyboard,
   Loader2,
   FolderOpen,
+  GraduationCap,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -36,6 +37,7 @@ import {
 } from "../lib/settings";
 import { IS_MAC, kbd } from "../lib/shortcuts";
 import { useStore } from "../store";
+import { LearnSettings } from "./LearnSettings";
 import { LocalAsrPicker } from "./LocalAsrSettings";
 import { ModelSettings } from "./ModelSettings";
 import { ReadingSettings } from "./ReadingSettings";
@@ -47,6 +49,7 @@ const NAV: [SettingsSection, string, LucideIcon][] = [
   ["subtitles", "字幕", Captions],
   ["ai", "AI", Sparkles],
   ["general", "通用", SlidersHorizontal],
+  ["learn", "学英语", GraduationCap],
 ];
 
 const LANGS: { id: LangSetting; name: string }[] = [
@@ -578,6 +581,8 @@ export function SettingsDialog() {
               )}
 
               {section === "ai" && <ModelSettings ProviderEditor={ProviderEditor} />}
+
+              {section === "learn" && <LearnSettings />}
 
               {section === "general" && (
                 <>

@@ -51,6 +51,9 @@ const COMMANDS: &[&str] = &[
     "listening_stats",
     "preview_show",
     "cached_show",
+    "learn_clip",
+    "export_anki",
+    "save_text",
 ];
 
 fn main() {

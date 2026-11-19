@@ -1,12 +1,13 @@
 /**
  * [INPUT]: store、api、layout（sideOpen → rail）；Show.episodeCount
- * [OUTPUT]: Sidebar（首页/发现/统计；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
+ * [OUTPUT]: Sidebar（首页/发现/统计/生词本；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
  * [POS]: 全局导航与搜索订阅入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  BookMarked,
   ChartColumn,
   ChevronLeft,
   Compass,
@@ -25,6 +26,7 @@ import { useLayout } from "../lib/layout";
 import { showName } from "../lib/picks";
 import { IS_MAC } from "../lib/shortcuts";
 import { useStore, type View } from "../store";
+import { useDueCount } from "./WordsBook";
 
 function isView(view: View, v: View) {
   if (view.kind !== v.kind) return false;
@@ -41,19 +43,22 @@ export function Sidebar() {
     useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })),
   );
   const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
+  const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
+  const due = useDueCount();
   const rail = !sideOpen;
 
   // 渲染函数而非子组件：避免每次 Sidebar 重渲时按钮 remount 吞掉点击
-  const nav = (v: View, icon: React.ReactNode, label: string) => (
+  const nav = (v: View, icon: React.ReactNode, label: string, badge?: number) => (
     <button
       key={v.kind}
       className={`nav ${isView(view, v) ? "on" : ""}`}
       onClick={() => go(v)}
       title={rail ? label : undefined}
-      aria-label={label}
+      aria-label={badge ? `${label} · ${badge}` : label}
     >
       {icon}
       <span className="label">{label}</span>
+      {badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}
     </button>
   );
 
@@ -71,6 +76,8 @@ export function Sidebar() {
         {nav({ kind: "home" }, <Inbox size={16} />, "首页")}
         {nav({ kind: "discover" }, <Compass size={16} />, "发现")}
         {nav({ kind: "stats" }, <ChartColumn size={16} />, "收听统计")}
+        {(wordsNav || view.kind === "words") &&
+          nav({ kind: "words" }, <BookMarked size={16} />, "生词本", due || undefined)}
       </nav>
       <div className="side-sep" />
       <div className="side-head">
@@ -108,11 +115,10 @@ export function Sidebar() {
         <button
           className="nav settings-btn"
           onClick={() => set({ settingsOpen: true })}
-          title={rail ? "设置" : undefined}
+          title="设置"
           aria-label="设置"
         >
           <Cog size={16} />
-          <span className="label">设置</span>
         </button>
         <button
           className="icon-btn side-toggle"

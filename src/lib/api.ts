@@ -1,6 +1,6 @@
 /**
  * [INPUT]: @tauri-apps/api invoke
- * [OUTPUT]: 类型化后端命令封装（含 shared_guide / share_guide / tts_speak / shared_transcript / saveDownload）
+ * [OUTPUT]: 类型化后端命令封装（含 shared_guide / share_guide / tts_speak / shared_transcript / saveDownload / learnClip / exportAnki）
  * [POS]: 前后端边界；字段名与 Rust camelCase 对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -204,7 +204,29 @@ export const api = {
     invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
   openDataFolder: (kind: string) => invoke<void>("open_data_folder", { kind }),
   clearTemp: () => invoke<void>("clear_temp"),
+  /** 裁出单句音频路径，供生词复习播放。 */
+  learnClip: (episodeId: string, start: number, end: number) =>
+    invoke<string>("learn_clip", { episodeId, start, end }),
+  /** 把文本写到用户选定的路径。 */
+  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
+  /** 写出 Anki 包；返回带原声音频的笔记数。 */
+  exportAnki: (path: string, deck: string, model: string, notes: AnkiNote[]) =>
+    invoke<number>("export_anki", { path, deck, model, notes }),
 };
+
+/** 导出 Anki 时的单条笔记（含可选原声剪辑路径）。 */
+export interface AnkiNote {
+  id: string;
+  word: string;
+  ipa: string;
+  meaning: string;
+  context: string;
+  sentence: string;
+  translation: string;
+  source: string;
+  tags: string;
+  clip: string | null;
+}
 
 export function errText(e: unknown): string {
   if (typeof e === "string") return e;

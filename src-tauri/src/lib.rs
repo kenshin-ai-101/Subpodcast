@@ -1,11 +1,13 @@
 /**
- * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline
- * [OUTPUT]: Tauri 命令面（含 shared_* / share_guide / tts_speak / translate_texts / save_download / fetch_official）与启动
+ * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki
+ * [OUTPUT]: Tauri 命令面（含 shared_* / share_guide / tts_speak / translate_texts / save_download / fetch_official / learn_clip / export_anki / save_text）与启动
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+mod anki;
 mod asr;
 mod captions;
+mod clip;
 mod db;
 mod feeds;
 mod import;
@@ -1059,6 +1061,94 @@ fn export_opml(state: State<'_, AppState>) -> Res<String> {
     Ok(path.to_string_lossy().into())
 }
 
+/// 英语学习：截取单句原声 WAV（离线文件 → audio_url Range → YouTube 下载后再截）。
+#[tauri::command]
+async fn learn_clip(
+    state: State<'_, AppState>,
+    episode_id: String,
+    start: f64,
+    end: f64,
+) -> Res<String> {
+    let data = state.data.clone();
+    let done = clip::path_for(&data, &episode_id, start, end);
+    if done.exists() {
+        return Ok(done.to_string_lossy().into_owned());
+    }
+    let ep = {
+        let conn = state.db.lock().map_err(e)?;
+        db::get_episode(&conn, &episode_id)
+            .map_err(e)?
+            .ok_or_else(|| "节目不存在".to_string())?
+    };
+    if let Some(saved) = offline::find(&data, &episode_id) {
+        return clip::make(
+            &data,
+            clip::Source::File(PathBuf::from(saved.path)),
+            &episode_id,
+            start,
+            end,
+        )
+        .await
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(e);
+    }
+    if let Some(url) = ep.audio_url.filter(|u| !u.is_empty()) {
+        return clip::make(&data, clip::Source::Url(url), &episode_id, start, end)
+            .await
+            .map(|p| p.to_string_lossy().into_owned())
+            .map_err(e);
+    }
+    let vid = ep
+        .video_id
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "这一集没有音频".to_string())?;
+    // Subpodcast 无 youtube_stream_url：先落到临时目录再按本地文件截。
+    let work = data.join("clips").join(format!(".yt-{episode_id}"));
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    tokio::fs::create_dir_all(&work).await.map_err(e)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let result = async {
+        let file = asr::youtube_audio(&data, &vid, &work, cancel)
+            .await
+            .map_err(e)?;
+        clip::make(
+            &data,
+            clip::Source::File(file),
+            &episode_id,
+            start,
+            end,
+        )
+        .await
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(e)
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    result
+}
+
+/// 英语学习：生词本导出为 Anki .apkg（路径由保存对话框选定）。
+#[tauri::command]
+async fn export_anki(
+    path: String,
+    deck: String,
+    model: String,
+    notes: Vec<anki::Note>,
+) -> Res<usize> {
+    tokio::task::spawn_blocking(move || {
+        anki::write(std::path::Path::new(&path), &deck, &model, &notes)
+    })
+    .await
+    .map_err(e)?
+    .map_err(e)
+}
+
+/// 英语学习：把文本（如 CSV）写到选定路径。
+#[tauri::command]
+fn save_text(path: String, text: String) -> Res<()> {
+    std::fs::write(path, text).map_err(e)
+}
+
 /// 把文本或 base64 二进制写到系统「下载」；字幕 MD/PDF 与其它导出共用。
 #[tauri::command]
 fn save_download(name: String, data: String, binary: bool) -> Res<String> {
@@ -1527,6 +1617,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             db: Mutex::new(conn),
             data: dir,
@@ -1585,6 +1676,9 @@ pub fn run() {
             listening_stats,
             preview_show,
             cached_show,
+            learn_clip,
+            export_anki,
+            save_text,
         ])
         .setup(|app| {
             // 开发：Vite；发行：http://localhost（YouTube 拒绝 tauri://）

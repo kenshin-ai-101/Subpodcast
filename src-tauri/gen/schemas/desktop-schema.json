@@ -405,6 +405,12 @@
           "markdownDescription": "Enables the download_episode command without any pre-configured scope."
         },
         {
+          "description": "Enables the export_anki command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-anki",
+          "markdownDescription": "Enables the export_anki command without any pre-configured scope."
+        },
+        {
           "description": "Enables the export_opml command without any pre-configured scope.",
           "type": "string",
           "const": "allow-export-opml",
@@ -439,6 +445,12 @@
           "type": "string",
           "const": "allow-has-api-key",
           "markdownDescription": "Enables the has_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the learn_clip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-learn-clip",
+          "markdownDescription": "Enables the learn_clip command without any pre-configured scope."
         },
         {
           "description": "Enables the list_downloads command without any pre-configured scope.",
@@ -553,6 +565,12 @@
           "type": "string",
           "const": "allow-save-download",
           "markdownDescription": "Enables the save_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-text",
+          "markdownDescription": "Enables the save_text command without any pre-configured scope."
         },
         {
           "description": "Enables the search_podcasts command without any pre-configured scope.",
@@ -717,6 +735,12 @@
           "markdownDescription": "Denies the download_episode command without any pre-configured scope."
         },
         {
+          "description": "Denies the export_anki command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-anki",
+          "markdownDescription": "Denies the export_anki command without any pre-configured scope."
+        },
+        {
           "description": "Denies the export_opml command without any pre-configured scope.",
           "type": "string",
           "const": "deny-export-opml",
@@ -751,6 +775,12 @@
           "type": "string",
           "const": "deny-has-api-key",
           "markdownDescription": "Denies the has_api_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the learn_clip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-learn-clip",
+          "markdownDescription": "Denies the learn_clip command without any pre-configured scope."
         },
         {
           "description": "Denies the list_downloads command without any pre-configured scope.",
@@ -865,6 +895,12 @@
           "type": "string",
           "const": "deny-save-download",
           "markdownDescription": "Denies the save_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-text",
+          "markdownDescription": "Denies the save_text command without any pre-configured scope."
         },
         {
           "description": "Denies the search_podcasts command without any pre-configured scope.",
@@ -3007,6 +3043,72 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`",
+          "type": "string",
+          "const": "dialog:default",
+          "markdownDescription": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`"
+        },
+        {
+          "description": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-ask",
+          "markdownDescription": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-confirm",
+          "markdownDescription": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-message",
+          "markdownDescription": "Enables the message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-open",
+          "markdownDescription": "Enables the open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-save",
+          "markdownDescription": "Enables the save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-ask",
+          "markdownDescription": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-confirm",
+          "markdownDescription": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-message",
+          "markdownDescription": "Denies the message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-open",
+          "markdownDescription": "Denies the open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-save",
+          "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
           "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",
