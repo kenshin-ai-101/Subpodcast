@@ -1,7 +1,7 @@
 /**
- * [INPUT]: children、title、onClose
+ * [INPUT]: children、title、onClose；可选 head 替换标题区
  * [OUTPUT]: 通用居中 Modal（.modal-back / .modal）
- * [POS]: 学英语本期生词 / 听写等小对话框
+ * [POS]: 学英语本期生词 / 听写 / 词详情
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, type ReactNode } from "react";
@@ -12,11 +12,14 @@ export function LearnModal({
   onClose,
   children,
   wide,
+  head,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  /** 替代默认 h3 标题（如词详情的翻页）。 */
+  head?: ReactNode;
 }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -30,7 +33,7 @@ export function LearnModal({
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
-          <h3>{title}</h3>
+          {head ?? <h3>{title}</h3>}
           <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭">
             <X size={18} />
           </button>

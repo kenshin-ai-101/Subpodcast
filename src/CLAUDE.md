@@ -14,10 +14,11 @@ lib/offline.ts: 离线下载；audioSrc 把小宇宙 dts-api 归一成 xyzcdn �
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
-lib/settings.ts: Settings / LearnLevel / PRESETS / VOICES；shareTranscripts；ttsVoice；learn* 开关
+lib/settings.ts: Settings / LearnLevel / PRESETS / VOICES；shareTranscripts；ttsVoice；learn*（含 learnSounds）
 lib/dict.ts: 离线 ECDICT（/dict/en.json）；lookup / isNew / looksEnglish / useDict
-lib/words.ts: 生词本 FSRS（ts-fsrs）；blob learn/words；reviewQueue / toCsv
-lib/clip.ts: 句级原声 prepare/play/prefetch；当前集 seek+暂停
+lib/words.ts: 生词本 FSRS（ts-fsrs）；blob learn/words；日学习 log / known；reviewQueue / toCsv
+lib/clip.ts: 句级原声 prepare/play/toggle/prefetch；useClipState（loading/playing）
+lib/sfx.ts: 拼写复习按键/对错/完成音效（受 learnSounds 控制）
 lib/reading.ts: 字幕/问答 CSS 变量
 lib/fonts.ts: 字幕可选字体与按需加载
 lib/layout.ts: 侧栏/右栏几何（sideOpen → 72px 图标轨；localStorage）
@@ -55,10 +56,11 @@ components/ImportPanel.tsx: 浏览器 YouTube + OPML 导入
 components/BrowserAccess.tsx: macOS 浏览器权限引导
 components/SettingsDialog.tsx: 设置壳（字幕 / AI / 通用 / 学英语）
 components/LearnSettings.tsx: 设置 › 学英语
-components/Learn.tsx: 标词 / 词卡 / LearnTip / 共享 EmptyState·ClipIcon
+components/Learn.tsx: 标词 / 词卡 / LearnTip / EmptyState·ClipIcon·ClipLabel·dueLabel
 components/LearnPractice.tsx: 本期生词 / 跟读 / 听写
-components/WordsBook.tsx: 生词本页 / FSRS 复习 / Anki·CSV / remindReview
-components/LearnModal.tsx: 学英语小对话框
+components/LearnStats.tsx: 生词本统计卡 + 贡献热力（点天开词）
+components/WordsBook.tsx: 生词本列表 / 词详情（听原声可暂停）/ 回想·拼写复习 / Anki·CSV / remindReview
+components/LearnModal.tsx: 学英语小对话框（可选 head 导航）
 components/LocalAsrSettings.tsx: 本机 Qwen3/Whisper
 components/ReadingSettings.tsx: 阅读预览与字号/字体
 components/ModelSettings.tsx: AI 模型分栏

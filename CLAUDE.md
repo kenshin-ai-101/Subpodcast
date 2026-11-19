@@ -12,7 +12,7 @@ docs/ — PRD / 架构 / 发布说明
 </directory>
 
 <config>
-package.json — 前端依赖与脚本（含 ts-fsrs、plugin-dialog）
+package.json — 前端依赖与脚本（含 ts-fsrs、canvas-confetti、plugin-dialog）
 src-tauri/Cargo.toml — Rust 依赖（tiny_http、symphonia、whisper-rs）
 src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建
 src-tauri/capabilities/default.json — 命令 ACL + remote http://localhost:14427–14446

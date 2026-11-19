@@ -1,16 +1,15 @@
 /**
  * [INPUT]: dict / words / clip / jobs.llmReady / api.llmChat / store
- * [OUTPUT]: useLearnOn、useLearnMarks、LearnText、WordCard、LearnTip、EmptyState、Meaning、ClipIcon、fmtWait、dueLabel；
- *           并再导出 LearnPractice / WordsBook
- * [POS]: 英语学习模式前端核心（标词 / 词卡 / 引导）
+ * [OUTPUT]: useLearnOn、useLearnMarks、LearnText、WordCard、LearnTip、EmptyState、Meaning、ClipIcon、ClipLabel、fmtWait、dueLabel
+ * [POS]: 英语学习模式前端核心（标词 / 词卡 / 引导）；练习见 LearnPractice，生词本见 WordsBook
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
-import { Check, GraduationCap, Loader2, Play, Plus, Volume2 } from "lucide-react";
+import { Check, GraduationCap, Loader2, Pause, Play, Plus, Volume2 } from "lucide-react";
 import { api, type Episode, type Segment } from "../lib/api";
-import { clipKey, playClip, prefetchClip, speak, useClipLoading } from "../lib/clip";
+import { clipKey, prefetchClip, speak, toggleClip, useClipState } from "../lib/clip";
 import { WORD_RE, isNew, loadDict, lookup, tagLabel, useDict } from "../lib/dict";
 import { llmReady } from "../lib/jobs";
 import type { LearnLevel } from "../lib/settings";
@@ -83,9 +82,26 @@ export function Meaning({ text }: { text: string }) {
   );
 }
 
+/** 裁剪中转圈；播放中显示暂停；否则播放三角。 */
 export function ClipIcon({ k, size = 12 }: { k: string; size?: number }) {
-  const loading = useClipLoading((s) => s.key === k);
-  return loading ? <Loader2 size={size} className="spin" /> : <Play size={size} className="fill-ico" />;
+  // 拆成原始字段订阅，避免每渲染新建 selector（zustand 5 更稳）
+  const active = useClipState((s) => s.key === k);
+  const loading = useClipState((s) => (s.key === k ? s.loading : false));
+  if (active && loading) return <Loader2 size={size} className="spin" />;
+  if (active) return <Pause size={size} className="fill-ico" />;
+  return <Play size={size} className="fill-ico" />;
+}
+
+/** 图标 + 文案；播放中文案变为「暂停」。 */
+export function ClipLabel({ k, label }: { k: string; label: string }) {
+  const active = useClipState((s) => s.key === k);
+  const loading = useClipState((s) => (s.key === k ? s.loading : false));
+  return (
+    <>
+      <ClipIcon k={k} />
+      {active && !loading ? "暂停" : label}
+    </>
+  );
 }
 
 export interface LearnMarks {
@@ -255,7 +271,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
   };
 
   const listen = async () => {
-    if (!(await playClip(ep, target.seg.start, target.seg.end))) speak(target.seg.text);
+    await toggleClip(ep, target.seg.start, target.seg.end, target.seg.text);
   };
   const label = entry ? tagLabel(entry.tags) : "";
 
@@ -290,11 +306,17 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
       )}
       <div className="wc-foot">
         <button type="button" className="btn sm play" onClick={() => void listen()}>
-          <ClipIcon k={clipKey(ep.id, target.seg.start, target.seg.end)} />
-          原声
+          <ClipLabel k={clipKey(ep.id, target.seg.start, target.seg.end)} label="原声" />
         </button>
         {saved ? (
-          <button type="button" className="btn sm ghost wc-saved" onClick={() => useStore.getState().go({ kind: "words" })}>
+          <button
+            type="button"
+            className="btn sm ghost wc-saved"
+            onClick={() => {
+              onClose();
+              void import("./WordsBook").then(({ openWord }) => openWord(id));
+            }}
+          >
             <Check size={13} />
             已在生词本
           </button>

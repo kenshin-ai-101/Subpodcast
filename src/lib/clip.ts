@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.learnClip；store.current/player；convertFileSrc
- * [OUTPUT]: prepareClip / prefetchClip / playClip / stopClip / speak / useClipLoading
- * [POS]: 学英语句级原声；当前集走 seek+到点暂停，否则裁剪小段
+ * [OUTPUT]: prepareClip / prefetchClip / playClip / toggleClip / stopClip / speak / useClipState / clipKey
+ * [POS]: 学英语句级原声；当前集 seek+到点暂停，否则本地剪辑；按钮可显示 loading/playing
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -9,13 +9,18 @@ import { create } from "zustand";
 import { api } from "./api";
 import { useStore } from "../store";
 
-/** 正在拉取的剪辑 key，供按钮转圈。 */
-export const useClipLoading = create<{ key: string | null }>(() => ({ key: null }));
+/** 当前句 key + 是否在裁剪；按钮据此转圈 / 显示暂停。 */
+export const useClipState = create<{ key: string | null; loading: boolean }>(() => ({
+  key: null,
+  loading: false,
+}));
+/** @deprecated 用 useClipState；保留别名以免旧调用崩。 */
+export const useClipLoading = useClipState;
+
 export const clipKey = (episodeId: string, start: number, end: number) =>
   `${episodeId}|${start.toFixed(2)}|${end.toFixed(2)}`;
 
 let el: HTMLAudioElement | null = null;
-let stopTimer: number | undefined;
 let unwatch: (() => void) | null = null;
 /** 每次 play/stop 递增，避免迟到的剪辑覆盖新请求。 */
 let turn = 0;
@@ -59,45 +64,134 @@ function pump() {
 
 export function stopClip() {
   turn++;
-  window.clearTimeout(stopTimer);
-  unwatch?.();
-  unwatch = null;
+  if (unwatch) {
+    unwatch();
+    unwatch = null;
+    const s = useStore.getState();
+    if (s.playing) s.player?.toggle();
+  }
   if (el) el.pause();
-  useClipLoading.setState({ key: null });
+  try {
+    window.speechSynthesis?.cancel();
+  } catch {
+    /* ignore */
+  }
+  useClipState.setState({ key: null, loading: false });
 }
 
-/** 播放 [start,end]。无可用音频时返回 false（调用方可系统朗读）。 */
-export async function playClip(ep: { id: string }, start: number, end: number): Promise<boolean> {
+/** 正在播同一句则停，否则开播。fallbackText：无剪辑时系统朗读，仍可点暂停停掉。 */
+export async function toggleClip(
+  ep: { id: string },
+  start: number,
+  end: number,
+  fallbackText?: string,
+): Promise<boolean> {
+  if (useClipState.getState().key === clipKey(ep.id, start, end)) {
+    stopClip();
+    return true;
+  }
+  return playClip(ep, start, end, fallbackText);
+}
+
+/** 无本地剪辑时，用 TTS 顶上，并挂上同一 key，以便按钮显示「暂停」。 */
+function speakAsClip(key: string, text: string, mine: number) {
+  const synth = window.speechSynthesis;
+  if (!synth) {
+    if (mine === turn) useClipState.setState({ key: null, loading: false });
+    return false;
+  }
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US";
+  u.rate = 0.9;
+  const voice =
+    synth.getVoices().find((v) => v.lang === "en-US" && /Samantha|Alex|Ava|Allison/.test(v.name)) ??
+    synth.getVoices().find((v) => v.lang.startsWith("en"));
+  if (voice) u.voice = voice;
+  const clear = () => {
+    if (mine === turn) useClipState.setState({ key: null, loading: false });
+  };
+  u.onend = clear;
+  u.onerror = clear;
+  useClipState.setState({ key, loading: false });
+  synth.speak(u);
+  return true;
+}
+
+/** 播放 [start,end]。无可用音频且无 fallbackText 时返回 false。 */
+export async function playClip(
+  ep: { id: string },
+  start: number,
+  end: number,
+  fallbackText?: string,
+): Promise<boolean> {
   stopClip();
   const mine = turn;
   const s = useStore.getState();
   const pad = 0.15;
+  const key = clipKey(ep.id, start, end);
+  const span = Math.max(0.5, end - start);
+  const done = () => {
+    if (mine === turn) useClipState.setState({ key: null, loading: false });
+  };
+
   if (s.current?.id === ep.id && s.player) {
     const player = s.player;
-    player.seek(Math.max(0, start - pad));
+    const at = Math.max(0, start - pad);
+    player.seek(at);
     player.play();
+    useClipState.setState({ key, loading: false });
     const startedAt = Date.now();
-    unwatch = useStore.subscribe((st) => {
-      if (st.time >= end + pad || Date.now() - startedAt > (end - start + 8) * 1000) {
+    // YouTube/远程音频的 seek 常异步：tick 可能短暂回写旧 time（仍在句尾之后）。
+    // 未进入本句窗口前不算「播完」，否则会清掉 key 却拦不住随后真正响起的 play。
+    let armed = false;
+    unwatch = useStore.subscribe((st, prev) => {
+      if (mine !== turn) return;
+      if (st.current?.id !== ep.id) {
         unwatch?.();
         unwatch = null;
-        if (st.playing) st.player?.toggle();
+        done();
+        return;
+      }
+      const inWindow = st.time >= start - 1 && st.time <= end + pad + 0.5;
+      if (!armed) {
+        if (inWindow) armed = true;
+        else if (Date.now() - startedAt > 2500) armed = true;
+        else return;
+      }
+      const over = st.time >= end + pad || Date.now() - startedAt > (span + 8) * 1000;
+      const userPaused = prev.playing && !st.playing && Date.now() - startedAt > 1500;
+      if (over || userPaused) {
+        unwatch?.();
+        unwatch = null;
+        if (over && st.playing) st.player?.toggle();
+        done();
       }
     });
     return true;
   }
-  const key = clipKey(ep.id, start, end);
-  useClipLoading.setState({ key });
+
+  useClipState.setState({ key, loading: true });
   const path = await prepareClip(ep.id, start, end);
   if (mine !== turn) return true;
-  useClipLoading.setState({ key: null });
-  if (!path) return false;
+  if (!path) {
+    if (fallbackText && speakAsClip(key, fallbackText, mine)) return true;
+    done();
+    return false;
+  }
   if (!el) el = new Audio();
+  const a = el;
+  a.onended = a.onpause = () => {
+    if (a.paused) done();
+  };
   el.src = convertFileSrc(path);
   el.currentTime = 0;
+  useClipState.setState({ key, loading: false });
   try {
     await el.play();
   } catch {
+    if (fallbackText && speakAsClip(key, fallbackText, mine)) return true;
+    done();
     return false;
   }
   return true;

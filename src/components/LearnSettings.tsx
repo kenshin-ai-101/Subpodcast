@@ -163,6 +163,16 @@ export function LearnSettings() {
                 </label>
               </div>
               <div className="ls-row">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={s.learnSounds}
+                    onChange={(e) => void save({ learnSounds: e.target.checked })}
+                  />{" "}
+                  拼写复习时播放按键和对错音效
+                </label>
+              </div>
+              <div className="ls-row">
                 <span>生词本 {count} 个词</span>
                 <div className="row-actions">
                   <button

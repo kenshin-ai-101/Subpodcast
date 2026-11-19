@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.getSettings / setSettings
  * [OUTPUT]: Settings、LearnLevel、PRESETS、VOICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、读写与迁移
- * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词、朗读音色与学英语开关
+ * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词、朗读音色与学英语（含 learnSounds）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api } from "./api";
@@ -94,6 +94,8 @@ export interface Settings {
   /** 每天新学词数。 */
   learnDaily: number;
   learnRemind: boolean;
+  /** 拼写复习时的按键/对错音效。 */
+  learnSounds: boolean;
   /** 是否已回答过「想顺便学英语吗？」。 */
   learnAsked: boolean;
 }
@@ -297,6 +299,7 @@ export const DEFAULTS: Settings = {
   learnSide: true,
   learnDaily: 20,
   learnRemind: false,
+  learnSounds: true,
   learnAsked: false,
 };
 

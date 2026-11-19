@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Play } from "lucide-react";
 import { type Episode, type Segment } from "../lib/api";
-import { playClip, prefetchClip, speak, stopClip } from "../lib/clip";
+import { playClip, prefetchClip, stopClip } from "../lib/clip";
 import { WORD_RE, isNew, lookup, tagLabel, useDict, type Entry } from "../lib/dict";
 import { clock } from "../lib/format";
 import type { LearnLevel } from "../lib/settings";
@@ -225,7 +225,7 @@ export function Dictation({
   const seg = segments[usable[k]];
 
   const play = useCallback(() => {
-    if (seg) void playClip(ep, seg.start, seg.end).then((ok) => { if (!ok) speak(seg.text); });
+    if (seg) void playClip(ep, seg.start, seg.end, seg.text);
   }, [ep, seg]);
 
   useEffect(() => {

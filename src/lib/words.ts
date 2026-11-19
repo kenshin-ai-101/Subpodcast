@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.getBlob/setBlob；ts-fsrs
- * [OUTPUT]: useWords、reviewQueue、isMastered、toCsv、Rating、add/update/remove/rate
- * [POS]: 生词本 FSRS 调度；blob key ["learn","words"]
+ * [OUTPUT]: useWords、reviewQueue、isMastered、toCsv、dayOf、DayLog、Rating、add/update/remove/rate/know
+ * [POS]: 生词本 FSRS 调度 + 日学习日志；blob key ["learn","words"]
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
@@ -42,11 +42,21 @@ export interface Word {
   card: SavedCard;
 }
 
+/** 一日复习：次数、忘了次数、涉及词 id。 */
+export interface DayLog {
+  r: number;
+  a: number;
+  ids: string[];
+}
+
 interface Book {
   v: 1;
   words: Record<string, Word>;
   day: string;
   newToday: number;
+  log?: Record<string, DayLog>;
+  /** 听者标为「已认识」的词头 → 时间戳。 */
+  known?: Record<string, number>;
 }
 
 const BLOB = ["learn", "words"] as const;
@@ -71,47 +81,72 @@ const toCard = (s: SavedCard): Card => ({
   last_review: s.last_review ? new Date(s.last_review) : undefined,
 });
 const today = () => new Date().toLocaleDateString("sv");
+export const dayOf = (ms: number) => new Date(ms).toLocaleDateString("sv");
 
 interface WordsState extends Book {
+  log: Record<string, DayLog>;
+  known: Record<string, number>;
   loaded: boolean;
   load(): Promise<void>;
   add(w: Omit<Word, "added" | "card">): void;
   update(id: string, patch: Partial<Word>): void;
   remove(id: string): void;
   rate(id: string, grade: Grade): void;
+  know(ids: string[]): void;
+  unknow(id: string): void;
+  clearKnown(): void;
 }
 
 let saveTimer: number | undefined;
+const snapshot = () => {
+  const { v, words, day, newToday, log, known } = useWords.getState();
+  return JSON.stringify({ v, words, day, newToday, log, known });
+};
 function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    const { v, words, day, newToday } = useWords.getState();
-    void api.setBlob(BLOB[0], BLOB[1], JSON.stringify({ v, words, day, newToday })).catch(() => {});
+    void api.setBlob(BLOB[0], BLOB[1], snapshot()).catch(() => {});
   }, 300);
 }
 window.addEventListener("beforeunload", () => {
   if (!saveTimer) return;
   window.clearTimeout(saveTimer);
-  const { v, words, day, newToday } = useWords.getState();
-  void api.setBlob(BLOB[0], BLOB[1], JSON.stringify({ v, words, day, newToday }));
+  void api.setBlob(BLOB[0], BLOB[1], snapshot());
 });
+
+/** 无 log 的旧本：用各词 last_review 回填日学习记录。 */
+function backfill(words: Record<string, Word>): Record<string, DayLog> {
+  const log: Record<string, DayLog> = {};
+  for (const w of Object.values(words)) {
+    if (!w.card.last_review) continue;
+    const d = (log[dayOf(w.card.last_review)] ??= { r: 0, a: 0, ids: [] });
+    d.r++;
+    d.ids.push(w.id);
+  }
+  return log;
+}
 
 export const useWords = create<WordsState>((set, get) => ({
   v: 1,
   words: {},
   day: today(),
   newToday: 0,
+  log: {},
+  known: {},
   loaded: false,
   async load() {
     if (get().loaded) return;
     try {
       const raw = await api.getBlob(BLOB[0], BLOB[1]);
       const b = raw ? (JSON.parse(raw) as Book) : null;
+      const words = b?.words ?? {};
       set({
         loaded: true,
-        words: b?.words ?? {},
+        words,
         day: b?.day ?? today(),
         newToday: b?.newToday ?? 0,
+        log: b?.log ?? backfill(words),
+        known: b?.known ?? {},
       });
     } catch {
       set({ loaded: true });
@@ -125,6 +160,21 @@ export const useWords = create<WordsState>((set, get) => ({
         [w.id]: { ...w, added: Date.now(), card: toSaved(createEmptyCard(new Date())) },
       },
     }));
+    persist();
+  },
+  know(ids) {
+    if (!ids.length) return;
+    const now = Date.now();
+    set((s) => ({ known: { ...s.known, ...Object.fromEntries(ids.map((id) => [id, now])) } }));
+    persist();
+  },
+  unknow(id) {
+    const { [id]: _, ...rest } = get().known;
+    set({ known: rest });
+    persist();
+  },
+  clearKnown() {
+    set({ known: {} });
     persist();
   },
   update(id, patch) {
@@ -149,11 +199,20 @@ export const useWords = create<WordsState>((set, get) => ({
       next = scheduler.next(createEmptyCard(new Date()), new Date(), grade).card;
     }
     const d = today();
-    set((s) => ({
-      words: { ...s.words, [id]: { ...w, card: toSaved(next) } },
-      day: d,
-      newToday: (s.day === d ? s.newToday : 0) + (wasNew ? 1 : 0),
-    }));
+    set((s) => {
+      const was = s.log[d] ?? { r: 0, a: 0, ids: [] };
+      const entry = {
+        r: was.r + 1,
+        a: was.a + (grade === Rating.Again ? 1 : 0),
+        ids: was.ids.includes(id) ? was.ids : [...was.ids, id],
+      };
+      return {
+        words: { ...s.words, [id]: { ...w, card: toSaved(next) } },
+        day: d,
+        newToday: (s.day === d ? s.newToday : 0) + (wasNew ? 1 : 0),
+        log: { ...s.log, [d]: entry },
+      };
+    });
     persist();
   },
 }));

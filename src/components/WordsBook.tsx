@@ -1,25 +1,93 @@
 /**
- * [INPUT]: words / clip / api.exportAnki/saveText；plugin-dialog
- * [OUTPUT]: WordsView、exportWords、useDueCount、remindReview
- * [POS]: 英语学习 · 生词本与 FSRS 复习
+ * [INPUT]: words / clip / sfx / api.exportAnki·saveText·getEpisode；LearnStats；LearnModal
+ * [OUTPUT]: WordsView、exportWords、openWord、useDueCount、remindReview
+ * [POS]: 生词本列表（统计热力）/ 词详情（听原声可暂停）/ 回想·拼写复习 / Anki·CSV
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { BookMarked, Check, Download, Trash2, Volume2, X } from "lucide-react";
+import confetti from "canvas-confetti";
+import {
+  ArrowUpRight,
+  BookMarked,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Search,
+  Trash2,
+  Volume2,
+  X,
+} from "lucide-react";
 import { api, errText, type AnkiNote } from "../lib/api";
-import { clipKey, playClip, prefetchClip, prepareClip, speak, stopClip } from "../lib/clip";
+import { ask } from "../lib/confirm";
+import { clipKey, playClip, prefetchClip, prepareClip, speak, stopClip, toggleClip } from "../lib/clip";
 import { clock } from "../lib/format";
+import { playSoon } from "../lib/playback";
+import { doneSound, keySound, rightSound, wrongSound } from "../lib/sfx";
 import { Rating, intervals, isMastered, reviewQueue, toCsv, useWords, type Grade, type Word } from "../lib/words";
-import { useStore } from "../store";
-import { ClipIcon, EmptyState, Meaning, dueLabel, fmtWait, useLearnOn } from "./Learn";
+import { seekSoon, useStore } from "../store";
+import { ClipIcon, ClipLabel, EmptyState, Meaning, dueLabel, fmtWait, useLearnOn } from "./Learn";
+import { LearnModal } from "./LearnModal";
+import { LearnStats } from "./LearnStats";
 
 type Filter = "due" | "all" | "mastered";
+type Mode = "recall" | "spell";
 
-async function playWord(w: Word) {
-  if (!(await playClip({ id: w.episodeId }, w.start, w.end))) speak(w.sentence);
+const MODE_KEY = "subpodcast-review-mode";
+const SINGLE_SHOW = "单独打开";
+
+const useWordDetail = create<{ id: string | null }>(() => ({ id: null }));
+
+/** 打开词详情；若不在生词本页则先跳转。 */
+export function openWord(id: string) {
+  useWordDetail.setState({ id });
+  if (useStore.getState().view.kind !== "words") useStore.getState().go({ kind: "words" });
+}
+
+const sourceOf = (w: Word) =>
+  [w.showTitle && w.showTitle !== SINGLE_SHOW ? w.showTitle : "", w.episodeTitle].filter(Boolean).join(" · ");
+
+async function playWord(w: Word, toggle = false) {
+  // fallbackText：无剪辑时 TTS 也挂同一 key，按钮才能变成「暂停」并停掉
+  await (toggle ? toggleClip : playClip)({ id: w.episodeId }, w.start, w.end, w.sentence);
+}
+
+/** 打开来源单集，从该句前一秒起播。 */
+async function openSource(w: Pick<Word, "episodeId" | "start">) {
+  stopClip();
+  const s = useStore.getState();
+  const at = Math.max(0, w.start - 1);
+  if (s.current?.id === w.episodeId && s.player) {
+    s.player.seek(at);
+    s.player.play();
+  } else {
+    const ep = await api.getEpisode(w.episodeId).catch(() => null);
+    if (!ep) {
+      s.notify("这一集已经不在了");
+      return;
+    }
+    s.load({ ...ep, progress: at });
+    seekSoon(at);
+    playSoon(ep.id);
+  }
+  useWordDetail.setState({ id: null });
+  s.go({ kind: "episode", id: w.episodeId });
+}
+
+const wordRe = (w: string, flags = "i") =>
+  new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, flags);
+
+function Marked({ sentence, word }: { sentence: string; word: string }) {
+  const parts = sentence.split(new RegExp(`(${wordRe(word).source})`, "i"));
+  return (
+    <>
+      {parts.map((p, k) => (k % 2 ? <mark key={k}>{p}</mark> : p))}
+    </>
+  );
 }
 
 function ExportButtons({ words }: { words: Word[] }) {
@@ -38,8 +106,6 @@ function ExportButtons({ words }: { words: Word[] }) {
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const wordRe = (w: string, flags = "i") =>
-  new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, flags);
 
 let exporting = false;
 
@@ -105,15 +171,210 @@ export async function exportWords(kind: "anki" | "csv", words: Word[]) {
 
 const GRADES: [Grade, string, string][] = [
   [Rating.Again, "again", "忘了"],
-  [Rating.Hard, "", "困难"],
+  [Rating.Hard, "hard", "困难"],
   [Rating.Good, "good", "记得"],
-  [Rating.Easy, "", "简单"],
+  [Rating.Easy, "easy", "简单"],
 ];
+
+const readMode = (): Mode => {
+  try {
+    return localStorage.getItem(MODE_KEY) === "spell" ? "spell" : "recall";
+  } catch {
+    return "recall";
+  }
+};
+
+const normLetter = (x: string) => x.toLowerCase().replace(/[’‘]/g, "'");
+
+/** 最长公共子序列掩码：标出多打 / 漏打的字母。 */
+function lcsMask(a: string, b: string): [boolean[], boolean[]] {
+  const A = normLetter(a);
+  const B = normLetter(b);
+  const L = Array.from({ length: A.length + 1 }, () => new Array<number>(B.length + 1).fill(0));
+  for (let x = A.length - 1; x >= 0; x--)
+    for (let y = B.length - 1; y >= 0; y--)
+      L[x][y] = A[x] === B[y] ? L[x + 1][y + 1] + 1 : Math.max(L[x + 1][y], L[x][y + 1]);
+  const ma = new Array<boolean>(A.length).fill(false);
+  const mb = new Array<boolean>(B.length).fill(false);
+  for (let x = 0, y = 0; x < A.length && y < B.length; ) {
+    if (A[x] === B[y]) {
+      ma[x++] = true;
+      mb[y++] = true;
+    } else if (L[x + 1][y] >= L[x][y + 1]) x++;
+    else y++;
+  }
+  return [ma, mb];
+}
+
+function Diff({ typed, answer }: { typed: string; answer: string }) {
+  const [mt, ma] = lcsMask(typed, answer);
+  return (
+    <>
+      <span className="sp-typed">
+        {[...typed].map((c, k) => (
+          <span key={k} className={mt[k] ? "" : "x"}>
+            {c}
+          </span>
+        ))}
+      </span>
+      <span className="sp-arrow">→</span>
+      <span className="sp-ans">
+        {[...answer].map((c, k) => (
+          <span key={k} className={ma[k] ? "" : "x"}>
+            {c}
+          </span>
+        ))}
+      </span>
+    </>
+  );
+}
+
+function Letters({ typed, answer }: { typed: string; answer: string }) {
+  const cells = [];
+  for (let k = 0; k < Math.max(answer.length, typed.length); k++) {
+    const c = typed[k];
+    const cls =
+      c == null ? (k === typed.length ? "cur" : "") : normLetter(c) === normLetter(answer[k] ?? "") ? "ok" : "bad";
+    cells.push(
+      <span key={k} className={`sp-c ${cls}`}>
+        {c ?? ""}
+      </span>,
+    );
+  }
+  return <span className="sp-row">{cells}</span>;
+}
+
+let fire: confetti.CreateTypes | null = null;
+const CONFETTI = ["#e8582a", "#f2a679", "#f2d091", "#5d8c7b", "#3a6df0"];
+
+function confettiAt(opts: confetti.Options) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!fire) {
+    const c = document.createElement("canvas");
+    c.className = "confetti";
+    document.body.appendChild(c);
+    fire = confetti.create(c, { resize: true, useWorker: false });
+  }
+  void fire({ colors: CONFETTI, shapes: ["square", "circle"], scalar: 0.9, ...opts });
+}
+
+function burst(el: Element | null) {
+  const r = el?.getBoundingClientRect();
+  const origin = r
+    ? { x: (r.left + r.width / 2) / window.innerWidth, y: (r.top + r.height / 2) / window.innerHeight }
+    : { x: 0.5, y: 0.5 };
+  confettiAt({ particleCount: 60, spread: 70, startVelocity: 30, ticks: 140, origin });
+}
+
+function celebrate() {
+  window.setTimeout(() => confettiAt({ particleCount: 60, angle: 60, spread: 100, origin: { x: 0, y: 0.7 }, ticks: 260 }), 150);
+  window.setTimeout(() => confettiAt({ particleCount: 60, angle: 120, spread: 100, origin: { x: 1, y: 0.7 }, ticks: 260 }), 300);
+}
+
+function Spell({
+  w,
+  onCheck,
+  onExit,
+}: {
+  w: Word;
+  onCheck: (r: { ok: boolean; typed: string; hints: number }) => void;
+  onExit: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const [hints, setHints] = useState(0);
+  const [shake, setShake] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const row = useRef<HTMLSpanElement>(null);
+  const answer = w.word;
+
+  const finish = (v: string) => {
+    const ok = normLetter(v) === normLetter(answer);
+    if (ok) {
+      rightSound();
+      burst(row.current);
+    } else wrongSound();
+    onCheck({ ok, typed: v, hints });
+  };
+
+  const change = (raw: string) => {
+    const v = raw.replace(/\s/g, "");
+    if (v.length > typed.length) {
+      const k = v.length - 1;
+      if (normLetter(v[k]) === normLetter(answer[k] ?? "")) keySound();
+      else {
+        wrongSound();
+        setShake((n) => n + 1);
+      }
+    }
+    setTyped(v);
+    if (normLetter(v) === normLetter(answer)) finish(v);
+  };
+
+  const hint = () => {
+    let k = 0;
+    while (k < typed.length && normLetter(typed[k]) === normLetter(answer[k])) k++;
+    if (k >= answer.length) return;
+    setTyped(answer.slice(0, k + 1));
+    setHints((h) => h + 1);
+    input.current?.focus();
+  };
+
+  return (
+    <div className="sp" onClick={() => input.current?.focus()}>
+      <span ref={row} key={shake} className={shake ? "sp-shake" : ""}>
+        <Letters typed={typed} answer={answer} />
+      </span>
+      <input
+        ref={input}
+        className="sp-in"
+        autoFocus
+        value={typed}
+        maxLength={answer.length + 3}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoComplete="off"
+        aria-label="拼写这个词"
+        onChange={(e) => change(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            finish(typed);
+          } else if (e.key === "Tab") {
+            e.preventDefault();
+            hint();
+          } else if (e.key === " ") {
+            e.preventDefault();
+            void playWord(w);
+          } else if (e.key === "Escape") onExit();
+        }}
+      />
+      <p className="sp-help">
+        {answer.length} 个字母 · <span className="kbd">Tab</span> 提示一个字母 · <span className="kbd">␣</span> 重听 ·{" "}
+        <span className="kbd">↵</span> 检查
+      </p>
+    </div>
+  );
+}
 
 function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   const [list] = useState(queue);
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
+  const [mode, setModeState] = useState<Mode>(readMode);
+  const [spelled, setSpelled] = useState<{ ok: boolean; typed: string; hints: number } | null>(null);
+
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    setFlipped(false);
+    setSpelled(null);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const suggest: Grade = spelled ? (spelled.ok ? (spelled.hints ? Rating.Hard : Rating.Good) : Rating.Again) : Rating.Good;
   const w = list[i];
   const gaps = useMemo(() => (w ? intervals(useWords.getState().words[w.id] ?? w) : null), [w, flipped]);
 
@@ -133,6 +394,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
       useWords.getState().rate(w.id, g);
       if (g === Rating.Again) list.push(w);
       setFlipped(false);
+      setSpelled(null);
       setI((x) => x + 1);
     },
     [w, list],
@@ -141,24 +403,44 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
+      if (mode === "spell" && !flipped && e.key !== "Escape" && !e.metaKey && !e.ctrlKey) {
+        document.querySelector<HTMLInputElement>(".sp-in")?.focus();
+        return;
+      }
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
+        e.stopPropagation();
         if (!flipped) setFlipped(true);
-        else rate(Rating.Good);
+        else rate(suggest);
       } else if (flipped && ["1", "2", "3", "4"].includes(e.key)) {
         e.preventDefault();
+        e.stopPropagation();
         rate(Number(e.key) as Grade);
       } else if (e.key.toLowerCase() === "r") {
         e.preventDefault();
+        e.stopPropagation();
         if (w) void playWord(w);
       } else if (flipped && e.key.toLowerCase() === "w") {
         e.preventDefault();
+        e.stopPropagation();
         if (w) speak(w.id, 0.85);
-      } else if (e.key === "Escape") onDone();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onDone();
+      }
     };
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [flipped, rate, w, onDone]);
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, [flipped, rate, w, onDone, suggest, mode]);
+
+  const finished = !w && list.length > 0;
+  useEffect(() => {
+    if (finished) {
+      doneSound();
+      celebrate();
+    }
+  }, [finished]);
 
   if (!w) {
     return (
@@ -180,13 +462,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
     );
   }
 
-  const blank = w.sentence.replace(
-    new RegExp(`\\b${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"),
-    " _____ ",
-  );
-  const marked = w.sentence.split(
-    new RegExp(`(\\b${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b)`, "i"),
-  );
+  const blank = w.sentence.replace(wordRe(w.word), " _____ ");
 
   return (
     <div className="page review-page">
@@ -200,14 +476,58 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
         <span className="rv-num">
           {i + 1} / {list.length}
         </span>
+        <div className="seg-control" role="radiogroup" aria-label="复习方式">
+          {(
+            [
+              ["recall", "回想"],
+              ["spell", "拼写"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={mode === m}
+              className={mode === m ? "on" : ""}
+              onClick={() => setMode(m)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="rv-card">
-        <span className="rv-src clamp1">
-          {w.showTitle ? `${w.showTitle} · ` : ""}
-          {clock(w.start)}
-        </span>
+        {flipped ? (
+          <button
+            type="button"
+            className="rv-src rv-src-link"
+            onClick={() => void openSource(w)}
+            title="打开这一集，从这句开始播放"
+          >
+            <span className="clamp1">{sourceOf(w)}</span>
+            <span className="wd-at">
+              {clock(w.start)}
+              <ArrowUpRight size={12} />
+            </span>
+          </button>
+        ) : (
+          <span className="rv-src clamp1">
+            {sourceOf(w)} · {clock(w.start)}
+          </span>
+        )}
         {flipped ? (
           <>
+            {spelled &&
+              (spelled.ok ? (
+                <p className="sp-result ok">
+                  <span className="sp-tick">
+                    <Check size={16} strokeWidth={3} />
+                  </span>
+                  {spelled.hints ? `拼对了（用了 ${spelled.hints} 次提示）` : "拼对了！"}
+                </p>
+              ) : (
+                <p className="sp-result bad">{spelled.typed ? <Diff typed={spelled.typed} answer={w.word} /> : "没拼出来"}</p>
+              ))}
             <p className="rv-word">
               {w.id}
               <button
@@ -231,33 +551,66 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
               </p>
             )}
             <p className="rv-sent">
-              {marked.map((p, ki) => (ki % 2 ? <mark key={ki}>{p}</mark> : p))}
+              <Marked sentence={w.sentence} word={w.word} />
               {w.sentenceZh && <span className="rv-zh">{w.sentenceZh}</span>}
             </p>
           </>
         ) : (
           <>
-            <p className="rv-q">这句话里空着的是哪个词？</p>
+            <p className="rv-q">{mode === "spell" ? "听原句，拼出空着的词" : "这句话里空着的是哪个词？"}</p>
             <p className="rv-sent front">{blank}</p>
+            {mode === "spell" && (
+              <>
+                <p className="sp-mean">{w.ctx || w.meaning.split("\n")[0]}</p>
+                <Spell
+                  key={`${i}-${w.id}`}
+                  w={w}
+                  onExit={onDone}
+                  onCheck={(r) => {
+                    setSpelled(r);
+                    setFlipped(true);
+                  }}
+                />
+              </>
+            )}
           </>
         )}
-        <button type="button" className="btn sm play rv-listen" onClick={() => void playWord(w)}>
-          <ClipIcon k={clipKey(w.episodeId, w.start, w.end)} />
-          再听原句
+        <button type="button" className="btn sm play rv-listen" onClick={() => void playWord(w, true)}>
+          <ClipLabel k={clipKey(w.episodeId, w.start, w.end)} label="再听原句" />
           <span className="kbd">R</span>
         </button>
         {flipped ? (
-          <div className="rv-rate">
-            {GRADES.map(([g, cls, label], ki) => (
-              <button key={g} type="button" className={`btn ${cls}`} onClick={() => rate(g)}>
-                <span className="t">{label}</span>
-                <span className="s">
-                  <span className="kbd">{ki + 1}</span>
-                  {gaps ? fmtWait(gaps[g]) : ""}
-                </span>
-              </button>
-            ))}
+          <div className="rv-rating">
+            <p className="rv-rate-q">记得怎么样？选一个，决定下次什么时候再考</p>
+            <div className="rv-rate">
+              {GRADES.map(([g, cls, label], ki) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`btn ${cls}${g === suggest ? " suggested" : ""}`}
+                  onClick={() => rate(g)}
+                  title={`按 ${ki + 1}`}
+                >
+                  <span className="t">{label}</span>
+                  <span className="s">{gaps ? `${fmtWait(gaps[g])}后再考` : ""}</span>
+                </button>
+              ))}
+            </div>
+            <p className="rv-keys">
+              键盘 1–4 选择，空格选「{GRADES.find(([g]) => g === suggest)![2]}」
+            </p>
           </div>
+        ) : mode === "spell" ? (
+          <button
+            type="button"
+            className="btn ghost rv-show"
+            onClick={() => {
+              setSpelled({ ok: false, typed: "", hints: 0 });
+              setFlipped(true);
+            }}
+          >
+            不会，看答案
+          </button>
         ) : (
           <button type="button" className="btn primary rv-show" onClick={() => setFlipped(true)}>
             显示答案
@@ -269,6 +622,195 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   );
 }
 
+function WordRow({ w, now }: { w: Word; now: number }) {
+  const due = dueLabel(w, now);
+  const open = () => useWordDetail.setState({ id: w.id });
+  return (
+    <div
+      className="wb-item"
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && e.target === e.currentTarget) open();
+      }}
+    >
+      <div className="wb-main">
+        <div className="wb-l1">
+          <span className="wb-w">{w.id}</span>
+          {w.ipa && <span className="wb-ipa">/{w.ipa}/</span>}
+          {w.tag && <span className="pill">{w.tag}</span>}
+        </div>
+        <p className="wb-d">{w.ctx || w.meaning.split("\n")[0]}</p>
+        <p className="wb-src">
+          <button
+            type="button"
+            className="ts-link"
+            onClick={(e) => {
+              e.stopPropagation();
+              void playWord(w, true);
+            }}
+            title="播放原句"
+          >
+            <ClipIcon k={clipKey(w.episodeId, w.start, w.end)} size={10} />
+            {clock(w.start)}
+          </button>
+          <span className="clamp1">{sourceOf(w)}</span>
+        </p>
+      </div>
+      <span className={`due ${due.now ? "now" : ""}`}>{due.text}</span>
+      <ChevronRight size={16} className="wb-go" />
+    </div>
+  );
+}
+
+function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: () => void }) {
+  const w = useWords((s) => s.words[id]);
+  const idx = list.findIndex((x) => x.id === id);
+  const step = useCallback(
+    (d: number) => {
+      const n = list[idx + d];
+      if (n) {
+        stopClip();
+        useWordDetail.setState({ id: n.id });
+      }
+    },
+    [list, idx],
+  );
+
+  useEffect(() => {
+    for (const n of [list[idx], list[idx + 1], list[idx - 1]]) if (n) prefetchClip(n.episodeId, n.start, n.end);
+  }, [id]);
+
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.closest?.("input, textarea, select, button")) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        step(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        step(1);
+      } else if (e.key === " " && w) {
+        e.preventDefault();
+        void playWord(w, true);
+      } else if (e.key.toLowerCase() === "w" && w) {
+        e.preventDefault();
+        speak(w.id, 0.85);
+      }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [step, w]);
+
+  if (!w) return null;
+  const due = dueLabel(w, Date.now());
+  const k = clipKey(w.episodeId, w.start, w.end);
+
+  const remove = async () => {
+    if (!(await ask(`从生词本删除「${w.id}」？复习记录会一起删除。`))) return;
+    const next = list[idx + 1] ?? list[idx - 1];
+    stopClip();
+    useWords.getState().remove(w.id);
+    useWordDetail.setState({ id: next && next.id !== w.id ? next.id : null });
+  };
+
+  return (
+    <LearnModal
+      title={w.id}
+      onClose={onClose}
+      head={
+        <div className="wd-nav">
+          <button
+            type="button"
+            className="icon-btn sm"
+            disabled={idx <= 0}
+            onClick={() => step(-1)}
+            title="上一个（←）"
+            aria-label="上一个"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="wd-num">{idx >= 0 ? `${idx + 1} / ${list.length}` : ""}</span>
+          <button
+            type="button"
+            className="icon-btn sm"
+            disabled={idx < 0 || idx >= list.length - 1}
+            onClick={() => step(1)}
+            title="下一个（→）"
+            aria-label="下一个"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      }
+    >
+      <div className="wd">
+        <div className="wd-head">
+          <span className="wd-word">{w.id}</span>
+          <button
+            type="button"
+            className="icon-btn sm rv-say"
+            title="读单词（W）"
+            aria-label="读单词"
+            onClick={() => speak(w.id, 0.85)}
+          >
+            <Volume2 size={16} />
+          </button>
+          {w.tag && <span className="pill">{w.tag}</span>}
+        </div>
+        {w.ipa && <p className="wc-ipa">/{w.ipa}/</p>}
+        {w.meaning ? <Meaning text={w.meaning} /> : <p className="wc-none muted small">词典里没有这个词</p>}
+        {w.ctx && (
+          <div className="wc-ctx">
+            <span className="wc-ctx-h">在这句里</span>
+            {w.ctx}
+          </div>
+        )}
+        <div className="wd-ex">
+          <span className="wd-h">原句</span>
+          <p className="wd-sent">
+            <Marked sentence={w.sentence} word={w.word} />
+          </p>
+          {w.sentenceZh && <p className="wd-zh">{w.sentenceZh}</p>}
+          <div className="wd-ex-foot">
+            <button type="button" className="btn sm play" onClick={() => void playWord(w, true)}>
+              <ClipLabel k={k} label="听原声" />
+              <span className="kbd">␣</span>
+            </button>
+            <button
+              type="button"
+              className="wd-src"
+              onClick={() => void openSource(w)}
+              title="打开这一集，从这句开始播放"
+            >
+              <span className="clamp1">{sourceOf(w)}</span>
+              <span className="wd-at">
+                {clock(w.start)}
+                <ArrowUpRight size={13} />
+              </span>
+            </button>
+          </div>
+        </div>
+        <div className="wd-foot">
+          <span className="muted small">
+            {w.card.reps ? `复习 ${w.card.reps} 次` : "还没复习过"}
+            {w.card.lapses > 0 && <> · 忘记 {w.card.lapses} 次</>}
+            {" · "}
+            {w.card.state === 0 ? "新词" : due.now ? "今天要复习" : `${fmtWait(w.card.due - Date.now())}后复习`}
+            {" · "}
+            {new Date(w.added).toLocaleDateString()} 加入
+          </span>
+          <button type="button" className="btn sm ghost danger" onClick={() => void remove()}>
+            <Trash2 size={13} />
+            删除
+          </button>
+        </div>
+      </div>
+    </LearnModal>
+  );
+}
+
 export function WordsView() {
   useLearnOn();
   const { words, loaded, day, newToday } = useWords(
@@ -277,12 +819,17 @@ export function WordsView() {
   const dailyNew = useStore((s) => s.settings.learnDaily);
   const on = useStore((s) => s.settings.learnOn);
   const set = useStore((s) => s.set);
+  const detail = useWordDetail((s) => s.id);
   const [filter, setFilter] = useState<Filter>("due");
+  const [query, setQuery] = useState("");
   const [reviewing, setReviewing] = useState(false);
 
   useEffect(() => {
     void useWords.getState().load();
-    return () => stopClip();
+    return () => {
+      stopClip();
+      useWordDetail.setState({ id: null });
+    };
   }, []);
 
   const now = Date.now();
@@ -297,7 +844,18 @@ export function WordsView() {
     for (const w of queue.slice(0, 4)) prefetchClip(w.episodeId, w.start, w.end);
   }, [queue]);
 
-  const shown = filter === "due" ? queue : filter === "mastered" ? mastered : all;
+  const q = query.trim().toLowerCase();
+  const listed = filter === "due" ? queue : filter === "mastered" ? mastered : all;
+  const shown = q
+    ? listed.filter((w) =>
+        [w.id, w.word, w.meaning, w.ctx ?? "", w.sentence, w.episodeTitle].some((x) => x.toLowerCase().includes(q)),
+      )
+    : listed;
+  const detailList = detail && shown.some((w) => w.id === detail) ? shown : all;
+  const closeDetail = useCallback(() => {
+    stopClip();
+    useWordDetail.setState({ id: null });
+  }, []);
 
   if (reviewing) return <Review queue={queue} onDone={() => setReviewing(false)} />;
 
@@ -337,69 +895,57 @@ export function WordsView() {
         />
       ) : (
         <>
-          <div className="chips left">
-            {(
-              [
-                ["due", "待复习", queue.length],
-                ["all", "全部", all.length],
-                ["mastered", "已掌握", mastered.length],
-              ] as const
-            ).map(([k, label, n]) => (
-              <button key={k} type="button" className={`chip ${filter === k ? "on" : ""}`} onClick={() => setFilter(k)}>
-                {label}
-                <span className="n">{n}</span>
-              </button>
-            ))}
+          <LearnStats onOpen={(id) => useWordDetail.setState({ id })} />
+          <div className="wb-bar">
+            <div className="chips left">
+              {(
+                [
+                  ["due", "待复习", queue.length],
+                  ["all", "全部", all.length],
+                  ["mastered", "已掌握", mastered.length],
+                ] as const
+              ).map(([k, label, n]) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`chip ${filter === k ? "on" : ""}`}
+                  onClick={() => setFilter(k)}
+                >
+                  {label}
+                  <span className="n">{n}</span>
+                </button>
+              ))}
+            </div>
+            {all.length > 6 && (
+              <label className="wb-search">
+                <Search size={13} />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="搜索单词、释义或例句"
+                  aria-label="搜索生词本"
+                />
+              </label>
+            )}
           </div>
           {!shown.length ? (
             <p className="muted small wb-none">
-              {filter === "due"
-                ? "今天没有要复习的词了。"
-                : "还没有掌握的词。连续答对，间隔超过 3 周就算掌握。"}
+              {q
+                ? `没有找到「${query.trim()}」`
+                : filter === "due"
+                  ? "今天没有要复习的词了。"
+                  : "还没有掌握的词。连续答对，间隔超过 3 周就算掌握。"}
             </p>
           ) : (
             <div className="wb-list">
-              {shown.map((w) => {
-                const due = dueLabel(w, now);
-                return (
-                  <div key={w.id} className="wb-item">
-                    <div className="wb-main">
-                      <div className="wb-l1">
-                        <span className="wb-w">{w.id}</span>
-                        {w.ipa && <span className="wb-ipa">/{w.ipa}/</span>}
-                        {w.tag && <span className="pill">{w.tag}</span>}
-                      </div>
-                      <p className="wb-d">{w.ctx || w.meaning.split("\n")[0]}</p>
-                      <p className="wb-src">
-                        <span className="clamp1">{w.showTitle || w.episodeTitle}</span>
-                        <button
-                          type="button"
-                          className="ts-link"
-                          onClick={() => void playWord(w)}
-                          title="播放原句"
-                        >
-                          <ClipIcon k={clipKey(w.episodeId, w.start, w.end)} size={10} />
-                          {clock(w.start)}
-                        </button>
-                      </p>
-                    </div>
-                    <span className={`due ${due.now ? "now" : ""}`}>{due.text}</span>
-                    <button
-                      type="button"
-                      className="icon-btn sm wb-del"
-                      title="从生词本删除"
-                      aria-label="从生词本删除"
-                      onClick={() => useWords.getState().remove(w.id)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                );
-              })}
+              {shown.map((w) => (
+                <WordRow key={w.id} w={w} now={now} />
+              ))}
             </div>
           )}
         </>
       )}
+      {detail && <WordDetail id={detail} list={detailList} onClose={closeDetail} />}
     </div>
   );
 }
