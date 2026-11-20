@@ -7,10 +7,10 @@ main.tsx: React 挂载入口
 store.ts: Zustand；openEpisode 只导航；load 用 initialAudioOnly；init 并行拉离线清单后 ready
 styles.css: 暖纸底 + 橙强调；yt-dock（舞台 z>dock 透出）；theater；mini；单集右四 Tab / 叠字幕
 lib/media.ts: preferAudio / initialAudioOnly（断网已下载 YouTube→仅音频）/ usesAudioEngine / usesYtEngine
-lib/audioHost.ts: 单例 Audio；立刻 play；播中不抢切源、暂停再切本地；远程续听延后 seek
+lib/audioHost.ts: 单例 Audio；立刻 play；播中不抢切源；本地 asset 失败回退远端；续听延后 seek
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
 lib/playback.ts: track/flush、waiting（20s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
-lib/offline.ts: 离线下载；audioSrc 本地优先；小宇宙 dts-api→xyzcdn；清单 store.init 预拉
+lib/offline.ts: 离线下载；audioSrc 本地优先 / remoteAudioSrc 回退；清单 store.init 预拉
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed

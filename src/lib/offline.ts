@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.downloadEpisode / listDownloads / deleteDownload；event offline
- * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、downloadEpisode、cancelDownload、removeDownload、bytes
- * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链；清单在 store.init 预拉
+ * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、remoteAudioSrc、isLocalAssetSrc、downloadEpisode、cancelDownload、removeDownload、bytes
+ * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链；清单在 store.init 预拉；本地 asset 失败可回退远端
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -72,8 +72,18 @@ export function canonicalAudioUrl(url: string): string {
 export function audioSrc(ep: Episode): string | undefined {
   const saved = useOffline.getState().saved[ep.id];
   if (saved) return convertFileSrc(saved.path);
+  return remoteAudioSrc(ep);
+}
+
+/** 仅远端音轨（本地 asset 失败时回退用）。 */
+export function remoteAudioSrc(ep: Episode): string | undefined {
   if (!ep.audioUrl) return undefined;
   return canonicalAudioUrl(ep.audioUrl);
+}
+
+/** convertFileSrc 产出的 asset URL（含 asset.localhost）。 */
+export function isLocalAssetSrc(src: string): boolean {
+  return /^(asset:|https?:\/\/asset\.localhost)/i.test(src) || src.includes("asset.localhost");
 }
 
 export async function downloadEpisode(ep: Episode) {

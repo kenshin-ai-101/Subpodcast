@@ -1,12 +1,12 @@
 /**
- * [INPUT]: Episode、offline.audioSrc / isSaved、store、playback、volume
+ * [INPUT]: Episode、offline.audioSrc / remoteAudioSrc / isLocalAssetSrc / isSaved、store、playback、volume
  * [OUTPUT]: prepareAudio / pauseAudioHost / releaseAudioHost / getAudioEl / recoverStuckPlay
- * [POS]: 单例 Audio；立刻 play（大 m4a 不等 canplay）；续听延后 seek；同集不重绑；播中不抢切源、暂停再切本地
+ * [POS]: 单例 Audio；立刻 play；播中不抢切源、暂停再切本地；本地 asset 失败回退远端
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Episode } from "./api";
 import { noteListening } from "./listening";
-import { audioSrc, isSaved } from "./offline";
+import { audioSrc, isLocalAssetSrc, isSaved, remoteAudioSrc } from "./offline";
 import { flushProgress, resetTrackSave, track, waiting } from "./playback";
 import { followVolume } from "./volume";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
@@ -22,6 +22,10 @@ let playGen = 0;
 /** 超长单集：先出声再跳进度，避免 moov+中段 Range 堵死首播 */
 let pendingSeek: number | null = null;
 let recoverCount = 0;
+/** prepare / adopt 改 src 时抑制 pause→adopt 重入 */
+let mutedSrcSwap = false;
+/** 本集已从本地 asset 回退过远端，避免死循环 */
+let fellBackRemoteFor: string | null = null;
 
 function resolveHref(src: string): string {
   try {
@@ -34,6 +38,16 @@ function resolveHref(src: string): string {
 function sameSrc(a: string, b: string): boolean {
   if (a === b) return true;
   return resolveHref(a) === resolveHref(b);
+}
+
+function assignSrc(a: HTMLAudioElement, src: string) {
+  mutedSrcSwap = true;
+  try {
+    a.src = src;
+  } finally {
+    mutedSrcSwap = false;
+  }
+  boundSrc = src;
 }
 
 export function getAudioEl(): HTMLAudioElement {
@@ -64,37 +78,48 @@ function applyPendingSeek(a: HTMLAudioElement) {
 }
 
 /**
+ * 本地 asset 播不了（协议 scope / 文件损坏）时改挂远端 enclosure。
+ * 返回 true 表示已换源并重新 play。
+ */
+function fallbackToRemote(a: HTMLAudioElement): boolean {
+  const cur = useStore.getState().current;
+  if (!cur || epId !== cur.id) return false;
+  if (fellBackRemoteFor === cur.id) return false;
+  if (!boundSrc || !isLocalAssetSrc(boundSrc)) return false;
+  const remote = remoteAudioSrc(cur);
+  if (!remote || sameSrc(boundSrc, remote)) return false;
+
+  fellBackRemoteFor = cur.id;
+  const time = useStore.getState().time || a.currentTime || cur.progress || 0;
+  assignSrc(a, remote);
+  if (time > 0.5) pendingSeek = time;
+  playNow(a);
+  return true;
+}
+
+/**
  * 下载完成于暂停态：切到本地文件并保住进度（对齐 Subcast：播中不切，停了再切）。
  */
 function adoptLocalIfReady() {
+  if (mutedSrcSwap) return;
   const a = el;
   const cur = useStore.getState().current;
   if (!a || !cur || epId !== cur.id) return;
   if (!isSaved(cur.id)) return;
+  // 本集本地刚失败过：本会话不再抢回 asset
+  if (fellBackRemoteFor === cur.id) return;
   const next = audioSrc(cur);
   if (!next || (boundSrc && sameSrc(boundSrc, next))) return;
 
   const time = a.currentTime;
-  a.src = next;
-  boundSrc = next;
-  const seek = () => {
-    try {
-      if (time > 0.5 && Number.isFinite(a.duration) && time < a.duration - 1) {
-        a.currentTime = time;
-      }
-    } catch {
-      pendingSeek = time;
-    }
-  };
-  if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
-  else a.addEventListener("loadedmetadata", seek, { once: true });
+  assignSrc(a, next);
+  if (time > 0.5) pendingSeek = time;
 }
 
 function wire(a: HTMLAudioElement) {
   if (wired) return;
   wired = true;
   a.addEventListener("play", () => {
-    // play 事件早于足够缓冲；仍缺数据时保持转圈
     useStore.getState().set({ playing: true });
     if (a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) waiting(true);
     else waiting(false);
@@ -103,14 +128,12 @@ function wire(a: HTMLAudioElement) {
     useStore.getState().set({ playing: false });
     const cur = useStore.getState().current;
     if (cur && epId === cur.id) flushProgress(cur, a.currentTime);
-    // 播中下完的离线包：停住这一拍再切本地，不打断听感
     adoptLocalIfReady();
   });
   a.addEventListener("waiting", () => waiting(true));
   a.addEventListener("playing", () => {
     waiting(false);
     recoverCount = 0;
-    // 首段已经出声后再跳续听点——大 m4a 的 moov 常 >1MB，先 seek 会空等
     applyPendingSeek(a);
   });
   a.addEventListener("timeupdate", () => {
@@ -132,6 +155,7 @@ function wire(a: HTMLAudioElement) {
   });
   a.addEventListener("error", () => {
     if (!epId || useStore.getState().current?.id !== epId) return;
+    if (fallbackToRemote(a)) return;
     failPlay("音频加载失败，可能是网络问题或地址已失效");
   });
 }
@@ -149,6 +173,7 @@ function playNow(a: HTMLAudioElement) {
   }).catch((err: DOMException) => {
     if (gen !== playGen) return;
     if (err?.name === "AbortError") return;
+    if (fallbackToRemote(a)) return;
     failPlay("音频暂时播不了，请再点一次或检查网络");
   });
 }
@@ -186,29 +211,9 @@ function bindHandle(a: HTMLAudioElement, id: string) {
   offVol = followVolume(a);
 }
 
-function scheduleSeek(a: HTMLAudioElement, src: string, time: number) {
-  const remote = /^https?:/i.test(src);
-  if (time > 5 && remote) {
-    pendingSeek = time;
-  } else if (time > 0.5) {
-    const seek = () => {
-      try {
-        if (Number.isFinite(a.duration) && time < a.duration - 1 && Math.abs(a.currentTime - time) > 0.75) {
-          a.currentTime = time;
-        }
-      } catch {
-        pendingSeek = time;
-      }
-    };
-    if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
-    else a.addEventListener("loadedmetadata", seek, { once: true });
-  }
-}
-
 /**
  * load 路径：换源 + preload + offer，不自动 play。
- * 续听进度 >5s：先挂 pendingSeek，等 playing 后再跳，缩短「点播放到出声」。
- * 同集正在播时：下载完成不换 src（播中不抢切源）；暂停后再 adopt。
+ * 同集正在播时：下载完成不换 src；暂停后再 adopt。
  */
 export function prepareAudio(ep: Episode): boolean {
   const src = audioSrc(ep);
@@ -226,6 +231,12 @@ export function prepareAudio(ep: Episode): boolean {
     return true;
   }
 
+  // 本集刚回退过远端：不要再被 audioSrc 的本地优先抢回去
+  if (epId === ep.id && fellBackRemoteFor === ep.id) {
+    const remote = remoteAudioSrc(ep);
+    if (remote && boundSrc && sameSrc(boundSrc, remote)) return true;
+  }
+
   const time = useStore.getState().current?.id === ep.id
     ? useStore.getState().time || ep.progress || 0
     : ep.progress || 0;
@@ -234,23 +245,26 @@ export function prepareAudio(ep: Episode): boolean {
   playGen += 1;
   recoverCount = 0;
   pendingSeek = null;
+  if (epId !== ep.id) fellBackRemoteFor = null;
 
-  const same = a.src === resolved || (a.src.length > 0 && (a.src === src || a.src.endsWith(src)));
-  if (!same) {
-    a.src = src;
-    boundSrc = src;
-  } else {
-    boundSrc = src;
-  }
+  const prefer =
+    fellBackRemoteFor === ep.id ? (remoteAudioSrc(ep) ?? src) : src;
+
+  const same = a.src === resolveHref(prefer)
+    || (a.src.length > 0 && (a.src === prefer || a.src.endsWith(prefer)));
+  if (!same) assignSrc(a, prefer);
+  else boundSrc = prefer;
+
   a.playbackRate = useStore.getState().rate;
   bindHandle(a, ep.id);
-  scheduleSeek(a, src, time);
+
+  if (time > 0.5) pendingSeek = time;
 
   return true;
 }
 
 /**
- * waiting 看门狗：静默再 play；多次仍卡住才轻提示（不要求用户「再点」）。
+ * waiting 看门狗：静默再 play；多次仍卡住才轻提示。
  */
 export function recoverStuckPlay() {
   const a = el;
@@ -261,9 +275,12 @@ export function recoverStuckPlay() {
     return;
   }
   recoverCount += 1;
-  // 中段 pending 太久：先保证片头能出声，playing 后再跳
   if (recoverCount >= 2 && pendingSeek != null && a.currentTime < 1) {
     /* 保持 pendingSeek，继续从 0 缓冲 */
+  }
+  // 本地一直卡住：试一次远端
+  if (recoverCount >= 2 && boundSrc && isLocalAssetSrc(boundSrc) && fallbackToRemote(a)) {
+    return;
   }
   playNow(a);
   if (recoverCount >= 2) {
@@ -295,4 +312,5 @@ export function releaseAudioHost() {
   offVol = null;
   epId = null;
   boundSrc = null;
+  fellBackRemoteFor = null;
 }

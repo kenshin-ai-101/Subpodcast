@@ -12,7 +12,16 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$DATA/Subpodcast/downloads/**/*",
+          "$DATA/Subpodcast/clips/**/*",
+          "$APPDATA/downloads/**/*",
+          "$APPDATA/clips/**/*"
+        ]
+      }
     }
   },
   "bundle": {

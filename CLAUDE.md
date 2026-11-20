@@ -15,7 +15,7 @@ scripts/ — macos-sign-setup / macos-release（Developer ID + notarytool；凭�
 <config>
 package.json — 前端依赖与脚本（含 ts-fsrs、canvas-confetti、plugin-dialog）
 src-tauri/Cargo.toml — Rust 依赖（tiny_http、symphonia、whisper-rs）
-src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建；macOS 11.0 + hardenedRuntime + Entitlements.plist
+src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建；assetProtocol=$DATA/Subpodcast/downloads·clips；macOS 11.0 + hardenedRuntime + Entitlements.plist
 src-tauri/Entitlements.plist — 公证用 Hardened Runtime（JIT / unsigned-exec-mem / disable-library-validation）
 src-tauri/capabilities/default.json — 命令 ACL + remote http://localhost:14427–14446
 </config>
