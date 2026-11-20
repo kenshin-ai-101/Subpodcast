@@ -1,12 +1,12 @@
 /**
- * [INPUT]: Episode、offline.audioSrc、store、playback、volume
+ * [INPUT]: Episode、offline.audioSrc / isSaved、store、playback、volume
  * [OUTPUT]: prepareAudio / pauseAudioHost / releaseAudioHost / getAudioEl / recoverStuckPlay
- * [POS]: 单例 Audio；立刻 play（大 m4a 不等 canplay）；续听延后 seek；同集不重绑
+ * [POS]: 单例 Audio；立刻 play（大 m4a 不等 canplay）；续听延后 seek；同集不重绑；播中不抢切源、暂停再切本地
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Episode } from "./api";
 import { noteListening } from "./listening";
-import { audioSrc } from "./offline";
+import { audioSrc, isSaved } from "./offline";
 import { flushProgress, resetTrackSave, track, waiting } from "./playback";
 import { followVolume } from "./volume";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
@@ -22,6 +22,19 @@ let playGen = 0;
 /** 超长单集：先出声再跳进度，避免 moov+中段 Range 堵死首播 */
 let pendingSeek: number | null = null;
 let recoverCount = 0;
+
+function resolveHref(src: string): string {
+  try {
+    return new URL(src, window.location.href).href;
+  } catch {
+    return src;
+  }
+}
+
+function sameSrc(a: string, b: string): boolean {
+  if (a === b) return true;
+  return resolveHref(a) === resolveHref(b);
+}
 
 export function getAudioEl(): HTMLAudioElement {
   if (!el) {
@@ -50,6 +63,33 @@ function applyPendingSeek(a: HTMLAudioElement) {
   }
 }
 
+/**
+ * 下载完成于暂停态：切到本地文件并保住进度（对齐 Subcast：播中不切，停了再切）。
+ */
+function adoptLocalIfReady() {
+  const a = el;
+  const cur = useStore.getState().current;
+  if (!a || !cur || epId !== cur.id) return;
+  if (!isSaved(cur.id)) return;
+  const next = audioSrc(cur);
+  if (!next || (boundSrc && sameSrc(boundSrc, next))) return;
+
+  const time = a.currentTime;
+  a.src = next;
+  boundSrc = next;
+  const seek = () => {
+    try {
+      if (time > 0.5 && Number.isFinite(a.duration) && time < a.duration - 1) {
+        a.currentTime = time;
+      }
+    } catch {
+      pendingSeek = time;
+    }
+  };
+  if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
+  else a.addEventListener("loadedmetadata", seek, { once: true });
+}
+
 function wire(a: HTMLAudioElement) {
   if (wired) return;
   wired = true;
@@ -63,6 +103,8 @@ function wire(a: HTMLAudioElement) {
     useStore.getState().set({ playing: false });
     const cur = useStore.getState().current;
     if (cur && epId === cur.id) flushProgress(cur, a.currentTime);
+    // 播中下完的离线包：停住这一拍再切本地，不打断听感
+    adoptLocalIfReady();
   });
   a.addEventListener("waiting", () => waiting(true));
   a.addEventListener("playing", () => {
@@ -144,24 +186,43 @@ function bindHandle(a: HTMLAudioElement, id: string) {
   offVol = followVolume(a);
 }
 
+function scheduleSeek(a: HTMLAudioElement, src: string, time: number) {
+  const remote = /^https?:/i.test(src);
+  if (time > 5 && remote) {
+    pendingSeek = time;
+  } else if (time > 0.5) {
+    const seek = () => {
+      try {
+        if (Number.isFinite(a.duration) && time < a.duration - 1 && Math.abs(a.currentTime - time) > 0.75) {
+          a.currentTime = time;
+        }
+      } catch {
+        pendingSeek = time;
+      }
+    };
+    if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
+    else a.addEventListener("loadedmetadata", seek, { once: true });
+  }
+}
+
 /**
  * load 路径：换源 + preload + offer，不自动 play。
  * 续听进度 >5s：先挂 pendingSeek，等 playing 后再跳，缩短「点播放到出声」。
+ * 同集正在播时：下载完成不换 src（播中不抢切源）；暂停后再 adopt。
  */
 export function prepareAudio(ep: Episode): boolean {
   const src = audioSrc(ep);
   if (!src) return false;
 
   const a = getAudioEl();
-  const resolved = (() => {
-    try {
-      return new URL(src, window.location.href).href;
-    } catch {
-      return src;
-    }
-  })();
+  const resolved = resolveHref(src);
 
-  if (epId === ep.id && handle && boundSrc && (boundSrc === src || boundSrc === resolved || a.src === resolved)) {
+  if (epId === ep.id && handle && boundSrc && (sameSrc(boundSrc, src) || a.src === resolved)) {
+    return true;
+  }
+
+  // 播中：远端 → 本地不打断；停住后再切
+  if (epId === ep.id && handle && boundSrc && !a.paused && !sameSrc(boundSrc, src)) {
     return true;
   }
 
@@ -183,24 +244,7 @@ export function prepareAudio(ep: Episode): boolean {
   }
   a.playbackRate = useStore.getState().rate;
   bindHandle(a, ep.id);
-
-  // 本地文件 / 短偏移：metadata 后立刻 seek；远程长续听延到出声后
-  const remote = /^https?:/i.test(src);
-  if (time > 5 && remote) {
-    pendingSeek = time;
-  } else if (time > 0.5) {
-    const seek = () => {
-      try {
-        if (Number.isFinite(a.duration) && time < a.duration - 1 && Math.abs(a.currentTime - time) > 0.75) {
-          a.currentTime = time;
-        }
-      } catch {
-        pendingSeek = time;
-      }
-    };
-    if (a.readyState >= HTMLMediaElement.HAVE_METADATA) seek();
-    else a.addEventListener("loadedmetadata", seek, { once: true });
-  }
+  scheduleSeek(a, src, time);
 
   return true;
 }

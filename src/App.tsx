@@ -1,5 +1,5 @@
 /**
- * [INPUT]: store、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；PlayerBar.toggleTheater；library / listening
+ * [INPUT]: store（init 已拉离线清单）、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；PlayerBar.toggleTheater；library / listening
  * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由；F 全屏
  * [POS]: 前端根组件；音/视频引擎 + MiniPlayer 常驻；mount 时挂 playWhenReady 订阅（禁模块顶层）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -11,7 +11,6 @@ import { SIDEBAR, useLayout } from "./lib/layout";
 import { useReadingSettings } from "./lib/reading";
 import { loadFavorites } from "./lib/library";
 import { flushListening, noteListening } from "./lib/listening";
-import { loadDownloads } from "./lib/offline";
 import { armPlayerIntentListener } from "./lib/playback";
 import { comboOf, keymap } from "./lib/shortcuts";
 import { loadYouTube } from "./lib/youtube";
@@ -46,7 +45,6 @@ export default function App() {
   useEffect(() => {
     void init().then(() => {
       loadFavorites();
-      void loadDownloads();
       // 预热 iframe API，视频首点少等一轮脚本
       void loadYouTube().catch(() => {});
       window.setTimeout(() => void remindReview(), 4000);

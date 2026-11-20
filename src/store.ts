@@ -1,13 +1,14 @@
 /**
- * [INPUT]: api、settings、media.preferAudio、audioHost / ytKick
+ * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytKick、offline.loadDownloads
  * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly、theater）；offerPlayer
- * [POS]: view 与 current 正交；openEpisode 只导航；load 只装载+预缓冲
+ * [POS]: view 与 current 正交；openEpisode 只导航；load 只装载+预缓冲；init 先拉离线清单再 ready
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
 import { api, type Episode, type Show } from "./lib/api";
 import { prepareAudio, pauseAudioHost, releaseAudioHost } from "./lib/audioHost";
-import { preferAudio, usesAudioEngine, usesYtEngine } from "./lib/media";
+import { initialAudioOnly, usesAudioEngine, usesYtEngine } from "./lib/media";
+import { loadDownloads } from "./lib/offline";
 import { DEFAULTS, loadSettings, saveSettings, type Settings, type SettingsSection } from "./lib/settings";
 import { kickYoutube } from "./lib/ytKick";
 
@@ -111,7 +112,10 @@ export const useStore = create<State>((set, get) => ({
   addOpen: false,
   addTab: "search",
   async init() {
+    // 离线清单与 shows 并行：ready 前 isSaved 已可信，断网 YouTube 才能正确仅音频
+    const downloadsP = loadDownloads();
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
+    await downloadsP;
     set({ settings, shows, ready: true, rate: settings.playbackRate ?? 1 });
   },
   go(view) {
@@ -159,7 +163,7 @@ export const useStore = create<State>((set, get) => ({
       });
       return;
     }
-    const audioOnly = preferAudio(ep);
+    const audioOnly = initialAudioOnly(ep);
     const keep =
       get().player?.episodeId === ep.id ? get().player : null;
     set({

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.downloadEpisode / listDownloads / deleteDownload；event offline
  * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、downloadEpisode、cancelDownload、removeDownload、bytes
- * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链
+ * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链；清单在 store.init 预拉
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { convertFileSrc } from "@tauri-apps/api/core";

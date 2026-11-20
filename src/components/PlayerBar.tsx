@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 页内 episode；store.current / time / audioOnly / playing / theater；jobs；offline；YtEngine.VideoSlot
+ * [INPUT]: 页内 episode；store.current / time / audioOnly / playing / theater；jobs；offline；media.initialAudioOnly；YtEngine.VideoSlot
  * [OUTPUT]: 媒体切换 + 封面舞台 / 视频槽（双击·角标·F 进 theater）+ Controls；toggleTheater
  * [POS]: 单集左栏播控；页 episode 与 store.current 正交——别人在播时本页可先看，点播放再接管
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -23,7 +23,7 @@ import type { Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { useJobs } from "../lib/jobs";
 import { prepareAudio, pauseAudioHost, releaseAudioHost } from "../lib/audioHost";
-import { preferAudio } from "../lib/media";
+import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
 import { activeIndex, flushProgress, playSoon } from "../lib/playback";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
@@ -143,8 +143,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const videoId = source.videoId ?? undefined;
   const canVideo = !!videoId;
   const hasFile = !!audioSrc(source) || !!saved;
-  // 浏览他集时用本集默认形态展示，不借用正在播那集的 audioOnly
-  const pageAudioOnly = live ? audioOnly : preferAudio(source);
+  // 浏览他集时用本集默认形态展示，不借用正在播那集的 audioOnly；断网已下载 YouTube 显示音频台
+  const pageAudioOnly = live ? audioOnly : initialAudioOnly(source);
   const showVideo = canVideo && !pageAudioOnly;
   const shownTime = live ? time : source.progress || 0;
   const shownLength = live ? length || source.duration || 0 : source.duration || 0;
