@@ -5,7 +5,7 @@
 App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / 离线 / remindReview
 main.tsx: React 挂载入口
 store.ts: Zustand；openEpisode 只导航；load 装载+预缓冲；playWhenReady 按集
-styles.css: 暖纸底 + 橙强调；yt-dock；mini 迷你条；单集右四 Tab / 叠字幕
+styles.css: 暖纸底 + 橙强调；yt-dock（舞台 z>dock 透出）；theater；mini；单集右四 Tab / 叠字幕
 lib/media.ts: preferAudio / usesAudioEngine / usesYtEngine — App 根引擎互斥
 lib/audioHost.ts: 单例 Audio；立刻 play；远程续听延后 seek；看门狗静默续命
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
@@ -60,15 +60,15 @@ components/Learn.tsx: 标词 / 词卡 / LearnTip / EmptyState·ClipIcon·ClipLab
 components/LearnPractice.tsx: 本期生词 / 跟读 / 听写
 components/LearnStats.tsx: 生词本统计卡 + 贡献热力（点天开词）
 components/WordsBook.tsx: 生词本列表 / 词详情（听原声可暂停）/ 回想·拼写复习 / Anki·CSV / remindReview
-components/LearnModal.tsx: 学英语小对话框（可选 head 导航）
+components/LearnModal.tsx: 学英语小对话框（portal 到 body；可选 head / foot 钉底）
 components/LocalAsrSettings.tsx: 本机 Qwen3/Whisper
 components/ReadingSettings.tsx: 阅读预览与字号/字体
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio 预缓冲
-components/YtEngine.tsx: App 根持久 iframe + VideoSlot；loadVideoById 换片
+components/YtEngine.tsx: App 根持久 iframe + VideoSlot；loadVideoById 换片；theater-host 抬 z-index
 components/MiniPlayer.tsx: 非单集页音频迷你条
-components/PlayerBar.tsx: 绑页内 episode；live 时控 current，非 live 点播放 load+playSoon；视频盾点击 toggle
+components/PlayerBar.tsx: 绑页内 episode；live 时控 current；视频双击/角标/F→theater；toggleTheater
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
 components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出 MD·PDF / 学英语标词词卡 / 实时识别行 + YouTube 语言切换 + 行列表

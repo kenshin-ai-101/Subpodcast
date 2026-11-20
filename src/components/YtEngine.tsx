@@ -1,7 +1,7 @@
 /**
- * [INPUT]: store.current / audioOnly / playWhenReady / rate；media.usesYtEngine；youtube / playback / volume
+ * [INPUT]: store.current / audioOnly / playWhenReady / rate / theater；media.usesYtEngine；youtube / playback / volume
  * [OUTPUT]: VideoSlot + YtEngine（App 根持久 iframe）；useYtUi.error
- * [POS]: load() 后立刻建/换片，不堵在 EpisodeView；槽位就位后 CSS 贴合，不搬 DOM
+ * [POS]: load() 后立刻建/换片，不堵在 EpisodeView；槽位就位后 CSS 贴合，不搬 DOM；theater 时抬高 z-index
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef } from "react";
@@ -48,12 +48,13 @@ function fallbackToAudio() {
 }
 
 export function YtEngine() {
-  const { current, audioOnly, playWhenReady, rate } = useStore(
+  const { current, audioOnly, playWhenReady, rate, theater } = useStore(
     useShallow((s) => ({
       current: s.current,
       audioOnly: s.audioOnly,
       playWhenReady: s.playWhenReady,
       rate: s.rate,
+      theater: s.theater,
     })),
   );
   const slotEl = useSlot((s) => s.el);
@@ -126,7 +127,7 @@ export function YtEngine() {
     offerPlayer(handle);
   };
 
-  // 贴合槽位；无槽 / 仅音频壳 → 屏外继续播
+  // 贴合槽位；无槽 / 仅音频壳 → 屏外继续播；theater 抬高以压在背板之上、叠层之下
   useEffect(() => {
     const box = boxRef.current;
     if (!box || !active) return;
@@ -139,10 +140,11 @@ export function YtEngine() {
     let last = "";
     const tick = () => {
       const r = slotEl.getBoundingClientRect();
-      const key = `${r.left},${r.top},${r.width},${r.height}`;
+      const host = theater ? " theater-host" : "";
+      const key = `${r.left},${r.top},${r.width},${r.height},${host}`;
       if (key !== last) {
         last = key;
-        box.className = "yt-dock docked";
+        box.className = `yt-dock docked${host}`;
         Object.assign(box.style, {
           left: `${r.left}px`,
           top: `${r.top}px`,
@@ -154,7 +156,7 @@ export function YtEngine() {
     };
     tick();
     return () => cancelAnimationFrame(raf);
-  }, [active, slotEl, shell, videoId]);
+  }, [active, slotEl, shell, videoId, theater]);
 
   // 失活：暂停并交权，保留 iframe 供下次秒切
   useEffect(() => {
@@ -373,9 +375,10 @@ export function YtEngine() {
 
   // 始终保留挂载点，失活只藏起——iframe 才能跨集 / 音视频切换复用
   const mode = !active ? "offscreen" : shell || !slotEl ? (shell ? "shell" : "offscreen") : "docked";
+  const theaterHost = mode === "docked" && theater ? " theater-host" : "";
 
   return (
-    <div ref={boxRef} className={`yt-dock ${mode}`} aria-hidden={!active}>
+    <div ref={boxRef} className={`yt-dock ${mode}${theaterHost}`} aria-hidden={!active}>
       <div className="yt-mount" ref={hostRef} />
     </div>
   );

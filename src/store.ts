@@ -1,6 +1,6 @@
 /**
  * [INPUT]: api、settings、media.preferAudio、audioHost / ytKick
- * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly）；offerPlayer
+ * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly、theater）；offerPlayer
  * [POS]: view 与 current 正交；openEpisode 只导航；load 只装载+预缓冲
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -62,6 +62,8 @@ interface State {
   seekWhenReady: { id: string; at: number } | null;
   /** true=仅音频引擎；false=视频（YouTube）。有音轨时默认 true。 */
   audioOnly: boolean;
+  /** 视频 theater 全屏（布局级，非 element Fullscreen API） */
+  theater: boolean;
   /** 导读/精读朗读中 */
   speaking: boolean;
   player: PlayerHandle | null;
@@ -100,6 +102,7 @@ export const useStore = create<State>((set, get) => ({
   playWhenReady: null,
   seekWhenReady: null,
   audioOnly: true,
+  theater: false,
   speaking: false,
   player: null,
   toast: null,

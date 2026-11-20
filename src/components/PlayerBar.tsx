@@ -1,12 +1,24 @@
 /**
- * [INPUT]: 页内 episode；store.current / time / audioOnly / playing；jobs；offline；YtEngine.VideoSlot
- * [OUTPUT]: 媒体切换 + 封面舞台 / 视频槽 + Controls（引擎在 App 根）
+ * [INPUT]: 页内 episode；store.current / time / audioOnly / playing / theater；jobs；offline；YtEngine.VideoSlot
+ * [OUTPUT]: 媒体切换 + 封面舞台 / 视频槽（双击·角标·F 进 theater）+ Controls；toggleTheater
  * [POS]: 单集左栏播控；页 episode 与 store.current 正交——别人在播时本页可先看，点播放再接管
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Loader2, Pause, Play, RotateCcw, RotateCw, Volume1, Volume2, VolumeX } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Pause,
+  Play,
+  RotateCcw,
+  RotateCw,
+  Volume1,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import type { Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { useJobs } from "../lib/jobs";
@@ -21,6 +33,16 @@ import { SubtitleOverlay } from "./SubtitleOverlay";
 import { useYtUi, VideoSlot } from "./YtEngine";
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+
+/** 视频全屏：布局 theater + 窗口全屏。macOS WebView 不启用 element Fullscreen API。 */
+export function toggleTheater(on?: boolean) {
+  const s = useStore.getState();
+  const next = on ?? !s.theater;
+  if (next && !document.querySelector(".video")) return false;
+  s.set({ theater: next });
+  void getCurrentWindow().setFullscreen(next).catch(() => {});
+  return true;
+}
 
 function VolumeControl() {
   const { level, muted } = useVolume(useShallow((s) => ({ level: s.level, muted: s.muted })));
@@ -43,25 +65,27 @@ function VolumeControl() {
       >
         <Icon size={17} />
       </button>
-      <input
-        className="seek volume-slider"
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={shown}
-        onChange={(e) => setLevel(Number(e.target.value))}
-        style={{ "--fill": `${pct}%` } as React.CSSProperties}
-        aria-label="音量"
-        aria-valuetext={`${pct}%`}
-        title={`音量 ${pct}%`}
-      />
+      <div className="volume-popup">
+        <input
+          className="seek volume-slider"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={shown}
+          onChange={(e) => setLevel(Number(e.target.value))}
+          style={{ "--fill": `${pct}%` } as React.CSSProperties}
+          aria-label="音量"
+          aria-valuetext={`${pct}%`}
+          title={`音量 ${pct}%`}
+        />
+      </div>
     </div>
   );
 }
 
 export function PlayerBar({ episode }: { episode: Episode }) {
-  const { current, time, length, playing, rate, audioOnly, loadingSince, set } = useStore(
+  const { current, time, length, playing, rate, audioOnly, loadingSince, theater, set } = useStore(
     useShallow((s) => ({
       current: s.current,
       time: s.time,
@@ -70,6 +94,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       rate: s.rate,
       audioOnly: s.audioOnly,
       loadingSince: s.loadingSince,
+      theater: s.theater,
       set: s.set,
     })),
   );
@@ -81,6 +106,25 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const nextLine = useStore((s) => s.settings.audioNextLine === true);
   const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
+
+  // 离开视频舞台时收起 theater（切仅音频 / 离页卸载）
+  useEffect(() => {
+    return () => {
+      if (useStore.getState().theater) toggleTheater(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!theater) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        toggleTheater(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [theater]);
 
   useEffect(() => {
     setSource((prev) => {
@@ -123,6 +167,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
 
   const switchTo = (audio: boolean, why?: string) => {
     if (!canVideo || !live || audio === audioOnly) return;
+    if (audio && useStore.getState().theater) toggleTheater(false);
     const s = useStore.getState();
     const t = s.time;
     flushProgress(source, t);
@@ -188,27 +233,43 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       )}
 
       {showVideo && live && (
-        <div className="video">
-          <VideoSlot />
-          <button
-            type="button"
-            className="yt-shield"
-            aria-label={shownPlaying ? "暂停" : "播放"}
-            title={shownPlaying ? "暂停" : "播放"}
-            onClick={playToggle}
-          />
-          {!shownPlaying && !busy && (
-            <span className="yt-center-play" aria-hidden>
-              <Play size={36} fill="currentColor" />
-            </span>
-          )}
-          <SubtitleOverlay episodeId={episode.id} />
-          {ytError && !hasFile && (
-            <div className="yt-fallback">
-              <p>{ytError}</p>
-            </div>
-          )}
-        </div>
+        <>
+          {theater && <div className="theater-backdrop" aria-hidden />}
+          <div className={`video${theater ? " theater" : ""}`}>
+            <VideoSlot />
+            <button
+              type="button"
+              className="yt-shield"
+              aria-label={shownPlaying ? "暂停" : "播放"}
+              title={shownPlaying ? "暂停" : "播放"}
+              onClick={playToggle}
+              onDoubleClick={() => toggleTheater()}
+            />
+            {!shownPlaying && !busy && (
+              <span className="yt-center-play" aria-hidden>
+                <Play size={36} fill="currentColor" />
+              </span>
+            )}
+            <SubtitleOverlay episodeId={episode.id} />
+            <button
+              type="button"
+              className="yt-fs-btn"
+              title={theater ? "退出全屏（Esc）" : "全屏（双击或 F）"}
+              aria-label={theater ? "退出全屏" : "全屏"}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleTheater();
+              }}
+            >
+              {theater ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+            {ytError && !hasFile && (
+              <div className="yt-fallback">
+                <p>{ytError}</p>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {(!showVideo || !live) && (

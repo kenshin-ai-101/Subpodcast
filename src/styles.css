@@ -504,12 +504,13 @@ body.resizing video { pointer-events: none; }
   align-self: center;
 }
 .ep-left > .media-switch-row {
+  position: relative;
+  z-index: 32;
   width: min(100%, calc((100vh - 330px) * 16 / 9));
   align-self: center;
   display: flex;
   justify-content: flex-end;
   margin-bottom: -6px;
-  z-index: 1;
 }
 .ep-left > .controls,
 .ep-left > .ep-title-block,
@@ -570,10 +571,28 @@ body.resizing video { pointer-events: none; }
 .tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 .media-switch-row .media-switch { flex: none; }
+/* 舞台透明并压在 yt-dock 之上：iframe 从下方透出，角标/字幕/音量弹层不被遮 */
 .video {
-  position: relative; width: 100%; aspect-ratio: 16 / 9;
-  background: #000; border-radius: 12px; overflow: hidden; flex: none;
+  position: relative; z-index: 31; width: 100%; aspect-ratio: 16 / 9;
+  background: transparent; border-radius: 12px; overflow: hidden; flex: none;
 }
+/* theater：透明舞台压在 dock 之上，背板垫黑；叠字幕/角标不被 iframe 盖住 */
+.theater-backdrop {
+  position: fixed; inset: 0; z-index: 399; background: #000;
+}
+.video.theater {
+  position: fixed; inset: 0; z-index: 401;
+  width: 100vw; height: 100vh; aspect-ratio: auto;
+  border-radius: 0; background: transparent;
+}
+.video.theater .yt-slot {
+  inset: auto; left: 50%; top: 50%;
+  width: min(100vw, 177.78vh); height: min(56.25vw, 100vh);
+  transform: translate(-50%, -50%);
+}
+.video.theater .subtitle-overlay { bottom: 9vh; left: 8vw; right: 8vw; }
+.video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(22px, 2.6vw, 40px) * var(--sub-scale, 1)); }
+.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(16px, 1.8vw, 28px) * var(--sub-scale, 1)); }
 /* App 根 YT 引擎：贴合 VideoSlot，或屏外/壳模式继续播 */
 .yt-dock {
   position: fixed;
@@ -585,6 +604,10 @@ body.resizing video { pointer-events: none; }
 }
 .yt-dock.docked {
   pointer-events: none;
+}
+.yt-dock.theater-host {
+  z-index: 400;
+  border-radius: 0;
 }
 .yt-dock.offscreen,
 .yt-dock.shell {
@@ -617,6 +640,16 @@ body.resizing video { pointer-events: none; }
   padding-left: 4px; pointer-events: none;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
 }
+.yt-fs-btn {
+  position: absolute; right: 10px; bottom: 10px; z-index: 5;
+  width: 36px; height: 36px; margin: 0; padding: 0; border: 0;
+  border-radius: 8px; display: grid; place-items: center;
+  background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+.yt-fs-btn:hover { background: rgba(0, 0, 0, 0.75); }
+.video.theater .yt-fs-btn { right: 16px; bottom: 16px; }
 .video .subtitle-overlay {
   position: absolute; left: 6%; right: 6%; bottom: 12%; z-index: 3;
   display: flex; flex-direction: column; align-items: center; pointer-events: none;
@@ -654,6 +687,7 @@ body.resizing video { pointer-events: none; }
 .audio-sub .sub-orig { font-size: 15px; color: var(--text-2); margin-top: 4px; }
 
 .controls {
+  position: relative; z-index: 32;
   display: flex; align-items: center; gap: 8px; padding: 8px 10px;
   border-radius: 12px; background: var(--panel); border: 1px solid var(--line);
 }
@@ -701,17 +735,59 @@ body.resizing video { pointer-events: none; }
 }
 .rate-btn:hover { background: var(--soft-hover); }
 .rate-btn.fast { color: var(--accent-text); }
-.volume { display: inline-flex; align-items: center; flex-shrink: 0; }
-.controls .volume .volume-slider {
-  flex: 0 0 auto; width: 0; min-width: 0; margin: 0; opacity: 0;
-  transition: width 0.18s ease, opacity 0.18s ease, margin 0.18s ease;
+.volume {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
 }
-.controls .volume:hover .volume-slider,
-.controls .volume:focus-within .volume-slider {
-  width: 72px; margin: 0 6px 0 2px; opacity: 1;
+/* 悬停桥：图标与上弹层之间不断开 :hover */
+.volume::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 100%;
+  height: 10px;
+}
+.volume-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  z-index: 33;
+  width: 34px;
+  height: 112px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  translate: -50% 6px;
+  transition: opacity 0.16s ease, visibility 0.16s ease, translate 0.16s ease;
+}
+.controls .volume:hover .volume-popup,
+.controls .volume:focus-within .volume-popup {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  translate: -50% 0;
+}
+.controls .volume .volume-slider {
+  flex: none;
+  width: 4px;
+  min-width: 0;
+  height: 88px;
+  margin: 0;
+  /* 竖向：低音在下、高音在上；fill 随 --fill 自下而上 */
+  writing-mode: vertical-lr;
+  direction: rtl;
+  background: linear-gradient(to top, var(--accent) var(--fill, 0%), var(--soft) var(--fill, 0%));
+  cursor: ns-resize;
 }
 @media (prefers-reduced-motion: reduce) {
-  .controls .volume .volume-slider { transition: none; }
+  .volume-popup { transition: none; }
 }
 
 .notes { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
@@ -1164,6 +1240,18 @@ button.track-pick span { max-width: 130px; overflow: hidden; text-overflow: elli
 }
 .modal-head h3 { flex: 1; font-size: 16px; font-weight: 650; }
 .modal-body { padding: 16px; max-height: min(70vh, 560px); overflow: auto; }
+/* 底栏钉在滚动区外：列表再长也不挡「取消 / 加入」 */
+.modal.has-foot {
+  display: flex; flex-direction: column;
+  max-height: min(80vh, 640px);
+}
+.modal.has-foot .modal-body {
+  flex: 1; min-height: 0; max-height: none; overflow: auto;
+}
+.modal.has-foot > .modal-foot {
+  flex: none; margin-top: 0; padding: 12px 16px 16px;
+  border-top: 1px solid var(--line); background: var(--panel);
+}
 .settings-modal-body { flex: 1; min-height: 0; max-height: none; padding: 0; overflow: hidden; display: flex; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .field label { font-size: 12px; color: var(--muted); }
@@ -1710,9 +1798,11 @@ label.check input { margin-top: 3px; }
 
 .ew-note { margin-bottom: 8px; }
 .ew-list {
-  display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto;
+  display: flex; flex-direction: column;
   overscroll-behavior: contain; margin: 0 -8px;
 }
+/* 无 has-foot 时仍限制列表高度；有底栏时交给 .modal-body 滚动 */
+.modal:not(.has-foot) .ew-list { max-height: 52vh; overflow-y: auto; }
 .ew-item {
   display: flex; align-items: center; gap: 10px; min-height: 40px;
   padding: 0 8px; border-radius: 8px; cursor: pointer; font-size: 13px;

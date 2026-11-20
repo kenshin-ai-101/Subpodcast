@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；library / listening
- * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由
+ * [INPUT]: store、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；PlayerBar.toggleTheater；library / listening
+ * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由；F 全屏
  * [POS]: 前端根组件；音/视频引擎 + MiniPlayer 常驻；mount 时挂 playWhenReady 订阅（禁模块顶层）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -24,6 +24,7 @@ import { DiscoverView } from "./components/DiscoverView";
 import { EpisodeView } from "./components/EpisodeView";
 import { HomeView } from "./components/HomeView";
 import { MiniPlayer } from "./components/MiniPlayer";
+import { toggleTheater } from "./components/PlayerBar";
 import { RecentView } from "./components/RecentView";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ShowView } from "./components/ShowView";
@@ -87,6 +88,12 @@ export default function App() {
           e.preventDefault();
           const l = useLayout.getState();
           l.put({ panelOpen: !l.panelOpen });
+          return;
+        }
+        // F：视频 theater 全屏（仅视频舞台存在时）
+        if (!typing && map.fullscreen.includes(combo) && document.querySelector(".video")) {
+          e.preventDefault();
+          toggleTheater();
           return;
         }
       }

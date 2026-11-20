@@ -1,5 +1,5 @@
 /**
- * [INPUT]: dict / words / clip / LearnModal / store
+ * [INPUT]: dict / words / clip / LearnModal（foot 钉底）/ store
  * [OUTPUT]: EpisodeWords、useShadowing、Dictation
  * [POS]: 英语学习 · 本期生词 / 跟读 / 听写
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -99,9 +99,25 @@ export function EpisodeWords({
   };
 
   const addCount = [...picked].filter((id) => !words[id]).length;
+  const ready = !!data && list.length > 0;
 
   return (
-    <LearnModal title="本期生词" onClose={onClose}>
+    <LearnModal
+      title="本期生词"
+      onClose={onClose}
+      foot={
+        ready ? (
+          <>
+            <button type="button" className="btn" onClick={onClose}>
+              取消
+            </button>
+            <button type="button" className="btn primary" disabled={!picked.size} onClick={addPicked}>
+              加入 {addCount} 个词
+            </button>
+          </>
+        ) : undefined
+      }
+    >
       {!data ? (
         <div className="panel-empty">
           <Loader2 className="spin" size={18} />
@@ -129,14 +145,6 @@ export function EpisodeWords({
                 </label>
               );
             })}
-          </div>
-          <div className="modal-foot">
-            <button type="button" className="btn" onClick={onClose}>
-              取消
-            </button>
-            <button type="button" className="btn primary" disabled={!picked.size} onClick={addPicked}>
-              加入 {addCount} 个词
-            </button>
           </div>
         </>
       )}
