@@ -1,7 +1,7 @@
 /**
  * [INPUT]: store.settings 的阅读相关字段；lib/fonts
- * [OUTPUT]: SUB_SCALE / SUB_FONTS、useReadingSettings（根节点 CSS 变量）
- * [POS]: 设置 › 字幕 的阅读项生效入口
+ * [OUTPUT]: SUB_SCALE / SUB_FONTS、useReadingSettings（根节点 --sub-scale / --chat-scale / --sub-font）
+ * [POS]: 设置 › 字幕 的阅读项生效入口；消费者为 styles.css 中视频叠字 / 音频台 / 字幕列表 / 预览
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect } from "react";

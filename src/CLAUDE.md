@@ -19,7 +19,7 @@ lib/dict.ts: 离线 ECDICT（/dict/en.json）；lookup / isNew / looksEnglish / 
 lib/words.ts: 生词本 FSRS（ts-fsrs）；blob learn/words；日学习 log / known；reviewQueue / toCsv
 lib/clip.ts: 句级原声 prepare/play/toggle/prefetch；useClipState（loading/playing）
 lib/sfx.ts: 拼写复习按键/对错/完成音效（受 learnSounds 控制）
-lib/reading.ts: 字幕/问答 CSS 变量
+lib/reading.ts: 字幕/问答 CSS 变量（--sub-scale 乘基准 px；列表/音频台/叠字共用）
 lib/fonts.ts: 字幕可选字体与按需加载
 lib/layout.ts: 侧栏/右栏几何（sideOpen → 72px 图标轨；localStorage）
 lib/shortcuts.ts: 快捷键注册表与录制校验

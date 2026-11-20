@@ -683,8 +683,8 @@ body.resizing video { pointer-events: none; }
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
 }
 .audio-sub { width: 100%; text-align: center; min-height: 64px; }
-.audio-sub .sub-zh { font-size: 20px; font-weight: 600; color: var(--text); }
-.audio-sub .sub-orig { font-size: 15px; color: var(--text-2); margin-top: 4px; }
+.audio-sub .sub-zh { font-size: calc(20px * var(--sub-scale, 1)); font-weight: 600; color: var(--text); }
+.audio-sub .sub-orig { font-size: calc(15px * var(--sub-scale, 1)); color: var(--text-2); margin-top: 4px; }
 
 .controls {
   position: relative; z-index: 32;
@@ -918,8 +918,8 @@ button.track-pick span { max-width: 130px; overflow: hidden; text-overflow: elli
 .line-time { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 3px; min-width: 38px; }
 .line.active .line-time { color: var(--accent); font-weight: 600; }
 .line-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.orig { color: var(--text-2); font-size: 14px; }
-.zh { color: var(--text); font-size: 15px; }
+.orig { color: var(--text-2); font-size: calc(14px * var(--sub-scale, 1)); }
+.zh { color: var(--text); font-size: calc(15px * var(--sub-scale, 1)); }
 .panel-empty {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 32px; text-align: center;
@@ -1522,7 +1522,11 @@ label.check input { margin-top: 3px; }
 .shortcut-note { display: flex; align-items: center; gap: 6px; width: 100%; color: var(--text-2); }
 
 .lines .line-text, .audio-sub p, .chat .msg { font-family: var(--sub-font, inherit); }
-.lines .zh, .audio-sub .sub-zh { font-size: calc(1em * var(--sub-scale, 1)); }
+/* 字号：基准 px × --sub-scale（禁 1em，em 指向父级会吞掉基准字号） */
+.lines .zh { font-size: calc(15px * var(--sub-scale, 1)); }
+.lines .orig { font-size: calc(14px * var(--sub-scale, 1)); }
+.audio-sub .sub-zh { font-size: calc(20px * var(--sub-scale, 1)); }
+.audio-sub .sub-orig { font-size: calc(15px * var(--sub-scale, 1)); }
 .chat { font-size: calc(14px * var(--chat-scale, 1)); }
 .video .subtitle-overlay p { font-family: var(--sub-font, inherit); }
 :root[data-sub-look="outline"] .video .subtitle-overlay p {
