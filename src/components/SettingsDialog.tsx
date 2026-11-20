@@ -646,7 +646,7 @@ export function SettingsDialog() {
                     <label>
                       <span>代理</span>
                       <div className="key-row">
-                        <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="留空就用系统代理" />
+                        <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="留空则直连；连不上再试系统代理" />
                         <button
                           type="button"
                           className="btn sm"

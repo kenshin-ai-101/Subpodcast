@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 model、rusqlite
- * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / dedupe_show_episodes；list_shows.episode_count
- * [POS]: 本机持久化唯一入口；刷新用 sync 删孤儿；详情列表按期号键去重合并进度；侧栏数量=入库单集总数
+ * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / dedupe_show_episodes；count_episodes / list_shows.episode_count
+ * [POS]: 本机持久化唯一入口；upsert_show 同步 kind/feed_url；刷新用 sync 删孤儿；侧栏数量=入库 COUNT（全量）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::*;
@@ -62,8 +62,8 @@ pub fn upsert_show(conn: &Connection, s: &Show) -> Result<()> {
     conn.execute(
         "INSERT INTO shows(id,kind,title,author,cover,feed_url,link,description,updated_at)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, author=excluded.author,
-         cover=COALESCE(excluded.cover, shows.cover), link=excluded.link,
+         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, title=excluded.title, author=excluded.author,
+         cover=COALESCE(excluded.cover, shows.cover), feed_url=excluded.feed_url, link=excluded.link,
          description=excluded.description, updated_at=excluded.updated_at",
         params![s.id, s.kind, s.title, s.author, s.cover, s.feed_url, s.link, s.description, s.updated_at],
     )?;
@@ -352,6 +352,14 @@ fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
 
 const EP_COLS: &str = "e.id,e.show_id,e.guid,e.title,e.published,e.duration,e.audio_url,e.video_id,e.link,e.cover,e.notes,e.transcript_url,e.transcript_type,e.deep,e.progress,
     EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id), s.title";
+
+pub fn count_episodes(conn: &Connection, show_id: &str) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM episodes WHERE show_id=?1",
+        [show_id],
+        |r| r.get(0),
+    )?)
+}
 
 pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Result<Vec<Episode>> {
     if let Some(sid) = show_id {

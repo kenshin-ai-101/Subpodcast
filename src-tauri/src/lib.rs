@@ -97,7 +97,11 @@ async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Show
     let resolved = feeds::resolve(&input).await.map_err(e)?;
     let mut conn = state.db.lock().map_err(e)?;
     db::upsert_show(&conn, &resolved.show).map_err(e)?;
-    db::sync_episodes(&mut conn, &resolved.show.id, &resolved.episodes).map_err(e)?;
+    if resolved.catalog_partial {
+        db::upsert_episodes(&mut conn, &resolved.episodes).map_err(e)?;
+    } else {
+        db::sync_episodes(&mut conn, &resolved.show.id, &resolved.episodes).map_err(e)?;
+    }
     Ok(resolved.show)
 }
 
@@ -107,19 +111,52 @@ async fn refresh_show(state: State<'_, AppState>, show_id: String) -> Res<u32> {
         let conn = state.db.lock().map_err(e)?;
         db::get_show(&conn, &show_id).map_err(e)?.ok_or_else(|| "节目不存在".to_string())?
     };
-    let resolved = feeds::refresh(&show.feed_url, &show.kind).await.map_err(e)?;
+    // slug 版 xyz / 半量 SSR：优先带上节目标题以便命中乔木精读全量；音频 URL 可反推 hex pid。
+    let feed_url = {
+        let mut feed = show.feed_url.clone();
+        if (show.kind == "xiaoyuzhou" || feeds::is_xyzfm(&feed))
+            && feeds::xiaoyuzhou_podcast_id(&feed).is_none()
+        {
+            let conn = state.db.lock().map_err(e)?;
+            let hints = db::list_episodes(&conn, Some(&show_id), 40).map_err(e)?;
+            'find_pid: for ep in hints {
+                for blob in [ep.audio_url.as_deref(), ep.link.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(pid) = feeds::xiaoyuzhou_podcast_id(blob) {
+                        feed = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
+                        break 'find_pid;
+                    }
+                }
+            }
+        }
+        feed
+    };
+    let resolved = feeds::refresh_with_title(&feed_url, &show.kind, &show.title)
+        .await
+        .map_err(e)?;
     let before = {
         let conn = state.db.lock().map_err(e)?;
-        db::list_episodes(&conn, Some(&show_id), 5000).map_err(e)?.len()
+        db::count_episodes(&conn, &show_id).map_err(e)?
     };
+    // 空目录同步会误删本地未听单集；小宇宙 HTML 壳失败时宁可报错。
+    if resolved.episodes.is_empty() && before > 0 {
+        return Err("刷新未拿到单集目录，已保留本地列表".into());
+    }
     let mut conn = state.db.lock().map_err(e)?;
     let mut show = resolved.show;
     show.id = show_id.clone();
     db::upsert_show(&conn, &show).map_err(e)?;
     let mut eps = resolved.episodes;
     feeds::rebind_episodes(&mut eps, &show_id);
-    db::sync_episodes(&mut conn, &show_id, &eps).map_err(e)?;
-    let after = db::list_episodes(&conn, Some(&show_id), 5000).map_err(e)?.len();
+    // 半量目录只合并，避免把本地已有旧集当孤儿删掉。
+    if resolved.catalog_partial {
+        db::upsert_episodes(&mut conn, &eps).map_err(e)?;
+    } else {
+        db::sync_episodes(&mut conn, &show_id, &eps).map_err(e)?;
+    }
+    let after = db::count_episodes(&conn, &show_id).map_err(e)?;
     Ok(after.saturating_sub(before) as u32)
 }
 
@@ -201,7 +238,8 @@ fn cached_show(state: State<'_, AppState>, input: String) -> Res<Option<Preview>
             .map_err(e)?
             .and_then(|t| t.parse().ok())
             .unwrap_or(0);
-        let episodes = db::list_episodes(&conn, Some(&show.id), feeds::MAX_EPISODES as i64).map_err(e)?;
+        let episodes =
+            db::list_episodes(&conn, Some(&show.id), feeds::LIST_EPISODES_CAP).map_err(e)?;
         if episodes.is_empty() {
             continue;
         }
@@ -220,7 +258,11 @@ async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview>
     let resolved = feeds::resolve(&input).await.map_err(e)?;
     let show = resolved.show;
     let mut conn = state.db.lock().map_err(e)?;
-    db::sync_episodes(&mut conn, &show.id, &resolved.episodes).map_err(e)?;
+    if resolved.catalog_partial {
+        db::upsert_episodes(&mut conn, &resolved.episodes).map_err(e)?;
+    } else {
+        db::sync_episodes(&mut conn, &show.id, &resolved.episodes).map_err(e)?;
+    }
     let now = now_ms();
     let json = serde_json::to_string(&show).map_err(e)?;
     let mut keys = cache_keys(&input);
@@ -231,7 +273,8 @@ async fn preview_show(state: State<'_, AppState>, input: String) -> Res<Preview>
         db::set_blob(&conn, &id, "show-json", &json).map_err(e)?;
         db::set_blob(&conn, &id, "fetched-at", &now.to_string()).map_err(e)?;
     }
-    let episodes = db::list_episodes(&conn, Some(&show.id), feeds::MAX_EPISODES as i64).map_err(e)?;
+    let episodes =
+        db::list_episodes(&conn, Some(&show.id), feeds::LIST_EPISODES_CAP).map_err(e)?;
     Ok(Preview {
         show,
         episodes,
@@ -1608,12 +1651,13 @@ pub fn run() {
     let _ = std::fs::create_dir_all(&dir);
     let db_path = dir.join("library.db");
     let conn = db::open(&db_path).expect("open db");
-    if let Ok(Some(raw)) = db::get_setting(&conn, "app") {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            let proxy = v.get("proxy").and_then(|x| x.as_str()).map(str::to_string);
-            let _ = net::set_proxy(proxy);
-        }
-    }
+    // 无论有无设置都初始化：留空 → 直连（禁用 reqwest 幽灵 system-proxy）
+    let startup_proxy = db::get_setting(&conn, "app")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("proxy").and_then(|x| x.as_str()).map(str::to_string));
+    let _ = net::set_proxy(startup_proxy);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

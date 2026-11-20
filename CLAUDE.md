@@ -8,13 +8,15 @@ Tauri 2 + React/TypeScript + Rust + SQLite
 <directory>
 src/ — WebView 前端（首页/发现/统计/生词本；view⊥current；playSoon 按集起播；MiniPlayer；字幕/ASR/导读/学英语）
 src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、收听统计、频道预览、翻译、LLM、SQLite、learn_clip/export_anki；发行版 localhost UI）
-docs/ — PRD / 架构 / 发布说明
+docs/ — PRD / 架构 / 发布说明（RELEASING：macOS 签名公证）
+scripts/ — macos-sign-setup / macos-release（Developer ID + notarytool；凭据在 release/）
 </directory>
 
 <config>
 package.json — 前端依赖与脚本（含 ts-fsrs、canvas-confetti、plugin-dialog）
 src-tauri/Cargo.toml — Rust 依赖（tiny_http、symphonia、whisper-rs）
-src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建
+src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建；macOS 11.0 + hardenedRuntime + Entitlements.plist
+src-tauri/Entitlements.plist — 公证用 Hardened Runtime（JIT / unsigned-exec-mem / disable-library-validation）
 src-tauri/capabilities/default.json — 命令 ACL + remote http://localhost:14427–14446
 </config>
 

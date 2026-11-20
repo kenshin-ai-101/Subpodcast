@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release:macos:setup": "bash scripts/macos-sign-setup.sh",
+    "release:macos:check": "bash scripts/macos-sign-setup.sh --check",
+    "release:macos": "bash scripts/macos-release.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

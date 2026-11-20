@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll；store.shows.episodeCount
  * [OUTPUT]: 订阅节目详情页（封面头图、筛选计数、月份轴、分组单集）；打开时回写侧栏单集总数
- * [POS]: Sidebar 点选订阅后的主面板；侧栏数量=入库单集总数（与「全部」同源）
+ * [POS]: Sidebar 点选订阅后的主面板；刷新提示含当前总期数，避免「已是最新」掩盖半量目录
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -76,7 +76,7 @@ export function ShowView({ showId }: { showId: string }) {
     setMenu(false);
     setQuery("");
     void api
-      .listEpisodes(showId, 5000)
+      .listEpisodes(showId, 10_000)
       .then((list) => {
         setEps(list);
         // 打开详情时用列表长度回写侧栏，避免刷新后角标与本页「全部」漂移
@@ -147,9 +147,14 @@ export function ShowView({ showId }: { showId: string }) {
     setBusy(true);
     try {
       const n = await api.refreshShow(showId);
-      setEps(await api.listEpisodes(showId, 5000));
+      const list = await api.listEpisodes(showId, 10_000);
+      setEps(list);
       await reloadShows();
-      notify(n > 0 ? `更新了 ${n} 期` : "已是最新");
+      notify(
+        n > 0
+          ? `更新了 ${n} 期，当前共 ${list.length} 期`
+          : `已是最新，当前共 ${list.length} 期`,
+      );
     } catch (e) {
       notify(errText(e));
     } finally {

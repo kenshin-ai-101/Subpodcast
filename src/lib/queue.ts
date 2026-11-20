@@ -44,7 +44,7 @@ export async function playNext() {
   const { settings, current } = useStore.getState();
   if (!settings.autoNext || !current?.showId) return;
   try {
-    const eps = await api.listEpisodes(current.showId, 300);
+    const eps = await api.listEpisodes(current.showId, 10_000);
     const playable = eps.filter((e) => e.audioUrl || e.videoId);
     const i = playable.findIndex((e) => e.id === current.id);
     const next = i >= 0 ? playable[i + 1] : undefined;

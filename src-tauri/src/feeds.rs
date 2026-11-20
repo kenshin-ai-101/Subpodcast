@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源
- * [OUTPUT]: 解析任意订阅输入为 Show+Episodes；YouTube twin 回填；iTunes 搜索
- * [POS]: 订阅归一层——YT / Apple / 小宇宙 / RSS 全部变成同一模型；词元之类双形态开集即可官方字幕
+ * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源；iTunes lookup 单集
+ * [OUTPUT]: 解析任意订阅输入为 Show+Episodes（源有多少入多少）；YouTube twin；iTunes 目录兜底；LIST_EPISODES_CAP；xiaoyuzhou_podcast_id
+ * [POS]: 订阅归一层——xyz RSS 被 ACL 时走 iTunes≤200 + 精读合并，避免 SSR 仅 15 集假成功
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::{now_ms, short_hash, Episode, Show};
@@ -12,12 +12,33 @@ use anyhow::{anyhow, Result};
 use regex::Regex;
 use roxmltree::Document;
 
-/// 与 SubCast 对齐：单档最多保留最近 300 期。
-pub const MAX_EPISODES: usize = qiaomu::MAX_EPISODES;
+/// 列表/预览一次返回上限（入库不截断；侧栏数量走 COUNT(*)）。
+pub const LIST_EPISODES_CAP: i64 = 10_000;
 
+#[derive(Clone)]
 pub struct Resolved {
     pub show: Show,
     pub episodes: Vec<Episode>,
+    /// 目录可能被截断（小宇宙网页 SSR 仅最近十余集）。刷新时只 upsert、不删旧集。
+    pub catalog_partial: bool,
+}
+
+impl Resolved {
+    pub fn full(show: Show, episodes: Vec<Episode>) -> Self {
+        Self {
+            show,
+            episodes,
+            catalog_partial: false,
+        }
+    }
+
+    pub fn partial(show: Show, episodes: Vec<Episode>) -> Self {
+        Self {
+            show,
+            episodes,
+            catalog_partial: true,
+        }
+    }
 }
 
 /// 把用户粘贴的链接或搜索词解析成可订阅源。
@@ -33,9 +54,10 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     if let Some(id) = qiaomu::site_id(raw) {
         return qiaomu::channel(&id).await;
     }
-    // 词元之外：Anchor / 小宇宙入口统一切乔木源（带 videoId，开集直接官方字幕）
+    // 词元之外等：优先精读，再用 iTunes/xyz 补目录（精读常是子集）
     if let Some(id) = qiaomu_preferred_source(raw, "") {
-        return qiaomu::rss_channel(id).await;
+        let r = qiaomu::open_curated(id).await?;
+        return Ok(expand_thin_catalog(r, raw, "").await);
     }
 
     if let Some(id) = apple_id(raw) {
@@ -44,9 +66,6 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     }
 
     if let Some(pid) = xiaoyuzhou_podcast_id(raw) {
-        if let Some(id) = qiaomu_preferred_source(&format!("podcast/{pid}"), "") {
-            return qiaomu::rss_channel(id).await;
-        }
         return xiaoyuzhou_show(&pid).await;
     }
 
@@ -57,9 +76,6 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     }
 
     if raw.starts_with("http://") || raw.starts_with("https://") {
-        if let Some(id) = qiaomu_preferred_source(raw, "") {
-            return qiaomu::rss_channel(id).await;
-        }
         let kind = if is_xyzfm(raw) { "xiaoyuzhou" } else { "podcast" };
         return fetch_rss(raw, kind).await;
     }
@@ -116,42 +132,71 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
     Ok(out)
 }
 
+/// 无标题时的刷新入口；有节目标题时请用 `refresh_with_title`。
+#[allow(dead_code)]
 pub async fn refresh(feed_url: &str, kind: &str) -> Result<Resolved> {
+    refresh_with_title(feed_url, kind, "").await
+}
+
+/// 刷新时带上已存节目标题，便于 iTunes / 精读命中（slug 无 hex 时尤其关键）。
+pub async fn refresh_with_title(feed_url: &str, kind: &str, title: &str) -> Result<Resolved> {
     if kind == "qiaomu" || qiaomu::site_id(feed_url).is_some() || qiaomu::rss_source_id(feed_url).is_some()
     {
-        if let Some(id) = qiaomu::rss_source_id(feed_url) {
-            return qiaomu::rss_channel(&id).await;
-        }
-        if let Some(id) = qiaomu::site_id(feed_url) {
-            return qiaomu::channel(&id).await;
-        }
+        let mut resolved = if let Some(id) = qiaomu::rss_source_id(feed_url) {
+            qiaomu::rss_channel(&id).await?
+        } else if let Some(id) = qiaomu::site_id(feed_url) {
+            qiaomu::channel(&id).await?
+        } else {
+            return fetch_rss(feed_url, kind).await;
+        };
+        // 精读站常是子集：用小宇宙/iTunes 补全目录，保留精读 deep
+        resolved = expand_thin_catalog(resolved, feed_url, title).await;
+        return Ok(resolved);
     }
-    // 已订阅源保持原 feed（避免 guid/id 漂移丢进度）；缺 videoId 由 fetch_official 里 fill_youtube_twin 补
-    if kind == "xiaoyuzhou" {
+    // 小宇宙 / xyzfm：RSS∥节目页∥iTunes∥精读，取最完整合并。
+    if kind == "xiaoyuzhou" || is_xyzfm(feed_url) {
         if let Some(pid) = xiaoyuzhou_podcast_id(feed_url) {
             return xiaoyuzhou_show(&pid).await;
         }
+        // slug 无 hex：标题/slug 走统一富化
+        return xyz_slug_or_title(feed_url, title).await;
     }
     fetch_rss(feed_url, kind).await
 }
 
 async fn fetch_rss(feed_url: &str, kind_hint: &str) -> Result<Resolved> {
+    // feed.xyzfm.space 常被 IP ACL 302 到 200 HTML；改走节目页 / iTunes / 精读。
+    if is_xyzfm(feed_url) {
+        if let Some(pid) = xiaoyuzhou_podcast_id(feed_url) {
+            return xiaoyuzhou_show(&pid).await;
+        }
+        return xyz_slug_or_title(feed_url, "").await;
+    }
     let xml = net::get_text(feed_url).await?;
+    if looks_like_html(&xml) {
+        return Err(anyhow!(
+            "源返回了网页而非 RSS（链接可能已失效或被 CDN 拦截）"
+        ));
+    }
     let (mut show, episodes) = parse_feed(&xml, feed_url)?;
     if kind_hint == "youtube" || feed_url.contains("youtube.com/feeds") {
         show.kind = "youtube".into();
-    } else if is_xyzfm(feed_url) || kind_hint == "xiaoyuzhou" {
+    } else if kind_hint == "xiaoyuzhou" {
         show.kind = "xiaoyuzhou".into();
     } else if show.kind.is_empty() || show.kind == "podcast" {
         show.kind = kind_hint.into();
     }
     // Apple/Anchor 常滞后于小宇宙；若节目主页挂了小宇宙链接，用其补全单集。
-    let resolved = prefer_xiaoyuzhou_if_richer(Resolved { show, episodes }).await;
+    let resolved = prefer_xiaoyuzhou_if_richer(Resolved::full(show, episodes)).await;
     // 音频播客 ↔ YouTube 双形态：按标题把 videoId 填上，单集页才有「视频/仅音频」。
     Ok(attach_youtube_twins(resolved).await)
 }
 
 fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
+    // 防御：CDN 403 页常以 <!DOCTYPE 开头，roxmltree 会报 invalid name token at 1:2
+    if looks_like_html(xml) {
+        return Err(anyhow!("RSS 解析失败: 源返回了网页而非 XML"));
+    }
     let doc = Document::parse(xml).map_err(|e| anyhow!("RSS 解析失败: {e}"))?;
     let root = doc.root_element();
 
@@ -176,7 +221,7 @@ fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         });
 
     let mut episodes = Vec::new();
-    for item in channel.children().filter(|n| n.has_tag_name("item")).take(MAX_EPISODES) {
+    for item in channel.children().filter(|n| n.has_tag_name("item")) {
         let guid = text_child(item, "guid")
             .or_else(|| text_child(item, "link"))
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -241,7 +286,7 @@ fn parse_atom(doc: &Document, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
         .find(|n| n.has_tag_name("author"))
         .and_then(|a| text_child(a, "name"));
     let mut episodes = Vec::new();
-    for entry in feed.children().filter(|n| n.has_tag_name("entry")).take(MAX_EPISODES) {
+    for entry in feed.children().filter(|n| n.has_tag_name("entry")) {
         let video_id = entry
             .children()
             .find(|n| n.has_tag_name("videoId"))
@@ -302,36 +347,30 @@ fn parse_atom(doc: &Document, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
 }
 
 async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
-    if let Some(id) = qiaomu_preferred_source(&format!("podcast/{pid}"), "") {
-        return qiaomu::rss_channel(id).await;
-    }
     let page = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
-    let html = net::get_text(&page).await?;
+    // RSS（全量）与节目页并行；ACL 时不耽误 SSR。
+    let (rss, page_res) = tokio::join!(xyz_rss_resolved(pid, &page), net::get_text(&page));
+    if let Some(r) = rss {
+        return Ok(attach_youtube_twins(enrich_xyz_catalog(r, pid).await).await);
+    }
+
+    let html = page_res?;
     if let Ok(r) = xiaoyuzhou_from_next_data(&html, &page) {
         if !r.episodes.is_empty() {
-            return Ok(attach_youtube_twins(r).await);
+            return Ok(attach_youtube_twins(enrich_xyz_catalog(r, pid).await).await);
         }
     }
-    // 短链 slug 的 xyz RSS 偶可用；hex pid 通常 404，失败则至少保住节目壳。
-    let feed = format!("https://feed.xyzfm.space/{pid}");
-    if let Ok(xml) = net::get_text(&feed).await {
-        if let Ok((mut show, episodes)) = parse_feed(&xml, &feed) {
-            show.kind = "xiaoyuzhou".into();
-            show.feed_url = page.clone();
-            show.link = Some(page);
-            return Ok(attach_youtube_twins(Resolved { show, episodes }).await);
-        }
-    }
+    // 页面空壳：仍可用 iTunes / 精读
     let title = Regex::new(r"<title>([^<]+)</title>")
         .ok()
         .and_then(|re| re.captures(&html))
         .map(|c| c[1].replace(" - 小宇宙", "").trim().to_string())
         .unwrap_or_else(|| "小宇宙节目".into());
-    Ok(Resolved {
-        show: Show {
+    let shell = Resolved::partial(
+        Show {
             id: short_hash(&page, 16),
             kind: "xiaoyuzhou".into(),
-            title,
+            title: title.clone(),
             author: None,
             cover: None,
             feed_url: page.clone(),
@@ -340,8 +379,432 @@ async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
             updated_at: now_ms(),
             episode_count: 0,
         },
-        episodes: vec![],
+        vec![],
+    );
+    Ok(attach_youtube_twins(enrich_xyz_catalog(shell, pid).await).await)
+}
+
+/// slug 版 xyz（无 hex）或仅有标题：iTunes 单集目录 + 精读合并。
+async fn xyz_slug_or_title(feed_url: &str, title: &str) -> Result<Resolved> {
+    let slug = xyzfm_slug(feed_url).unwrap_or_default();
+    let curated_id = qiaomu_preferred_source(feed_url, title)
+        .or_else(|| qiaomu_preferred_source(&slug, title));
+    let curated = match curated_id {
+        Some(id) => qiaomu::open_curated(id).await.ok(),
+        None => None,
+    };
+    let title_hint = if !title.is_empty() {
+        title.to_string()
+    } else {
+        curated
+            .as_ref()
+            .map(|c| c.show.title.clone())
+            .unwrap_or_default()
+    };
+    let itunes = if title_hint.is_empty() {
+        None
+    } else {
+        itunes_episode_catalog(&title_hint, feed_url).await
+    };
+    // 旧路径：iTunes 给出的另一条 slug RSS（出口不同时偶通）
+    let slug_rss = if itunes.is_none() && !title_hint.is_empty() {
+        xyz_itunes_slug_rss(&title_hint, feed_url).await
+    } else {
+        None
+    };
+
+    let mut resolved = match (itunes.or(slug_rss), curated) {
+        (Some(base), Some(c)) => merge_enrichment(base, c),
+        (Some(base), None) => base,
+        (None, Some(c)) => c,
+        (None, None) => {
+            return Err(anyhow!(
+                "小宇宙 RSS 暂时无法访问，请改用节目主页链接（xiaoyuzhoufm.com/podcast/…）或确认网络"
+            ));
+        }
+    };
+    if let Some(pid) = resolved
+        .episodes
+        .iter()
+        .find_map(|e| e.audio_url.as_deref().and_then(xiaoyuzhou_podcast_id))
+    {
+        resolved.show.feed_url = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
+        resolved.show.link = Some(resolved.show.feed_url.clone());
+        resolved.show.kind = "xiaoyuzhou".into();
+    }
+    Ok(attach_youtube_twins(resolved).await)
+}
+
+/// SSR/RSS 半量时：iTunes≤200 单集 + 乔木精读合并；catalog_partial 如实标记。
+async fn enrich_xyz_catalog(mut base: Resolved, pid: &str) -> Resolved {
+    let title = base.show.title.clone();
+    let page = base.show.feed_url.clone();
+    let need_more = base.catalog_partial
+        || base.episodes.is_empty()
+        || (base.show.episode_count > 0
+            && (base.episodes.len() as i64) < base.show.episode_count);
+
+    if need_more {
+        if let Some(itunes) = itunes_episode_catalog(&title, &page).await {
+            base = merge_enrichment(base, itunes);
+        } else if let Some(slug_rss) = xyz_itunes_slug_rss(&title, &page).await {
+            base = merge_enrichment(base, slug_rss);
+        }
+    }
+
+    if let Some(id) = qiaomu_preferred_source(&format!("podcast/{pid}"), &title)
+        .or_else(|| qiaomu_preferred_source(pid, &title))
+    {
+        if let Ok(curated) = qiaomu::open_curated(id).await {
+            base = merge_enrichment(base, curated);
+        }
+    }
+
+    let declared = base.show.episode_count.max(base.episodes.len() as i64);
+    base.show.episode_count = declared;
+    base.catalog_partial = declared > base.episodes.len() as i64;
+    base
+}
+
+/// 精读子集 → 用 iTunes / 音频里的 xyz pid 补目录，保留 deep 与精读订阅身份。
+async fn expand_thin_catalog(mut curated: Resolved, feed_url: &str, title: &str) -> Resolved {
+    let keep = curated.show.clone();
+    let t = if title.is_empty() {
+        keep.title.as_str()
+    } else {
+        title
+    };
+    if let Some(itunes) = itunes_episode_catalog(t, feed_url).await {
+        if itunes.episodes.len() > curated.episodes.len() {
+            curated = merge_enrichment(itunes, curated);
+        }
+    }
+    if let Some(pid) = curated
+        .episodes
+        .iter()
+        .find_map(|e| e.audio_url.as_deref().and_then(xiaoyuzhou_podcast_id))
+    {
+        // 仅 SSR/RSS，避免再进 enrich 递归打精读
+        let page = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
+        if let Some(rss) = xyz_rss_resolved(&pid, &page).await {
+            if rss.episodes.len() > curated.episodes.len() {
+                curated = merge_enrichment(rss, curated);
+            }
+        } else if let Ok(html) = net::get_text(&page).await {
+            if let Ok(ssr) = xiaoyuzhou_from_next_data(&html, &page) {
+                if let Some(itunes) = itunes_episode_catalog(&ssr.show.title, &page).await {
+                    curated = merge_enrichment(itunes, curated);
+                } else if ssr.episodes.len() > curated.episodes.len() {
+                    curated = merge_enrichment(ssr, curated);
+                } else {
+                    curated.show.episode_count = curated
+                        .show
+                        .episode_count
+                        .max(ssr.show.episode_count)
+                        .max(curated.episodes.len() as i64);
+                }
+            }
+        }
+    }
+    // 目录可以变大，但 kind/feed 仍指精读站，下次刷新还走 channel/rss_channel
+    curated.show.kind = keep.kind;
+    curated.show.feed_url = keep.feed_url;
+    curated.show.link = keep.link.or(curated.show.link);
+    curated.show.author = keep.author.or(curated.show.author);
+    curated.show.title = keep.title;
+    let n = curated.episodes.len() as i64;
+    curated.show.episode_count = curated.show.episode_count.max(n);
+    curated.catalog_partial = curated.show.episode_count > n;
+    curated
+}
+
+/// 以 richer 为目录底座，把 enrichment 的 deep / video / 精读笔记叠上去；按 guid 与标题键对齐。
+fn merge_enrichment(richer: Resolved, enrichment: Resolved) -> Resolved {
+    use std::collections::HashMap;
+    let declared = richer
+        .show
+        .episode_count
+        .max(enrichment.show.episode_count)
+        .max(richer.episodes.len() as i64)
+        .max(enrichment.episodes.len() as i64);
+    let mut by_guid: HashMap<String, Episode> = HashMap::new();
+    let mut by_key: HashMap<String, String> = HashMap::new();
+    for e in richer.episodes {
+        by_key.insert(episode_dedupe_key(&e.title), e.guid.clone());
+        by_guid.insert(e.guid.clone(), e);
+    }
+    for e in enrichment.episodes {
+        let guid = if by_guid.contains_key(&e.guid) {
+            e.guid.clone()
+        } else if let Some(g) = by_key.get(&episode_dedupe_key(&e.title)) {
+            g.clone()
+        } else {
+            e.guid.clone()
+        };
+        match by_guid.get_mut(&guid) {
+            Some(old) => {
+                if e.deep {
+                    old.deep = true;
+                    if e.notes.is_some() {
+                        old.notes = e.notes.clone();
+                    }
+                    if e.link.is_some() {
+                        old.link = e.link.clone();
+                    }
+                    if e.transcript_type.is_some() {
+                        old.transcript_type = e.transcript_type.clone();
+                        old.transcript_url = e.transcript_url.clone();
+                    }
+                }
+                if old.audio_url.is_none() {
+                    old.audio_url = e.audio_url.clone();
+                }
+                if old.video_id.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                    old.video_id = e.video_id.clone();
+                }
+                if old.cover.is_none() {
+                    old.cover = e.cover.clone();
+                }
+            }
+            None => {
+                by_key.insert(episode_dedupe_key(&e.title), guid.clone());
+                by_guid.insert(guid, e);
+            }
+        }
+    }
+    let mut episodes: Vec<_> = by_guid.into_values().collect();
+    episodes.sort_by(|a, b| b.published.cmp(&a.published));
+    let mut show = richer.show;
+    if show.cover.is_none() {
+        show.cover = enrichment.show.cover;
+    }
+    if show.description.is_none() {
+        show.description = enrichment.show.description;
+    }
+    // 精读源保留 kind=qiaomu；小宇宙底座保持 xiaoyuzhou
+    if enrichment.show.kind == "qiaomu" && show.kind == "qiaomu" {
+        show.kind = "qiaomu".into();
+        show.author = enrichment.show.author.or(show.author);
+    }
+    show.episode_count = declared;
+    let partial = declared > episodes.len() as i64;
+    if partial {
+        Resolved::partial(show, episodes)
+    } else {
+        Resolved::full(show, episodes)
+    }
+}
+
+/// feed.xyzfm.space/{pid}；ACL 常回 200 HTML，设置无代理时再试系统/环境代理。
+async fn xyz_rss_resolved(pid: &str, page: &str) -> Option<Resolved> {
+    let feed = format!("https://feed.xyzfm.space/{pid}");
+    xyz_fetch_rss_url(&feed, page).await
+}
+
+async fn xyz_fetch_rss_url(feed: &str, page: &str) -> Option<Resolved> {
+    if let Ok(xml) = net::get_text(feed).await {
+        if let Some(r) = xyz_parse_rss_body(feed, page, &xml).await {
+            return Some(r);
+        }
+    }
+    if net::proxy().is_empty() {
+        let p = net::effective_proxy();
+        if !p.is_empty() {
+            if let Ok(xml) = net::get_text_via_proxy(feed, &p).await {
+                if let Some(r) = xyz_parse_rss_body(feed, page, &xml).await {
+                    return Some(r);
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn xyz_parse_rss_body(feed: &str, page: &str, xml: &str) -> Option<Resolved> {
+    if looks_like_html(xml) {
+        return None;
+    }
+    let (mut show, episodes) = parse_feed(xml, feed).ok()?;
+    if episodes.is_empty() {
+        return None;
+    }
+    show.kind = "xiaoyuzhou".into();
+    show.feed_url = page.into();
+    show.link = Some(page.into());
+    show.episode_count = episodes.len() as i64;
+    Some(Resolved::full(show, episodes))
+}
+
+/// iTunes 常挂 slug 版 xyz RSS（如 feed.xyzfm.space/cv4bkgpuglwp）；ACL 出口不同时或可通。
+async fn xyz_itunes_slug_rss(title: &str, page: &str) -> Option<Resolved> {
+    let item = itunes_search_match(title, page).await?;
+    let feed = item["feedUrl"].as_str()?;
+    if !is_xyzfm(feed) || xiaoyuzhou_podcast_id(feed).is_some() {
+        return None;
+    }
+    xyz_fetch_rss_url(feed, page).await
+}
+
+/// iTunes lookup 单集（最多 200）：xyz RSS 被 ACL 时的主目录来源；带可播 episodeUrl。
+async fn itunes_episode_catalog(title: &str, feed_hint: &str) -> Option<Resolved> {
+    let item = itunes_search_match(title, feed_hint).await?;
+    let cid = item["collectionId"].as_i64().or_else(|| {
+        item["collectionId"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+    })?;
+    let track_count = item["trackCount"].as_i64().unwrap_or(0);
+    let feed = item["feedUrl"].as_str().unwrap_or(feed_hint).to_string();
+    let show_title = item["collectionName"]
+        .as_str()
+        .unwrap_or(title)
+        .to_string();
+    let author = item["artistName"].as_str().map(str::to_string);
+    let cover = item["artworkUrl600"]
+        .as_str()
+        .or_else(|| item["artworkUrl100"].as_str())
+        .map(str::to_string);
+
+    let url = format!(
+        "https://itunes.apple.com/lookup?id={cid}&entity=podcastEpisode&limit=200&country=CN"
+    );
+    let body = net::get_text(&url).await.ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let show_id = short_hash(&feed, 16);
+    let mut episodes = Vec::new();
+    for e in v["results"].as_array().into_iter().flatten() {
+        let kind = e["kind"].as_str().unwrap_or("");
+        if kind != "podcast-episode" {
+            continue;
+        }
+        let audio = e["episodeUrl"]
+            .as_str()
+            .or_else(|| e["previewUrl"].as_str())
+            .filter(|u| !u.is_empty())
+            .map(shared::canonical_audio_url);
+        let Some(raw_guid) = e["episodeGuid"]
+            .as_str()
+            .map(str::to_string)
+            .filter(|g| !g.is_empty())
+            .or_else(|| e["trackId"].as_i64().map(|id| id.to_string()))
+        else {
+            continue;
+        };
+        // xyz guid 偶带 .html；与精读 / SSR eid 对齐
+        let guid = raw_guid
+            .strip_suffix(".html")
+            .or_else(|| raw_guid.strip_suffix(".htm"))
+            .unwrap_or(&raw_guid)
+            .to_string();
+        let title = e["trackName"].as_str().unwrap_or("未命名单集").to_string();
+        let published = e["releaseDate"].as_str().and_then(parse_any_date);
+        let duration = e["trackTimeMillis"].as_f64().map(|ms| ms / 1000.0);
+        let link = e["trackViewUrl"].as_str().map(str::to_string);
+        let ep_cover = e["artworkUrl600"]
+            .as_str()
+            .or_else(|| e["artworkUrl160"].as_str())
+            .map(str::to_string);
+        let notes = e["description"]
+            .as_str()
+            .or_else(|| e["shortDescription"].as_str())
+            .map(str::to_string);
+        episodes.push(Episode {
+            id: short_hash(&format!("{show_id}|{guid}"), 20),
+            show_id: show_id.clone(),
+            guid,
+            title,
+            published,
+            duration,
+            audio_url: audio,
+            video_id: None,
+            link,
+            cover: ep_cover,
+            notes,
+            transcript_url: None,
+            transcript_type: None,
+            deep: false,
+            progress: 0.0,
+            has_transcript: false,
+            show_title: Some(show_title.clone()),
+        });
+    }
+    if episodes.is_empty() {
+        return None;
+    }
+    episodes.sort_by(|a, b| b.published.cmp(&a.published));
+    let declared = track_count.max(episodes.len() as i64);
+    let show = Show {
+        id: show_id,
+        kind: if is_xyzfm(&feed) {
+            "xiaoyuzhou".into()
+        } else {
+            "podcast".into()
+        },
+        title: show_title,
+        author,
+        cover,
+        feed_url: feed.clone(),
+        link: Some(feed),
+        description: None,
+        updated_at: now_ms(),
+        episode_count: declared,
+    };
+    Some(if declared > episodes.len() as i64 {
+        Resolved::partial(show, episodes)
+    } else {
+        Resolved::full(show, episodes)
     })
+}
+
+/// 按标题搜 iTunes，优先 feed 与 hint 对得上的小宇宙源。
+async fn itunes_search_match(title: &str, feed_hint: &str) -> Option<serde_json::Value> {
+    let t = title.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let q = urlencoding::encode(t);
+    let url = format!(
+        "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=8&country=CN&term={q}"
+    );
+    let body = net::get_text(&url).await.ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let hint = feed_hint.to_lowercase();
+    let hint_slug = xyzfm_slug(feed_hint).unwrap_or_default().to_lowercase();
+    let hint_pid = xiaoyuzhou_podcast_id(feed_hint).unwrap_or_default();
+    let mut fallback_xyz = None;
+    let mut fallback_title = None;
+    let norm_t: String = t
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase();
+    for item in v["results"].as_array().into_iter().flatten() {
+        let feed = item["feedUrl"].as_str().unwrap_or("").to_lowercase();
+        let name = item["collectionName"].as_str().unwrap_or("");
+        let name_n: String = name
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_lowercase();
+        if !feed.is_empty() {
+            if (!hint.is_empty() && (feed == hint || hint.contains(&feed) || feed.contains(&hint)))
+                || (!hint_slug.is_empty() && feed.contains(&hint_slug))
+                || (!hint_pid.is_empty() && feed.contains(&hint_pid))
+            {
+                return Some(item.clone());
+            }
+            if is_xyzfm(&feed) && fallback_xyz.is_none() && (name_n.contains(&norm_t) || norm_t.contains(&name_n) || name_n == norm_t) {
+                fallback_xyz = Some(item.clone());
+            }
+        }
+        if fallback_title.is_none()
+            && !norm_t.is_empty()
+            && (name_n == norm_t || name_n.starts_with(&norm_t) || norm_t.starts_with(&name_n))
+        {
+            fallback_title = Some(item.clone());
+        }
+    }
+    fallback_xyz.or(fallback_title)
 }
 
 fn xiaoyuzhou_from_next_data(html: &str, page: &str) -> Result<Resolved> {
@@ -360,23 +823,27 @@ fn xiaoyuzhou_from_next_data(html: &str, page: &str) -> Result<Resolved> {
         .flatten()
         .filter_map(|e| xyz_episode(e, &show_id))
         .collect::<Vec<_>>();
-    Ok(Resolved {
-        show: Show {
-            id: show_id,
-            kind: "xiaoyuzhou".into(),
-            title: p["title"].as_str().unwrap_or("小宇宙节目").into(),
-            author: p["author"].as_str().map(str::to_string),
-            cover: p["image"]["middlePicUrl"]
-                .as_str()
-                .or_else(|| p["image"]["picUrl"].as_str())
-                .map(str::to_string),
-            feed_url: feed_url.clone(),
-            link: Some(page.into()),
-            description: p["description"].as_str().map(str::to_string),
-            updated_at: now_ms(),
-            episode_count: 0,
-        },
-        episodes,
+    let declared = p["episodeCount"].as_i64().unwrap_or(episodes.len() as i64);
+    let partial = declared > episodes.len() as i64;
+    let show = Show {
+        id: show_id,
+        kind: "xiaoyuzhou".into(),
+        title: p["title"].as_str().unwrap_or("小宇宙节目").into(),
+        author: p["author"].as_str().map(str::to_string),
+        cover: p["image"]["middlePicUrl"]
+            .as_str()
+            .or_else(|| p["image"]["picUrl"].as_str())
+            .map(str::to_string),
+        feed_url: feed_url.clone(),
+        link: Some(page.into()),
+        description: p["description"].as_str().map(str::to_string),
+        updated_at: now_ms(),
+        episode_count: declared,
+    };
+    Ok(if partial {
+        Resolved::partial(show, episodes)
+    } else {
+        Resolved::full(show, episodes)
     })
 }
 
@@ -444,9 +911,11 @@ async fn prefer_xiaoyuzhou_if_richer(mut resolved: Resolved) -> Resolved {
     let mut merged = merge_episodes(resolved.episodes, xyz.episodes);
     rebind_episodes(&mut merged, &show_id);
     resolved.episodes = merged;
+    resolved.catalog_partial = xyz.catalog_partial;
     resolved.show.kind = "xiaoyuzhou".into();
     resolved.show.feed_url = format!("https://www.xiaoyuzhoufm.com/podcast/{pid}");
     resolved.show.link = Some(resolved.show.feed_url.clone());
+    resolved.show.episode_count = xyz.show.episode_count.max(resolved.episodes.len() as i64);
     if resolved.show.cover.is_none() {
         resolved.show.cover = xyz.show.cover;
     }
@@ -543,20 +1012,71 @@ pub fn episode_dedupe_key(title: &str) -> String {
         .to_lowercase()
 }
 
-/// 已知双形态节目：订阅时优先乔木 RSS（自带 videoId / 精读），避免纯音频源开集只能 ASR。
+/// 已知节目：小宇宙 SSR 只有约 15 集，切乔木精读拿全量（guid 对齐 xyz eid）。
 fn qiaomu_preferred_source(feed_or_input: &str, title: &str) -> Option<&'static str> {
     let u = feed_or_input.to_lowercase();
     let t = title.to_lowercase();
-    if u.contains("116d068f0")
-        || u.contains("6a9956fafbb9512fc83ddbb5")
-        || u.contains("nexttokentv")
-        || u.contains("sources/nexttoken")
-        || t.contains("词元之外")
-        || t.contains("next token")
-    {
-        return Some("nexttoken");
+    // (id, 路径/pid/slug 标记…)
+    const MARKERS: &[(&str, &[&str])] = &[
+        (
+            "nexttoken",
+            &[
+                "116d068f0",
+                "6a9956fafbb9512fc83ddbb5",
+                "nexttokentv",
+                "sources/nexttoken",
+                "词元之外",
+                "next token",
+            ],
+        ),
+        (
+            "zhangxiaojun",
+            &[
+                "626b46ea9cbbf0451cf5a962",
+                "dk4yh3pkpjp3",
+                "zhangxiaojun",
+                "张小珺",
+            ],
+        ),
+        (
+            "latetalk",
+            &["latetalk", "晚点聊"],
+        ),
+        (
+            "zhixing",
+            &[
+                "zhixing",
+                "知行小酒馆",
+                "j8yp8gxkmgqr",
+                "6013f9f58e2f7ee375cf4216",
+            ],
+        ),
+        ("42zhangjing", &["42zhangjing", "42章经"]),
+        ("crossing", &["十字路口crossing", "十字路口"]),
+        ("aialchemy", &["aialchemy", "ai炼金术"]),
+        ("35huan", &["35huan", "三五环"]),
+        ("mianji", &["mianji", "面基"]),
+        ("bannatie", &["bannatie", "半拿铁"]),
+    ];
+    for (id, keys) in MARKERS {
+        if keys.iter().any(|k| u.contains(k) || t.contains(k)) {
+            return Some(*id);
+        }
     }
     None
+}
+
+/// `https://feed.xyzfm.space/dk4yh3pkpjp3` → `dk4yh3pkpjp3`（非 hex 短链）。
+fn xyzfm_slug(url: &str) -> Option<String> {
+    let cap = Regex::new(r"feed\.xyzfm\.space/([A-Za-z0-9_-]+)")
+        .ok()?
+        .captures(url)?;
+    let slug = cap[1].to_string();
+    // 24 位 hex 已由 xiaoyuzhou_podcast_id 处理
+    if slug.len() == 24 && slug.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(slug)
 }
 
 /// 音频源常无 videoId；对照 YouTube 频道按期号/标题配对，单集页才能切「视频/仅音频」。
@@ -665,13 +1185,33 @@ fn merge_episodes(rss: Vec<Episode>, xyz: Vec<Episode>) -> Vec<Episode> {
         let k = episode_dedupe_key(&e.title);
         match map.get_mut(&k) {
             Some(old) => {
-                // 小宇宙通常更新更快且带音频
+                // 小宇宙通常更新更快且带音频；保留已有精读 / 视频标记
+                let progress = old.progress;
+                let deep = old.deep;
+                let video = old.video_id.clone();
+                let notes = old.notes.clone();
+                let tr_t = old.transcript_type.clone();
+                let tr_u = old.transcript_url.clone();
+                let link = old.link.clone();
                 if e.audio_url.is_some() {
-                    let progress = old.progress;
                     *old = e;
-                    old.progress = progress;
                 } else if old.audio_url.is_none() {
                     *old = e;
+                }
+                old.progress = progress;
+                old.deep = deep || old.deep;
+                if old.video_id.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                    old.video_id = video;
+                }
+                if old.notes.is_none() {
+                    old.notes = notes;
+                }
+                if old.transcript_type.is_none() {
+                    old.transcript_type = tr_t;
+                    old.transcript_url = tr_u;
+                }
+                if old.link.is_none() {
+                    old.link = link;
                 }
             }
             None => {
@@ -752,18 +1292,41 @@ fn apple_id(s: &str) -> Option<String> {
         })
 }
 
-fn xiaoyuzhou_podcast_id(s: &str) -> Option<String> {
-    Regex::new(r"xiaoyuzhoufm\.com/podcast/([a-f0-9]+)")
-        .ok()?
-        .captures(s)
-        .map(|c| c[1].to_string())
+/// 从节目页 / 音频 CDN / xyz RSS 等文本里抠 24 位 hex 节目 id。
+pub fn xiaoyuzhou_podcast_id(s: &str) -> Option<String> {
+    const PATS: &[&str] = &[
+        r"xiaoyuzhoufm\.com/podcast/([a-f0-9]{24})",
+        r"feed\.xyzfm\.space/([a-f0-9]{24})",
+        r"dts-api\.xiaoyuzhoufm\.com/track/([a-f0-9]{24})",
+        r"media\.xyzcdn\.net/([a-f0-9]{24})/",
+        r"/podcast/([a-f0-9]{24})",
+    ];
+    for pat in PATS {
+        if let Some(id) = Regex::new(pat)
+            .ok()
+            .and_then(|re| re.captures(s))
+            .map(|c| c[1].to_string())
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn looks_like_html(body: &str) -> bool {
+    let t = body.trim_start_matches('\u{feff}').trim_start();
+    let head = t.get(..64).unwrap_or(t).to_ascii_lowercase();
+    head.starts_with("<!doctype")
+        || head.starts_with("<html")
+        || head.starts_with("<head")
+        || head.starts_with("<body")
 }
 
 fn is_youtube(s: &str) -> bool {
     s.contains("youtube.com") || s.contains("youtu.be") || s.starts_with('@')
 }
 
-fn is_xyzfm(s: &str) -> bool {
+pub fn is_xyzfm(s: &str) -> bool {
     s.contains("feed.xyzfm.space") || s.contains("xyzfm.space/")
 }
 
@@ -877,11 +1440,80 @@ mod tests {
 
     #[test]
     fn prefers_platform_xyz_pid() {
-        let html = r#"<a href="https://www.xiaoyuzhoufm.com/podcast/aaaaaaaaaaaaaaaa">x</a>
+        let html = r#"<a href="https://www.xiaoyuzhoufm.com/podcast/aaaaaaaaaaaaaaaaaaaaaaaa">x</a>
             <a data-listen-platform="xiaoyuzhou" href="https://www.xiaoyuzhoufm.com/podcast/6a9956fafbb9512fc83ddbb5">小宇宙</a>"#;
         assert_eq!(
             preferred_xyz_pid(html).as_deref(),
             Some("6a9956fafbb9512fc83ddbb5")
+        );
+    }
+
+    #[test]
+    fn next_data_marks_partial_when_count_exceeds_list() {
+        let html = r#"<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"podcast":{
+            "pid":"5e4ee557418a84a0466737b7","title":"忽左忽右","episodeCount":657,
+            "episodes":[{"eid":"aaaaaaaaaaaaaaaaaaaaaaaa","title":"一集",
+              "enclosure":{"url":"https://media.xyzcdn.net/5e4ee557418a84a0466737b7/x.m4a"}}]
+        }}}}</script>"#;
+        let r = xiaoyuzhou_from_next_data(html, "https://www.xiaoyuzhoufm.com/podcast/5e4ee557418a84a0466737b7")
+            .unwrap();
+        assert!(r.catalog_partial);
+        assert_eq!(r.show.episode_count, 657);
+        assert_eq!(r.episodes.len(), 1);
+    }
+
+    #[test]
+    fn xiaoyuzhou_pid_from_audio_and_feeds() {
+        assert_eq!(
+            xiaoyuzhou_podcast_id(
+                "https://dts-api.xiaoyuzhoufm.com/track/626b46ea9cbbf0451cf5a962/6afd12c6a4a79edf137afd61/media.xyzcdn.net/x.m4a"
+            )
+            .as_deref(),
+            Some("626b46ea9cbbf0451cf5a962")
+        );
+        assert_eq!(
+            xiaoyuzhou_podcast_id("https://feed.xyzfm.space/626b46ea9cbbf0451cf5a962").as_deref(),
+            Some("626b46ea9cbbf0451cf5a962")
+        );
+        assert!(xiaoyuzhou_podcast_id("https://feed.xyzfm.space/dk4yh3pkpjp3").is_none());
+        assert!(looks_like_html("<!DOCTYPE html><html>403</html>"));
+        assert!(looks_like_html(
+            "\u{feff}<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\"><html>"
+        ));
+        assert!(!looks_like_html(r#"<?xml version="1.0"?><rss><channel/>"#));
+        let err = parse_feed(
+            "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\"><html><title>403</title></html>",
+            "https://feed.xyzfm.space/626b46ea9cbbf0451cf5a962",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("网页而非 XML") || err.contains("网页而非 RSS"),
+            "got: {err}"
+        );
+        assert!(!err.contains("invalid name token"));
+    }
+
+    #[test]
+    #[ignore = "需要网络：xyzfm ACL 下仍能经节目页拉到忽左忽右"]
+    fn live_xyzfm_falls_back_to_page() {
+        // 不用词元之外：会被 qiaomu_preferred_source 切走乔木源
+        let r = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fetch_rss(
+                "https://feed.xyzfm.space/5e4ee557418a84a0466737b7",
+                "xiaoyuzhou",
+            ))
+            .expect("xyzfm → page");
+        assert_eq!(r.show.kind, "xiaoyuzhou");
+        assert!(
+            !r.episodes.is_empty(),
+            "expected episodes from __NEXT_DATA__, got 0"
+        );
+        assert!(
+            r.show.feed_url.contains("xiaoyuzhoufm.com/podcast/"),
+            "feed_url should be page, got {}",
+            r.show.feed_url
         );
     }
 
@@ -939,6 +1571,119 @@ mod tests {
             qiaomu_preferred_source("https://www.xiaoyuzhoufm.com/podcast/6a9956fafbb9512fc83ddbb5", ""),
             Some("nexttoken")
         );
+        assert_eq!(
+            qiaomu_preferred_source("https://feed.xyzfm.space/dk4yh3pkpjp3", ""),
+            Some("zhangxiaojun")
+        );
+        assert_eq!(
+            qiaomu_preferred_source("", "张小珺Jùn｜商业访谈录"),
+            Some("zhangxiaojun")
+        );
+        assert_eq!(
+            xyzfm_slug("https://feed.xyzfm.space/dk4yh3pkpjp3").as_deref(),
+            Some("dk4yh3pkpjp3")
+        );
+        assert!(xyzfm_slug("https://feed.xyzfm.space/626b46ea9cbbf0451cf5a962").is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "需要网络：xyz slug 经 iTunes 拉满张小珺"]
+    async fn live_zhang_slug_itunes_full() {
+        let r = refresh_with_title(
+            "https://feed.xyzfm.space/dk4yh3pkpjp3",
+            "xiaoyuzhou",
+            "张小珺Jùn｜商业访谈录",
+        )
+        .await
+        .expect("refresh");
+        eprintln!("zhang n={} partial={}", r.episodes.len(), r.catalog_partial);
+        assert!(
+            r.episodes.len() >= 150,
+            "expected ≥150 via iTunes/精读, got {}",
+            r.episodes.len()
+        );
+        assert!(r.episodes.iter().any(|e| e.audio_url.is_some()));
+    }
+
+    #[tokio::test]
+    #[ignore = "需要网络：知行精读子集经 iTunes 扩到约 200"]
+    async fn live_zhixing_expand_via_itunes() {
+        let r = refresh_with_title("https://zhixing.qiaomu.ai/", "qiaomu", "知行小酒馆")
+            .await
+            .expect("refresh");
+        eprintln!(
+            "zhixing n={} declared={} partial={}",
+            r.episodes.len(),
+            r.show.episode_count,
+            r.catalog_partial
+        );
+        assert!(
+            r.episodes.len() >= 100,
+            "expected iTunes expand ≥100, got {}",
+            r.episodes.len()
+        );
+    }
+
+    #[test]
+    fn merge_enrichment_keeps_deep_and_grows_catalog() {
+        let base = Resolved::partial(
+            Show {
+                id: "s".into(),
+                kind: "xiaoyuzhou".into(),
+                title: "T".into(),
+                author: None,
+                cover: None,
+                feed_url: "https://www.xiaoyuzhoufm.com/podcast/abc".into(),
+                link: None,
+                description: None,
+                updated_at: 0,
+                episode_count: 100,
+            },
+            vec![Episode {
+                guid: "e1".into(),
+                title: "#1 a".into(),
+                audio_url: Some("https://a/1.m4a".into()),
+                ..Default::default()
+            }],
+        );
+        let enrich = Resolved::full(
+            Show {
+                id: "q".into(),
+                kind: "qiaomu".into(),
+                title: "T".into(),
+                author: Some("乔木精读".into()),
+                cover: None,
+                feed_url: "https://t.qiaomu.ai/".into(),
+                link: None,
+                description: None,
+                updated_at: 0,
+                episode_count: 2,
+            },
+            vec![
+                Episode {
+                    guid: "e1".into(),
+                    title: "#1 a".into(),
+                    deep: true,
+                    notes: Some("精读".into()),
+                    ..Default::default()
+                },
+                Episode {
+                    guid: "e2".into(),
+                    title: "#2 b".into(),
+                    audio_url: Some("https://a/2.m4a".into()),
+                    deep: true,
+                    ..Default::default()
+                },
+            ],
+        );
+        let m = merge_enrichment(base, enrich);
+        assert_eq!(m.episodes.len(), 2);
+        let e1 = m.episodes.iter().find(|e| e.guid == "e1").unwrap();
+        assert!(e1.deep);
+        assert_eq!(e1.notes.as_deref(), Some("精读"));
+        assert!(e1.audio_url.is_some());
+        assert!(m.catalog_partial);
+        assert_eq!(m.show.episode_count, 100);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 net、model、feeds、captions::split_timed；乔木精读站 *.qiaomu.ai 与 rss.qiaomu.ai
- * [OUTPUT]: 精读频道、单集 Detail、rss 改写 HTML、transcript_segments / podscribe_transcript
- * [POS]: 与 SubCast qiaomu 对齐的精读订阅与正文管线；官方字幕瀑布可消费原文/Podscribe
+ * [OUTPUT]: 精读频道、单集 Detail、rss 改写 HTML、transcript_segments / podscribe_transcript；rss_channel 分页拉满
+ * [POS]: 精读订阅与正文管线；入库不截 300；官方字幕瀑布可消费原文/Podscribe
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::captions;
@@ -12,8 +12,8 @@ use anyhow::{anyhow, Result};
 use regex::Regex;
 use serde::Serialize;
 
-/// 与 SubCast 一致：单档最多保留最近 300 期。
-pub const MAX_EPISODES: usize = 300;
+/// 精读 RSS 分页防御上限（页×100）；不是产品截断，源有多少入多少。
+const RSS_MAX_PAGES: usize = 100;
 
 /// `https://lex.qiaomu.ai/...` → `lex`（排除 rss/api/www 等公共服务子域）。
 pub fn site_id(url: &str) -> Option<String> {
@@ -127,6 +127,34 @@ fn meta(html: &str, prop: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// 精读目录项：`site` → `*.qiaomu.ai/data/episodes.json`；`rss` → rss.qiaomu.ai API。
+pub fn curated_kind(id: &str) -> Option<&'static str> {
+    match id {
+        "nexttoken" | "latentspace" | "bannatie" => Some("rss"),
+        id if id.starts_with("podscribe-") => Some("rss"),
+        id if title_for(id).is_some() => Some("site"),
+        _ => None,
+    }
+}
+
+/// 按精读 id 打开全量目录（site / rss）。
+pub async fn open_curated(id: &str) -> Result<feeds::Resolved> {
+    match curated_kind(id) {
+        Some("rss") => rss_channel(id).await,
+        Some("site") => channel(id).await,
+        _ => Err(anyhow!("未知精读源：{id}")),
+    }
+}
+
+/// 小宇宙 eid 常写作 `6af5….html`；去掉后缀才能与 xyz guid 对齐合并。
+fn normalize_episode_guid(raw: &str) -> String {
+    let s = raw.trim().trim_start_matches('/').trim_start_matches("ep/");
+    s.strip_suffix(".html")
+        .or_else(|| s.strip_suffix(".htm"))
+        .unwrap_or(s)
+        .to_string()
+}
+
 /// 拉取 `*.qiaomu.ai` 精读站（`/data/episodes.json`）。
 pub async fn channel(id: &str) -> Result<feeds::Resolved> {
     let base = feed_url(id);
@@ -172,16 +200,19 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
         updated_at: now_ms(),
         episode_count: 0,
     };
-    let episodes = list
+    let episodes: Vec<Episode> = list
         .iter()
-        .take(MAX_EPISODES)
         .filter_map(|e| {
-            let slug = e["s"].as_str()?.to_string();
+            let raw_slug = e["s"].as_str()?;
+            let guid = normalize_episode_guid(raw_slug);
+            if guid.is_empty() {
+                return None;
+            }
             let t = e["t"].as_str()?.to_string();
             let link = e["u"]
                 .as_str()
-                .map(abs)
-                .unwrap_or_else(|| format!("{base}ep/{slug}/"));
+                .map(&abs)
+                .unwrap_or_else(|| format!("{base}ep/{guid}/"));
             let published = e["d"]
                 .as_str()
                 .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
@@ -191,15 +222,20 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
                 .as_str()
                 .filter(|y| y.len() == 11)
                 .map(str::to_string);
+            // 精读站常带小宇宙 CDN 音频（字段 a）
+            let audio = e["a"]
+                .as_str()
+                .filter(|u| !u.is_empty())
+                .map(str::to_string);
             Some(Episode {
-                id: short_hash(&format!("{show_id}|{slug}"), 20),
+                id: short_hash(&format!("{show_id}|{guid}"), 20),
                 show_id: show_id.clone(),
-                guid: slug,
+                guid,
                 title: t,
                 published,
                 duration: e["du"].as_f64(),
-                audio_url: None,
-                cover: e["c"].as_str().map(abs).or_else(|| {
+                audio_url: audio,
+                cover: e["c"].as_str().map(&abs).or_else(|| {
                     video
                         .as_ref()
                         .map(|y| format!("https://i.ytimg.com/vi/{y}/hqdefault.jpg"))
@@ -216,7 +252,9 @@ pub async fn channel(id: &str) -> Result<feeds::Resolved> {
             })
         })
         .collect();
-    Ok(feeds::Resolved { show, episodes })
+    let mut show = show;
+    show.episode_count = episodes.len() as i64;
+    Ok(feeds::Resolved::full(show, episodes))
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -433,11 +471,11 @@ pub async fn rss_rewrite(entry_id: &str) -> Result<Option<String>> {
     Ok(html.filter(|h| h.len() > 40))
 }
 
-/// 拉取 `rss.qiaomu.ai/sources/{id}`（分页 API，封顶 MAX_EPISODES）。
+/// 拉取 `rss.qiaomu.ai/sources/{id}`（分页直到没有更多）。
 pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
     let mut entries: Vec<serde_json::Value> = vec![];
     let mut cursor = String::new();
-    for _ in 0..3 {
+    for _ in 0..RSS_MAX_PAGES {
         let url = format!(
             "https://rss.qiaomu.ai/api/sources/{id}/entries?limit=100{}",
             if cursor.is_empty() {
@@ -453,9 +491,6 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
                 .cloned()
                 .unwrap_or_default(),
         );
-        if entries.len() >= MAX_EPISODES {
-            break;
-        }
         match page["nextCursor"].as_str() {
             Some(c) if page["hasMore"].as_bool() == Some(true) && !c.is_empty() => {
                 cursor = c.to_string();
@@ -483,7 +518,6 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
     };
     let episodes = entries
         .iter()
-        .take(MAX_EPISODES)
         .filter_map(|e| {
             let guid = e["id"].as_str()?.to_string();
             let ep_title = e["title"].as_str()?.to_string();
@@ -536,7 +570,7 @@ pub async fn rss_channel(id: &str) -> Result<feeds::Resolved> {
             })
         })
         .collect();
-    Ok(feeds::Resolved { show, episodes })
+    Ok(feeds::Resolved::full(show, episodes))
 }
 
 #[cfg(test)]
@@ -552,14 +586,13 @@ mod tests {
 
     #[test]
     #[ignore = "需要网络"]
-    fn live_lex_channel_capped() {
+    fn live_lex_channel() {
         let r = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(channel("lex"))
             .expect("lex");
         eprintln!("lex n={} kind={} first={}", r.episodes.len(), r.show.kind, r.episodes.first().map(|e| e.title.as_str()).unwrap_or("-"));
         assert_eq!(r.show.kind, "qiaomu");
-        assert!(r.episodes.len() <= MAX_EPISODES);
         assert!(!r.episodes.is_empty());
     }
 }
