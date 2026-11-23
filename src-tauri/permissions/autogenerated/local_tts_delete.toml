@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-tts-delete"
+description = "Enables the local_tts_delete command without any pre-configured scope."
+commands.allow = ["local_tts_delete"]
+
+[[permission]]
+identifier = "deny-local-tts-delete"
+description = "Denies the local_tts_delete command without any pre-configured scope."
+commands.deny = ["local_tts_delete"]

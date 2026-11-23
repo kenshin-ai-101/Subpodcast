@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 页内 episode；store.current / time / audioOnly / playing / theater；jobs；offline；media.initialAudioOnly；YtEngine.VideoSlot
- * [OUTPUT]: 媒体切换 + 封面舞台 / 视频槽（双击·角标·F 进 theater）+ Controls；toggleTheater
- * [POS]: 单集左栏播控；页 episode 与 store.current 正交——别人在播时本页可先看，点播放再接管
+ * [INPUT]: 页内 episode；store；jobs；offline；YtEngine；SeekHighlights
+ * [OUTPUT]: 媒体切换 + 封面/视频槽 + Controls（进度条叠高光标记）；toggleTheater
+ * [POS]: 单集左栏播控；页 episode 与 store.current 正交
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
@@ -29,6 +29,7 @@ import { activeIndex, flushProgress, playSoon } from "../lib/playback";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
 import { kickYoutube } from "../lib/ytKick";
 import { useStore } from "../store";
+import { SeekHighlights } from "./HighlightViews";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { useYtUi, VideoSlot } from "./YtEngine";
 
@@ -330,17 +331,26 @@ export function PlayerBar({ episode }: { episode: Episode }) {
           <RotateCw size={16} />
         </button>
         <span className="time">{clock(shownTime)}</span>
-        <input
-          className="seek"
-          type="range"
-          min={0}
-          max={Math.max(shownLength, 1)}
-          step={0.1}
-          value={Math.min(shownTime, shownLength || shownTime)}
-          style={{ "--fill": fill } as React.CSSProperties}
-          disabled={!live}
-          onChange={(e) => useStore.getState().player?.seek(Number(e.target.value))}
-        />
+        <div className="seek-wrap">
+          {live && (
+            <SeekHighlights
+              episodeId={source.id}
+              length={shownLength}
+              onSeek={(sec) => useStore.getState().player?.seek(sec)}
+            />
+          )}
+          <input
+            className="seek"
+            type="range"
+            min={0}
+            max={Math.max(shownLength, 1)}
+            step={0.1}
+            value={Math.min(shownTime, shownLength || shownTime)}
+            style={{ "--fill": fill } as React.CSSProperties}
+            disabled={!live}
+            onChange={(e) => useStore.getState().player?.seek(Number(e.target.value))}
+          />
+        </div>
         <span className="time">{clock(shownLength)}</span>
         <VolumeControl />
         <button

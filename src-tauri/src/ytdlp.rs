@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 dirs、net、asr::download_file；应用 data 目录
- * [OUTPUT]: 定位/镜像安装 yt-dlp；ytdlp_command（proxy / socket-timeout / js-runtimes）
- * [POS]: import 与本机 ASR 抽 YouTube 音轨共用；对齐 SubCast 的工具链
+ * [OUTPUT]: find_tool（data/bin → PATH → homebrew）；定位/镜像安装 yt-dlp；ytdlp_command
+ * [POS]: import、本机 ASR 抽音轨、videoclip 高光切片共用的外部工具链入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Result};
@@ -52,23 +52,28 @@ fn child_path() -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
-pub fn find_ytdlp(data: &Path) -> Option<PathBuf> {
-    let own = data.join("bin").join(exe("yt-dlp"));
+/// 命令行工具：先 data/bin 自带副本，再 PATH 与常见包管理器目录（Dock 启动看不到终端 PATH）。
+pub fn find_tool(data: &Path, name: &str) -> Option<PathBuf> {
+    let own = data.join("bin").join(exe(name));
     if own.is_file() {
         return Some(own);
     }
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/opt/local/bin"] {
         dirs.push(d.into());
     }
     if let Some(h) = dirs::home_dir() {
         dirs.push(h.join(".local/bin"));
     }
     dirs.into_iter()
-        .map(|d| d.join(exe("yt-dlp")))
+        .map(|d| d.join(exe(name)))
         .find(|p| p.is_file())
+}
+
+pub fn find_ytdlp(data: &Path) -> Option<PathBuf> {
+    find_tool(data, "yt-dlp")
 }
 
 /// 国内可达镜像（与 SubCast 同源）；GitHub 作兜底。

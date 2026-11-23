@@ -1,7 +1,7 @@
 /**
  * [INPUT]: dict / words / clip / jobs.llmReady / api.llmChat / store
  * [OUTPUT]: useLearnOn、useLearnMarks、LearnText、WordCard、LearnTip、EmptyState、Meaning、ClipIcon、ClipLabel、fmtWait、dueLabel
- * [POS]: 英语学习模式前端核心（标词 / 词卡 / 引导）；练习见 LearnPractice，生词本见 WordsBook
+ * [POS]: 英语学习模式前端核心（标词 / 词卡 / 统一朗读 / 引导）；练习见 LearnPractice，生词本见 WordsBook
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -285,7 +285,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
           className="icon-btn sm wc-say"
           title="读单词"
           aria-label="读单词"
-          onClick={() => speak(entry?.lemma ?? target.token, 0.85)}
+          onClick={() => speak(entry?.lemma ?? target.token)}
         >
           <Volume2 size={15} />
         </button>

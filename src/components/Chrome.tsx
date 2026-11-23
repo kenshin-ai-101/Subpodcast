@@ -260,7 +260,25 @@ export function TopBar() {
 }
 
 export function Toast() {
-  const toast = useStore((s) => s.toast);
+  const { toast, action } = useStore(
+    useShallow((s) => ({ toast: s.toast, action: s.toastAction })),
+  );
   if (!toast) return null;
-  return <div className="toast">{toast}</div>;
+  return (
+    <div className={`toast${action ? " has-action" : ""}`} role="status">
+      <span>{toast}</span>
+      {action && (
+        <button
+          type="button"
+          className="toast-action"
+          onClick={() => {
+            action.run();
+            useStore.setState({ toast: null, toastAction: null });
+          }}
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
 }

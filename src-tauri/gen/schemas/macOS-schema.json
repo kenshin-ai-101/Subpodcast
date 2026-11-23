@@ -369,10 +369,28 @@
           "markdownDescription": "Enables the cancel_job command without any pre-configured scope."
         },
         {
+          "description": "Enables the clear_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-downloads",
+          "markdownDescription": "Enables the clear_downloads command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_temp command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-temp",
           "markdownDescription": "Enables the clear_temp command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_tts_cache command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-tts-cache",
+          "markdownDescription": "Enables the clear_tts_cache command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clipboard_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clipboard-write",
+          "markdownDescription": "Enables the clipboard_write command without any pre-configured scope."
         },
         {
           "description": "Enables the cloud_transcribe command without any pre-configured scope.",
@@ -421,6 +439,12 @@
           "type": "string",
           "const": "allow-fetch-official-transcript",
           "markdownDescription": "Enables the fetch_official_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the file_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-file-exists",
+          "markdownDescription": "Enables the file_exists command without any pre-configured scope."
         },
         {
           "description": "Enables the get_blob command without any pre-configured scope.",
@@ -501,6 +525,24 @@
           "markdownDescription": "Enables the local_transcribe command without any pre-configured scope."
         },
         {
+          "description": "Enables the local_tts_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-tts-delete",
+          "markdownDescription": "Enables the local_tts_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_tts_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-tts-install",
+          "markdownDescription": "Enables the local_tts_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_tts_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-tts-status",
+          "markdownDescription": "Enables the local_tts_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the log_listen command without any pre-configured scope.",
           "type": "string",
           "const": "allow-log-listen",
@@ -559,6 +601,12 @@
           "type": "string",
           "const": "allow-rescan-asr-models",
           "markdownDescription": "Enables the rescan_asr_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-file",
+          "markdownDescription": "Enables the reveal_file command without any pre-configured scope."
         },
         {
           "description": "Enables the save_download command without any pre-configured scope.",
@@ -657,10 +705,46 @@
           "markdownDescription": "Enables the tts_speak command without any pre-configured scope."
         },
         {
+          "description": "Enables the tts_synthesize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tts-synthesize",
+          "markdownDescription": "Enables the tts_synthesize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the tts_system_voices command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tts-system-voices",
+          "markdownDescription": "Enables the tts_system_voices command without any pre-configured scope."
+        },
+        {
           "description": "Enables the use_youtube_track command without any pre-configured scope.",
           "type": "string",
           "const": "allow-use-youtube-track",
           "markdownDescription": "Enables the use_youtube_track command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_clip_env command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-clip-env",
+          "markdownDescription": "Enables the video_clip_env command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_clip_prepare command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-clip-prepare",
+          "markdownDescription": "Enables the video_clip_prepare command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_clip_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-clip-render",
+          "markdownDescription": "Enables the video_clip_render command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the video_clip_warm command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-clip-warm",
+          "markdownDescription": "Enables the video_clip_warm command without any pre-configured scope."
         },
         {
           "description": "Enables the youtube_subscriptions command without any pre-configured scope.",
@@ -699,10 +783,28 @@
           "markdownDescription": "Denies the cancel_job command without any pre-configured scope."
         },
         {
+          "description": "Denies the clear_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-downloads",
+          "markdownDescription": "Denies the clear_downloads command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clear_temp command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clear-temp",
           "markdownDescription": "Denies the clear_temp command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_tts_cache command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-tts-cache",
+          "markdownDescription": "Denies the clear_tts_cache command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clipboard_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clipboard-write",
+          "markdownDescription": "Denies the clipboard_write command without any pre-configured scope."
         },
         {
           "description": "Denies the cloud_transcribe command without any pre-configured scope.",
@@ -751,6 +853,12 @@
           "type": "string",
           "const": "deny-fetch-official-transcript",
           "markdownDescription": "Denies the fetch_official_transcript command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the file_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-file-exists",
+          "markdownDescription": "Denies the file_exists command without any pre-configured scope."
         },
         {
           "description": "Denies the get_blob command without any pre-configured scope.",
@@ -831,6 +939,24 @@
           "markdownDescription": "Denies the local_transcribe command without any pre-configured scope."
         },
         {
+          "description": "Denies the local_tts_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-tts-delete",
+          "markdownDescription": "Denies the local_tts_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_tts_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-tts-install",
+          "markdownDescription": "Denies the local_tts_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_tts_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-tts-status",
+          "markdownDescription": "Denies the local_tts_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the log_listen command without any pre-configured scope.",
           "type": "string",
           "const": "deny-log-listen",
@@ -889,6 +1015,12 @@
           "type": "string",
           "const": "deny-rescan-asr-models",
           "markdownDescription": "Denies the rescan_asr_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-file",
+          "markdownDescription": "Denies the reveal_file command without any pre-configured scope."
         },
         {
           "description": "Denies the save_download command without any pre-configured scope.",
@@ -987,10 +1119,46 @@
           "markdownDescription": "Denies the tts_speak command without any pre-configured scope."
         },
         {
+          "description": "Denies the tts_synthesize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tts-synthesize",
+          "markdownDescription": "Denies the tts_synthesize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tts_system_voices command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tts-system-voices",
+          "markdownDescription": "Denies the tts_system_voices command without any pre-configured scope."
+        },
+        {
           "description": "Denies the use_youtube_track command without any pre-configured scope.",
           "type": "string",
           "const": "deny-use-youtube-track",
           "markdownDescription": "Denies the use_youtube_track command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the video_clip_env command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-video-clip-env",
+          "markdownDescription": "Denies the video_clip_env command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the video_clip_prepare command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-video-clip-prepare",
+          "markdownDescription": "Denies the video_clip_prepare command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the video_clip_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-video-clip-render",
+          "markdownDescription": "Denies the video_clip_render command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the video_clip_warm command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-video-clip-warm",
+          "markdownDescription": "Denies the video_clip_warm command without any pre-configured scope."
         },
         {
           "description": "Denies the youtube_subscriptions command without any pre-configured scope.",

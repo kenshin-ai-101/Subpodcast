@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki
- * [OUTPUT]: Tauri 命令面（含 shared_* / share_guide / tts_speak / translate_texts / save_download / fetch_official / learn_clip / export_anki / save_text）与启动
+ * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts
+ * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / reveal_file）与启动
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -9,18 +9,23 @@ mod asr;
 mod captions;
 mod clip;
 mod db;
+mod edge_gec;
+mod edge_tts;
 mod feeds;
 mod import;
 mod llm;
+mod local_tts;
 mod model;
 mod net;
 mod offline;
 mod qiaomu;
 mod secrets;
 mod shared;
+mod speech;
 mod translate;
 mod tts;
 mod ui;
+mod videoclip;
 mod ytdlp;
 
 use model::{now_ms, short_hash, Episode, Show, Transcript};
@@ -652,6 +657,62 @@ async fn tts_speak(text: String, voice: String, resource: Option<String>) -> Res
     Ok(base64::engine::general_purpose::STANDARD.encode(wav))
 }
 
+/// 合成朗读音频，返回本机缓存路径和时长。
+#[tauri::command]
+async fn tts_synthesize(
+    state: State<'_, AppState>,
+    req: speech::TtsRequest,
+) -> Res<speech::TtsResult> {
+    speech::synthesize(&state.data, req).await.map_err(e)
+}
+
+#[tauri::command(async)]
+fn tts_system_voices() -> Vec<speech::SystemVoice> {
+    speech::list_system_voices()
+}
+
+#[tauri::command(async)]
+fn clear_tts_cache(state: State<'_, AppState>) -> Res<()> {
+    speech::clear_cache(&state.data).map_err(e)
+}
+
+#[tauri::command(async)]
+fn local_tts_status(state: State<'_, AppState>) -> local_tts::Status {
+    local_tts::status(&state.data)
+}
+
+#[tauri::command]
+async fn local_tts_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    mirror_first: bool,
+) -> Res<()> {
+    let job = format!("local-tts:{id}");
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut jobs = state.jobs.lock().map_err(e)?;
+        if jobs.contains_key(&job) {
+            return Err("语音模型正在下载".into());
+        }
+        jobs.insert(job.clone(), cancel.clone());
+    }
+    let result = local_tts::install(&state.data, &id, &cancel, mirror_first, |received, total| {
+        let _ = app.emit(
+            "local-tts-download",
+            serde_json::json!({ "id": id, "received": received, "total": total }),
+        );
+    })
+    .await;
+    end_job(&state, &job);
+    result.map_err(e)
+}
+
+#[tauri::command(async)]
+fn local_tts_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    local_tts::delete(&state.data, &id).map_err(e)
+}
+
 /// 匿名上传已完成的中文机翻（仅 ASR/共享来源；受 shareTranscripts 约束）。
 #[tauri::command]
 async fn share_translation(
@@ -811,6 +872,9 @@ struct ChatReq {
     protocol: String,
     messages: Vec<llm::ChatMessage>,
     stream: Option<bool>,
+    max_tokens: Option<u32>,
+    json_mode: Option<bool>,
+    quick: Option<bool>,
 }
 
 #[tauri::command]
@@ -824,6 +888,11 @@ async fn llm_chat(app: AppHandle, req: ChatReq) -> Res<String> {
         protocol: req.protocol,
         api_key: key,
     };
+    let opts = llm::ChatOpts {
+        max_tokens: req.max_tokens,
+        json_mode: req.json_mode.unwrap_or(false),
+        quick: req.quick.unwrap_or(false),
+    };
     if req.stream.unwrap_or(true) {
         let app2 = app.clone();
         llm::chat_stream(&cfg, &req.messages, move |delta| {
@@ -832,7 +901,9 @@ async fn llm_chat(app: AppHandle, req: ChatReq) -> Res<String> {
         .await
         .map_err(e)
     } else {
-        llm::chat_once(&cfg, &req.messages).await.map_err(e)
+        llm::chat_once_opts(&cfg, &req.messages, &opts)
+            .await
+            .map_err(e)
     }
 }
 
@@ -1192,6 +1263,92 @@ fn save_text(path: String, text: String) -> Res<()> {
     std::fs::write(path, text).map_err(e)
 }
 
+/// 高光切片：FFmpeg 是否就绪、能否硬编。
+#[tauri::command(async)]
+fn video_clip_env(state: State<'_, AppState>) -> videoclip::FfmpegStatus {
+    videoclip::env_status(&state.data)
+}
+
+/// 高光切片：后台解析直链、备好 FFmpeg，再预取最可能被剪的几段。
+#[tauri::command]
+fn video_clip_warm(state: State<'_, AppState>, video_id: String, ranges: Option<Vec<(f64, f64)>>) {
+    let data = state.data.clone();
+    tauri::async_runtime::spawn(async move {
+        videoclip::warm(&data, &video_id, &ranges.unwrap_or_default()).await;
+    });
+}
+
+/// `video-clip-progress` 事件：{ jobId, stage, progress, message }。
+fn clip_progress(app: &AppHandle, job_id: &str) -> impl FnMut(&str, f64, &str) + Send + 'static {
+    let (app, job_id) = (app.clone(), job_id.to_string());
+    move |stage, progress, message| {
+        let _ = app.emit(
+            "video-clip-progress",
+            serde_json::json!({ "jobId": job_id, "stage": stage, "progress": progress, "message": message }),
+        );
+    }
+}
+
+/// 高光切片：取一段（多段 ranges 时拼成蒙太奇），可 cancel_job(jobId)。
+#[tauri::command]
+async fn video_clip_prepare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    video_id: String,
+    start: f64,
+    end: f64,
+    ranges: Option<Vec<(f64, f64)>>,
+) -> Res<videoclip::PreparedClip> {
+    let cancel = begin_job(&state, &job_id);
+    let data = state.data.clone();
+    let report = clip_progress(&app, &job_id);
+    let result = match ranges.filter(|r| r.len() > 1) {
+        Some(r) => videoclip::prepare_montage(&data, &video_id, &r, &cancel, report).await,
+        None => videoclip::prepare_segment(&data, &video_id, start, end, &cancel, report).await,
+    };
+    end_job(&state, &job_id);
+    result.map_err(e)
+}
+
+/// 高光切片：叠字幕 / 标题 / 封面并导出 MP4，可 cancel_job(jobId)。
+#[tauri::command]
+async fn video_clip_render(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    req: videoclip::RenderRequest,
+) -> Res<videoclip::RenderResult> {
+    let cancel = begin_job(&state, &job_id);
+    let data = state.data.clone();
+    let result = videoclip::render(&data, req, &cancel, clip_progress(&app, &job_id)).await;
+    end_job(&state, &job_id);
+    result.map_err(e)
+}
+
+/// 在访达 / 资源管理器里选中文件（导出完成后「在文件夹中显示」）。
+#[tauri::command]
+fn reveal_file(path: String) -> Res<()> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("找不到这个文件".into());
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(e)
+}
+
+/// 本地路径是否仍在（高光「已导出」复用前校验）。
+#[tauri::command]
+fn file_exists(path: String) -> bool {
+    !path.is_empty() && std::path::Path::new(&path).is_file()
+}
+
+/// 写入系统剪贴板。WebView 在 await 后常丢 user activation，前端 Clipboard API 会 NotAllowedError。
+#[tauri::command]
+fn clipboard_write(text: String) -> Res<()> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|err| format!("写入剪贴板失败：{err}"))
+}
+
 /// 把文本或 base64 二进制写到系统「下载」；字幕 MD/PDF 与其它导出共用。
 #[tauri::command]
 fn save_download(name: String, data: String, binary: bool) -> Res<String> {
@@ -1215,11 +1372,12 @@ fn dir_bytes(path: &std::path::Path) -> u64 {
         return 0;
     };
     for ent in rd.flatten() {
-        let p = ent.path();
-        if p.is_dir() {
-            total = total.saturating_add(dir_bytes(&p));
-        } else if let Ok(m) = ent.metadata() {
-            total = total.saturating_add(m.len());
+        if let Ok(m) = ent.metadata() {
+            if m.is_dir() {
+                total = total.saturating_add(dir_bytes(&ent.path()));
+            } else if m.is_file() {
+                total = total.saturating_add(m.len());
+            }
         }
     }
     total
@@ -1234,9 +1392,13 @@ fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
         .sum();
     serde_json::json!({
         "downloads": dir_bytes(&offline::dir(d)),
-        "models": dir_bytes(&d.join("models")),
+        "models": dir_bytes(&asr::models_dir(d)),
         "library": library,
         "temp": dir_bytes(&d.join("work")),
+        "ttsCache": dir_bytes(&speech::cache_dir(d)),
+        "ttsModels": dir_bytes(&local_tts::models_dir(d)),
+        // 字幕对齐音频缓存尚未接入，占位 0；有占用时前端才会显示该行
+        "audioCache": 0,
     })
 }
 
@@ -1281,11 +1443,18 @@ fn delete_download(state: State<'_, AppState>, episode_id: String) -> Res<()> {
 }
 
 #[tauri::command]
+fn clear_downloads(state: State<'_, AppState>) -> Res<()> {
+    offline::clear(&state.data).map_err(e)
+}
+
+#[tauri::command]
 fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) -> Res<()> {
     use tauri_plugin_opener::OpenerExt;
     let dir = match kind.as_str() {
         "downloads" => offline::dir(&state.data),
-        "models" => state.data.join("models"),
+        "models" => asr::models_dir(&state.data),
+        "tts-cache" => speech::cache_dir(&state.data),
+        "tts-models" => local_tts::models_dir(&state.data),
         _ => state.data.clone(),
     };
     std::fs::create_dir_all(&dir).map_err(e)?;
@@ -1690,12 +1859,19 @@ pub fn run() {
             share_guide,
             share_translation,
             tts_speak,
+            tts_synthesize,
+            tts_system_voices,
+            clear_tts_cache,
+            local_tts_status,
+            local_tts_install,
+            local_tts_delete,
             get_blob,
             set_blob,
             qiaomu_detail,
             download_episode,
             list_downloads,
             delete_download,
+            clear_downloads,
             get_settings,
             set_settings,
             set_api_key,
@@ -1723,6 +1899,13 @@ pub fn run() {
             learn_clip,
             export_anki,
             save_text,
+            video_clip_env,
+            video_clip_warm,
+            video_clip_prepare,
+            video_clip_render,
+            reveal_file,
+            file_exists,
+            clipboard_write,
         ])
         .setup(|app| {
             // 开发：Vite；发行：http://localhost（YouTube 拒绝 tauri://）

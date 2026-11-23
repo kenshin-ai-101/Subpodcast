@@ -1,16 +1,34 @@
 /**
- * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack；SubtitleExport
- * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 SRT·VTT·ASS·LRC·TXT·MD；学英语标词/词卡/跟读听写 / 行列表）
- * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt；中文栏显式导出，外语进「…」
+ * [INPUT]: jobs 字幕/译文/asr、asrModels、store；switchYoutubeTrack；SubtitleExport；highlights
+ * [OUTPUT]: 右侧字幕面板（GenCard/导出/学英语/行列表）+「高光」子模式
+ * [POS]: 听懂主路径；高光列表与行内标记；剪视频走 VideoClipDialog
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ChevronDown,
+  Download,
+  Ellipsis,
+  Languages,
+  ListChecks,
+  Loader2,
+  Mic,
+  PenLine,
+  Play,
+  Scissors,
+  Sparkles,
+} from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errText, type Episode, type Segment } from "../lib/api";
 import { useAsrModels, type AsrModel } from "../lib/asrModels";
 import { looksEnglish } from "../lib/dict";
 import { clock } from "../lib/format";
+import {
+  loadHighlights,
+  previewEpisodeRange,
+  useHighlights,
+  type HighlightClip,
+} from "../lib/highlights";
 import {
   cancelAsr,
   ensureTranscript,
@@ -22,10 +40,12 @@ import {
 import { activeIndex } from "../lib/playback";
 import { activeCloudAsr, ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { useStore } from "../store";
+import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
 import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
 import { SubtitleExport } from "./SubtitleExport";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 type Mode = "bilingual" | "translation" | "original";
 
@@ -739,15 +759,63 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const [card, setCard] = useState<CardTarget | null>(null);
   const [shadow, setShadow] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [showHighlights, setShowHighlights] = useState(false);
   const closeCard = useCallback(() => setCard(null), []);
+  const hlBundle = useHighlights((s) => s.bundles[episode.id]);
+  const hlLoading = useHighlights((s) => !!s.loading[episode.id]);
 
   useEffect(() => {
     void ensureTranscript(episode);
   }, [episode.id]);
 
+  useEffect(() => {
+    setShowHighlights(false);
+    void loadHighlights(episode.id);
+  }, [episode.id]);
+
   const segs = transcript?.segments ?? [];
+  useClipWarm(episode, segs);
   const starts = segs.map((s) => s.start);
   const active = segs.length ? activeIndex(starts, time) : -1;
+  const zhItems = translation?.items;
+
+  const hlStarts = useMemo(() => {
+    const map = new Map<number, HighlightClip>();
+    for (const c of hlBundle?.clips ?? []) {
+      if (!map.has(c.startIdx)) map.set(c.startIdx, c);
+    }
+    return map;
+  }, [hlBundle]);
+
+  const hlRange = useMemo(() => {
+    const cover = new Set<number>();
+    for (const c of hlBundle?.clips ?? []) {
+      for (let i = c.startIdx; i <= c.endIdx; i++) cover.add(i);
+    }
+    return cover;
+  }, [hlBundle]);
+
+  const onHlPreview = useCallback(
+    (c: HighlightClip) => previewEpisodeRange(episode, c.start, c.end),
+    [episode],
+  );
+  const onHlClip = useCallback(
+    (c: HighlightClip) => openVideoClipDialog({ ep: episode, segments: segs, zh: zhItems, clip: c }),
+    [episode, segs, zhItems],
+  );
+  const jumpFromHl = useCallback(
+    (index: number, t: number) => {
+      setShowHighlights(false);
+      player?.seek(t);
+      requestAnimationFrame(() => {
+        listRef.current?.querySelector(`[data-i="${index}"]`)?.scrollIntoView({
+          block: "center",
+          behavior: "smooth",
+        });
+      });
+    },
+    [player],
+  );
   const foreign = transcript
     ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
     : false;
@@ -805,6 +873,19 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           />
         )}
         <div className="spacer" />
+        <button
+          type="button"
+          className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
+          title="高光金句片段"
+          aria-pressed={showHighlights}
+          onClick={() => setShowHighlights((v) => !v)}
+        >
+          <Sparkles size={13} />
+          <span>高光</span>
+          {(hlBundle?.clips.length || hlLoading) && (
+            <span className="hl-badge">{hlLoading ? "…" : hlBundle?.clips.length}</span>
+          )}
+        </button>
         {!foreign && (
           <button
             type="button"
@@ -867,6 +948,14 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           </button>
         </div>
       )}
+      {showHighlights ? (
+        <HighlightsPanel
+          ep={episode}
+          segments={segs}
+          zh={zhItems}
+          onJumpToTranscript={jumpFromHl}
+        />
+      ) : (
       <div
         className={`lines${marks && learnCard ? " learning" : ""}`}
         ref={listRef}
@@ -878,27 +967,47 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           const showZh = foreign && zh && mode !== "original";
           // 学英语时中文模式仍保留原文，方便点词
           const showOrig = mode !== "translation" || !zh || !!marks;
+          const hl = hlStarts.get(i);
+          const inHl = hlRange.has(i);
+          const hlEnd = inHl && !hlRange.has(i + 1);
           return (
-            <div
-              key={`${s.start}-${i}`}
-              data-i={i}
-              className={`line ${i === active ? "active" : ""}`}
-              onClick={() => player?.seek(s.start)}
-            >
-              <div className="line-time">{clock(s.start)}</div>
-              <div className="line-text">
-                {showZh && <div className="zh">{zh}</div>}
-                {showOrig && (
-                  <div className="orig">
-                    {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
-                  </div>
-                )}
+            <div key={`${s.start}-${i}`} className={hl ? "hl-group" : undefined}>
+              {hl && (
+                <div className="hl-head">
+                  <span className="hl-score">✦ {hl.score}</span>
+                  <span className="hl-head-title clamp1">{hl.title}</span>
+                  <span className="spacer" />
+                  <button type="button" className="link-btn" onClick={() => onHlPreview(hl)}>
+                    <Play size={11} fill="currentColor" /> 试看
+                  </button>
+                  {episode.videoId && (
+                    <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
+                      <Scissors size={11} /> 剪视频
+                    </button>
+                  )}
+                </div>
+              )}
+              <div
+                data-i={i}
+                className={`line ${i === active ? "active" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
+                onClick={() => player?.seek(s.start)}
+              >
+                <div className="line-time">{clock(s.start)}</div>
+                <div className="line-text">
+                  {showZh && <div className="zh">{zh}</div>}
+                  {showOrig && (
+                    <div className="orig">
+                      {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
         })}
         {card && <WordCard target={card} ep={episode} onClose={closeCard} />}
       </div>
+      )}
       {exporting && !foreign && (
         <SubtitleExport
           episode={episode}

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: api.learnClip；store.current/player；convertFileSrc
+ * [INPUT]: api.learnClip；store.current/player；convertFileSrc；统一朗读引擎
  * [OUTPUT]: prepareClip / prefetchClip / playClip / toggleClip / stopClip / speak / useClipState / clipKey
  * [POS]: 学英语句级原声；当前集 seek+到点暂停，否则本地剪辑；按钮可显示 loading/playing
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
@@ -7,6 +7,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { api } from "./api";
+import { speakWord, stopSpeaking } from "./tts";
 import { useStore } from "../store";
 
 /** 当前句 key + 是否在裁剪；按钮据此转圈 / 显示暂停。 */
@@ -71,15 +72,11 @@ export function stopClip() {
     if (s.playing) s.player?.toggle();
   }
   if (el) el.pause();
-  try {
-    window.speechSynthesis?.cancel();
-  } catch {
-    /* ignore */
-  }
+  stopSpeaking();
   useClipState.setState({ key: null, loading: false });
 }
 
-/** 正在播同一句则停，否则开播。fallbackText：无剪辑时系统朗读，仍可点暂停停掉。 */
+/** 正在播同一句则停，否则开播。fallbackText：无剪辑时使用所选引擎朗读，仍可点暂停停掉。 */
 export async function toggleClip(
   ep: { id: string },
   start: number,
@@ -95,26 +92,10 @@ export async function toggleClip(
 
 /** 无本地剪辑时，用 TTS 顶上，并挂上同一 key，以便按钮显示「暂停」。 */
 function speakAsClip(key: string, text: string, mine: number) {
-  const synth = window.speechSynthesis;
-  if (!synth) {
-    if (mine === turn) useClipState.setState({ key: null, loading: false });
-    return false;
-  }
-  synth.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-US";
-  u.rate = 0.9;
-  const voice =
-    synth.getVoices().find((v) => v.lang === "en-US" && /Samantha|Alex|Ava|Allison/.test(v.name)) ??
-    synth.getVoices().find((v) => v.lang.startsWith("en"));
-  if (voice) u.voice = voice;
-  const clear = () => {
-    if (mine === turn) useClipState.setState({ key: null, loading: false });
-  };
-  u.onend = clear;
-  u.onerror = clear;
   useClipState.setState({ key, loading: false });
-  synth.speak(u);
+  void speakWord(text).finally(() => {
+    if (mine === turn) useClipState.setState({ key: null, loading: false });
+  });
   return true;
 }
 
@@ -197,17 +178,8 @@ export async function playClip(
   return true;
 }
 
-/** 系统 TTS 读英文（单词，或无音频时的句子）。 */
-export function speak(text: string, rate = 0.9) {
-  const synth = window.speechSynthesis;
-  if (!synth) return;
-  synth.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-US";
-  u.rate = rate;
-  const voice =
-    synth.getVoices().find((v) => v.lang === "en-US" && /Samantha|Alex|Ava|Allison/.test(v.name)) ??
-    synth.getVoices().find((v) => v.lang.startsWith("en"));
-  if (voice) u.voice = voice;
-  synth.speak(u);
+/** 生词按当前朗读引擎和语速播放。 */
+export function speak(text: string) {
+  stopClip();
+  void speakWord(text);
 }

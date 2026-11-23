@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 net、secrets（API Key）
- * [OUTPUT]: OpenAI 兼容 / Anthropic 一次性与流式对话
- * [POS]: AI 问答与翻译的模型出口
+ * [OUTPUT]: OpenAI 兼容 / Anthropic 一次性与流式对话；ChatOpts（max_tokens / json_mode / quick；DeepSeek 关 thinking）
+ * [POS]: AI 问答、导读、高光抽取的模型出口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::net;
@@ -70,20 +70,60 @@ fn text_piece(v: &Value) -> Option<String> {
     m["content"].as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
-pub async fn chat_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String> {
-    if cfg.protocol == "anthropic" {
-        return anthropic_once(cfg, messages).await;
-    }
-    openai_once(cfg, messages).await
+#[derive(Clone, Debug, Default)]
+pub struct ChatOpts {
+    pub max_tokens: Option<u32>,
+    pub json_mode: bool,
+    /// 关闭深度思考，把预算留给正文（各厂商扩展字段尽力而为）。
+    pub quick: bool,
 }
 
-async fn openai_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String> {
+pub async fn chat_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String> {
+    chat_once_opts(cfg, messages, &ChatOpts::default()).await
+}
+
+pub async fn chat_once_opts(
+    cfg: &LlmConfig,
+    messages: &[ChatMessage],
+    opts: &ChatOpts,
+) -> Result<String> {
+    if cfg.protocol == "anthropic" {
+        return anthropic_once(cfg, messages, opts).await;
+    }
+    openai_once(cfg, messages, opts).await
+}
+
+fn apply_quick_openai(body: &mut Value, model: &str) {
+    let m = model.to_ascii_lowercase();
+    // DeepSeek reasoner / 各类 thinking：尽量压思考，把预算留给 JSON 正文。
+    if m.contains("reasoner") || m.contains("o1") || m.contains("o3") || m.contains("o4") {
+        body["reasoning_effort"] = Value::String("low".into());
+    }
+    if m.contains("thinking") || m.contains("r1") || m.contains("reasoner") {
+        body["enable_thinking"] = Value::Bool(false);
+    }
+    // DeepSeek V3.1+ / 硅基等同系
+    if m.contains("deepseek") {
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
+}
+
+async fn openai_once(cfg: &LlmConfig, messages: &[ChatMessage], opts: &ChatOpts) -> Result<String> {
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": cfg.model,
         "messages": messages,
         "temperature": 0.3,
     });
+    if let Some(n) = opts.max_tokens {
+        body["max_tokens"] = Value::from(n);
+    }
+    if opts.json_mode {
+        body["response_format"] = serde_json::json!({ "type": "json_object" });
+    }
+    if opts.quick {
+        apply_quick_openai(&mut body, &cfg.model);
+    }
     let resp = net::client()
         .post(&url)
         .bearer_auth(&cfg.api_key)
@@ -104,13 +144,22 @@ async fn openai_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String
         .ok_or_else(|| anyhow!("模型没有返回正文"))
 }
 
-async fn anthropic_once(cfg: &LlmConfig, messages: &[ChatMessage]) -> Result<String> {
+async fn anthropic_once(
+    cfg: &LlmConfig,
+    messages: &[ChatMessage],
+    opts: &ChatOpts,
+) -> Result<String> {
     let url = format!("{}/messages", cfg.base_url.trim_end_matches('/'));
     let (system, rest): (Vec<_>, Vec<_>) = messages.iter().partition(|m| m.role == "system");
-    let system = system.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+    let system = system
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let max_tokens = opts.max_tokens.unwrap_or(4096);
     let body = serde_json::json!({
         "model": cfg.model,
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "system": system,
         "messages": rest.iter().map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
     });
@@ -149,7 +198,7 @@ pub async fn chat_stream(
     mut on_delta: impl FnMut(String),
 ) -> Result<String> {
     if cfg.protocol == "anthropic" {
-        let full = anthropic_once(cfg, messages).await?;
+        let full = anthropic_once(cfg, messages, &ChatOpts::default()).await?;
         on_delta(full.clone());
         return Ok(full);
     }

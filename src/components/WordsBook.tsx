@@ -1,7 +1,7 @@
 /**
  * [INPUT]: words / clip / sfx / api.exportAnki·saveText·getEpisode；LearnStats；LearnModal
  * [OUTPUT]: WordsView、exportWords、openWord、useDueCount、remindReview
- * [POS]: 生词本列表（统计热力）/ 词详情（听原声可暂停）/ 回想·拼写复习 / Anki·CSV
+ * [POS]: 生词本列表（统计热力）/ 词详情（原声与统一朗读）/ 回想·拼写复习 / Anki·CSV
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -385,7 +385,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   }, [i]);
 
   useEffect(() => {
-    if (flipped && w) speak(w.id, 0.85);
+    if (flipped && w) speak(w.id);
   }, [flipped]);
 
   const rate = useCallback(
@@ -423,7 +423,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
       } else if (flipped && e.key.toLowerCase() === "w") {
         e.preventDefault();
         e.stopPropagation();
-        if (w) speak(w.id, 0.85);
+        if (w) speak(w.id);
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -535,7 +535,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
                 className="icon-btn sm rv-say"
                 title="读单词（W）"
                 aria-label="读单词"
-                onClick={() => speak(w.id, 0.85)}
+                onClick={() => speak(w.id)}
               >
                 <Volume2 size={16} />
               </button>
@@ -696,7 +696,7 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
         void playWord(w, true);
       } else if (e.key.toLowerCase() === "w" && w) {
         e.preventDefault();
-        speak(w.id, 0.85);
+        speak(w.id);
       }
     };
     window.addEventListener("keydown", k);
@@ -753,7 +753,7 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
             className="icon-btn sm rv-say"
             title="读单词（W）"
             aria-label="读单词"
-            onClick={() => speak(w.id, 0.85)}
+            onClick={() => speak(w.id)}
           >
             <Volume2 size={16} />
           </button>

@@ -1,10 +1,10 @@
 /**
  * [INPUT]: api.getSettings / setSettings
- * [OUTPUT]: Settings、LearnLevel、PRESETS、VOICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、读写与迁移
- * [POS]: 用户偏好；Key 在钥匙串；含问答指令、快捷提示词、朗读音色与学英语（含 learnSounds）
+ * [OUTPUT]: Settings、LearnLevel、PRESETS、TTS_SERVICES、ASR_SERVICES、BUILTIN_PROMPTS、quickPrompts、clipExportDir、读写与迁移
+ * [POS]: 用户偏好；Key 在钥匙串；含问答/朗读/学英语与高光导出目录
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { api } from "./api";
+import { api, type TtsRequest } from "./api";
 
 export interface Provider {
   id: string;
@@ -32,7 +32,7 @@ export interface CloudAsr {
 }
 
 export type SubtitleMode = "bilingual" | "original" | "translation";
-export type SettingsSection = "subtitles" | "ai" | "general" | "learn";
+export type SettingsSection = "subtitles" | "ai" | "tts" | "general" | "learn";
 export type LangSetting = "auto" | "zh-CN" | "zh-TW" | "en";
 export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";
 
@@ -76,10 +76,10 @@ export interface Settings {
   homeBannerHidden: boolean;
   /** 匿名分享字幕、译文与导读（阅读共享库始终开启）。 */
   shareTranscripts: boolean;
-  /** 豆包朗读音色 id。 */
-  ttsVoice: string;
-  /** seed-tts-2.0 或复刻 seed-icl-2.0。 */
-  ttsResource: string;
+  /** 当前使用的朗读引擎。 */
+  ttsEngine: string;
+  ttsServices: Record<string, TtsService>;
+  ttsRate: number;
   /** YouTube 验证时借用哪个浏览器登录（"" = 先问我）。 */
   ytCookiesBrowser?: string;
   /** 英语学习模式（设置 › 学英语）。默认关；下列项仅开启后生效。 */
@@ -98,6 +98,8 @@ export interface Settings {
   learnSounds: boolean;
   /** 是否已回答过「想顺便学英语吗？」。 */
   learnAsked: boolean;
+  /** 高光剪辑导出目录；空则系统「下载」。 */
+  clipExportDir?: string;
 }
 
 /** 导读/精读朗读可选音色。 */
@@ -262,6 +264,96 @@ export const ASR_SERVICES: CloudAsr[] = [
   },
 ];
 
+export interface TtsVoice { id: string; name: string }
+
+export interface TtsService {
+  id: string;
+  name: string;
+  protocol: TtsRequest["protocol"];
+  group: "local" | "cloud";
+  voice: string;
+  voices: TtsVoice[];
+  model?: string;
+  models?: string[];
+  baseUrl?: string;
+  needsKey?: boolean;
+  keyUrl?: string;
+  resource?: string;
+  sharedAccounts?: string[];
+}
+
+export const TTS_CLOUD_MAIN = ["doubao", "deepseek", "mimo", "qwen", "openai", "edge"];
+
+function voiceOptions(names: (string | [string, string])[]): TtsVoice[] {
+  return names.map((item) => typeof item === "string" ? { id: item, name: item } : { id: item[0], name: item[1] });
+}
+
+function cloudTts(
+  id: string, name: string, protocol: TtsService["protocol"], names: (string | [string, string])[],
+  config: Pick<TtsService, "baseUrl" | "models" | "keyUrl" | "sharedAccounts" | "resource"> = {},
+): TtsService {
+  const voices = voiceOptions(names);
+  return {
+    id, name, protocol, group: "cloud", voices, voice: voices[0]?.id ?? "alloy",
+    needsKey: !["edge", "custom"].includes(id), model: config.models?.[0], ...config,
+  };
+}
+
+export const TTS_SERVICES: TtsService[] = [
+  { id: "system", name: "系统语音", group: "local", protocol: "system", voice: "", voices: [] },
+  {
+    id: "local", name: "本地语音", group: "local", protocol: "local", model: "melo", voice: "zf_001",
+    voices: voiceOptions([
+      ["zf_001", "知夏"], ["zf_002", "清禾"], ["zf_003", "晴岚"], ["zf_004", "沐言"],
+      ["zm_009", "言川"], ["zm_010", "远山"], ["zm_011", "景和"], ["zm_012", "明朗"],
+    ]),
+  },
+  cloudTts("doubao", "豆包语音", "doubao", VOICES, {
+    resource: "seed-tts-2.0", keyUrl: "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default",
+    sharedAccounts: ["asr.doubao", "doubao"],
+  }),
+  cloudTts("deepseek", "DeepSeek", "deepseek", [["stella", "Stella"], ["tide", "Tide"]], {
+    keyUrl: "https://platform.deepseek.com/api_keys", sharedAccounts: ["deepseek", "asr.deepseek"],
+  }),
+  cloudTts("mimo", "小米 MiMo", "mimo", [
+    ["mimo_default", "默认"], "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean",
+  ], {
+    models: ["mimo-v2.5-tts"], keyUrl: "https://platform.xiaomimimo.com/", sharedAccounts: ["mimo"],
+  }),
+  cloudTts("qwen", "通义 Qwen-TTS", "qwen", ["Cherry", "Ethan", "Chelsie", "Serena", "Dylan", "Jada", "Sunny"], {
+    models: ["qwen3-tts-flash", "qwen-tts"], keyUrl: "https://bailian.console.aliyun.com/?apiKey=1", sharedAccounts: ["qwen-cn"],
+  }),
+  cloudTts("openai", "OpenAI", "openai", ["alloy", "ash", "coral", "echo", "nova", "onyx", "sage", "shimmer"], {
+    models: ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"], keyUrl: "https://platform.openai.com/api-keys", sharedAccounts: ["openai", "asr.openai"],
+  }),
+  cloudTts("edge", "Edge 在线语音", "edge", [
+    ["zh-CN-YunxiNeural", "云希"], ["zh-CN-XiaoxiaoNeural", "晓晓"], ["zh-CN-YunjianNeural", "云健"],
+    ["zh-CN-XiaoyiNeural", "晓伊"], ["zh-CN-YunyangNeural", "云扬"], ["zh-TW-HsiaoChenNeural", "晓臻（台湾）"],
+    ["zh-HK-HiuMaanNeural", "晓曼（粤语）"], ["en-US-AndrewMultilingualNeural", "Andrew"], ["en-US-EmmaMultilingualNeural", "Emma"],
+  ]),
+  cloudTts("siliconflow", "硅基流动", "openai", ["anna", "alex", "bella", "benjamin", "claire", "charles", "diana", "david"], {
+    models: ["FunAudioLLM/CosyVoice2-0.5B", "fnlp/MOSS-TTSD-v0.5"], keyUrl: "https://cloud.siliconflow.cn/account/ak",
+    sharedAccounts: ["siliconflow", "asr.siliconflow"],
+  }),
+  cloudTts("minimax", "MiniMax", "minimax", [
+    ["male-qn-qingse", "青涩青年"], ["female-shaonv", "少女"], ["male-qn-jingying", "精英青年"], ["female-yujie", "御姐"],
+    ["presenter_male", "男主持"], ["presenter_female", "女主持"], ["audiobook_male_1", "有声书男声"], ["audiobook_female_1", "有声书女声"],
+  ], {
+    models: ["speech-02-hd", "speech-02-turbo", "speech-2.6-hd"],
+    keyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key", sharedAccounts: ["minimax-cn"],
+  }),
+  cloudTts("elevenlabs", "ElevenLabs", "elevenlabs", [
+    ["JBFqnCBsd6RMkjVDRZzb", "George"], ["21m00Tcm4TlvDq8ikWAM", "Rachel"], ["EXAVITQu4vr4xnSDxMaL", "Sarah"],
+    ["pNInz6obpgDQGcFmaJgB", "Adam"], ["Xb7hH8MSUJpSbSDYk0k2", "Alice"],
+  ], {
+    models: ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5"], keyUrl: "https://elevenlabs.io/app/settings/api-keys",
+    sharedAccounts: ["elevenlabs"],
+  }),
+  cloudTts("custom", "其他（OpenAI 兼容）", "openai", [], { baseUrl: "http://127.0.0.1:8880/v1", models: ["tts-1"] }),
+];
+
+export const TTS_RATES = [0.8, 0.9, 1, 1.1, 1.25, 1.5] as const;
+
 export const DEFAULTS: Settings = {
   providers: Object.fromEntries(PRESETS.map((p) => [p.id, p])),
   chatProvider: "deepseek",
@@ -288,8 +380,9 @@ export const DEFAULTS: Settings = {
   youtubePromo: true,
   homeBannerHidden: false,
   shareTranscripts: true,
-  ttsVoice: "zh_female_vv_uranus_bigtts",
-  ttsResource: "seed-tts-2.0",
+  ttsEngine: "system",
+  ttsServices: Object.fromEntries(TTS_SERVICES.map((service) => [service.id, service])),
+  ttsRate: 1,
   ytCookiesBrowser: "",
   learnOn: false,
   learnLevel: "cet6",
@@ -301,6 +394,7 @@ export const DEFAULTS: Settings = {
   learnRemind: false,
   learnSounds: true,
   learnAsked: false,
+  clipExportDir: "",
 };
 
 /** 当前选用的云端识别配置。 */
@@ -317,6 +411,8 @@ export async function loadSettings(): Promise<Settings> {
       translateEngine?: string;
       asrProvider?: string;
       asrBaseUrl?: string;
+      ttsVoice?: string;
+      ttsResource?: string;
     };
     const providers: Record<string, Provider> = {};
     for (const p of PRESETS) {
@@ -364,9 +460,39 @@ export async function loadSettings(): Promise<Settings> {
           ? rawMode
           : DEFAULTS.subtitleMode;
 
+    const ttsServices = Object.fromEntries(TTS_SERVICES.map((service) => {
+      const stored = parsed.ttsServices?.[service.id];
+      const restored: TtsService = {
+        ...service,
+        model: stored?.model ?? service.model,
+        voice: stored?.voice ?? service.voice,
+        resource: stored?.resource ?? service.resource,
+      };
+      if (service.id === "custom") restored.baseUrl = stored?.baseUrl ?? service.baseUrl;
+      return [service.id, restored];
+    }));
+    const { ttsVoice, ttsResource, ...prefs } = parsed;
+    let ttsEngine = parsed.ttsEngine ?? DEFAULTS.ttsEngine;
+    if (!parsed.ttsServices?.doubao) {
+      ttsServices.doubao.voice = ttsVoice || ttsServices.doubao.voice;
+      ttsServices.doubao.resource = ttsResource || ttsServices.doubao.resource;
+      if (!parsed.ttsEngine && (ttsVoice || ttsResource)) {
+        const accounts = ["tts.doubao", ...(ttsServices.doubao.sharedAccounts ?? [])];
+        const configured = await Promise.all(accounts.map((account) => api.hasApiKey(account).catch(() => false)));
+        if (configured.some(Boolean)) ttsEngine = "doubao";
+      }
+    }
+    const savedRate = parsed.ttsRate;
+    const ttsRate = typeof savedRate === "number" && Number.isFinite(savedRate)
+      ? Math.min(1.5, Math.max(0.8, savedRate))
+      : DEFAULTS.ttsRate;
+
     return {
       ...DEFAULTS,
-      ...parsed,
+      ...prefs,
+      ttsEngine: Object.hasOwn(ttsServices, ttsEngine) ? ttsEngine : DEFAULTS.ttsEngine,
+      ttsServices,
+      ttsRate,
       providers,
       cloudAsr,
       asrEngine,

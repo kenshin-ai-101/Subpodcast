@@ -18,11 +18,13 @@ import {
   useChats,
   type ArchivedChat,
 } from "../lib/chats";
+import { createManualClip, rangeFromClock } from "../lib/highlights";
 import { useJobs } from "../lib/jobs";
 import { quickPrompts } from "../lib/settings";
 import { useStore } from "../store";
 import { ChatPrefsDialog, ModelPicker, PromptMenu, useFixedUpMenu } from "./ChatTools";
 import { Markdown } from "./Markdown";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 const NO_MESSAGES: ChatMessage[] = [];
 
@@ -108,6 +110,16 @@ export function ChatPane({ episode }: { episode: Episode }) {
 
   const empty = !messages.length && !busy;
   const seek = (sec: number) => player?.seek(sec);
+  const clipRange = (start: number, end?: number) => {
+    if (!episode.videoId || !transcript?.segments.length) {
+      useStore.getState().notify(episode.videoId ? "需要先有字幕才能剪视频" : "只有 YouTube 单集才能剪视频");
+      return;
+    }
+    const zh = useJobs.getState().translations[episode.id]?.items;
+    const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+    const clip = createManualClip(transcript.segments, zh, startIdx, endIdx, episode);
+    openVideoClipDialog({ ep: episode, segments: transcript.segments, zh, clip });
+  };
 
   return (
     <div className="chat">
@@ -161,7 +173,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
           ) : (
             <div key={i} className="msg-wrap assistant">
               <div className="msg assistant">
-                <Markdown text={m.content} onSeek={seek} />
+                <Markdown text={m.content} onSeek={seek} onClip={clipRange} />
               </div>
               {!busy && (
                 <div className="msg-actions">
@@ -182,7 +194,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
         {busy && (
           <div className="msg assistant">
             {streaming ? (
-              <Markdown text={streaming} onSeek={seek} />
+              <Markdown text={streaming} onSeek={seek} onClip={clipRange} />
             ) : (
               <p className="muted">
                 <Loader2 size={14} className="spin" /> 正在阅读文字稿…

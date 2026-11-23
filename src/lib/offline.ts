@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.downloadEpisode / listDownloads / deleteDownload；event offline
- * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、remoteAudioSrc、isLocalAssetSrc、downloadEpisode、cancelDownload、removeDownload、bytes
- * [POS]: 单集页下载按钮与 PlayerBar 音频源；小宇宙 dts-api 播前归一成 xyzcdn 直链；清单在 store.init 预拉；本地 asset 失败可回退远端
+ * [OUTPUT]: useOffline、loadDownloads、canonicalAudioUrl、audioSrc、remoteAudioSrc、isLocalAssetSrc、downloadEpisode、cancelDownload、removeDownload、clearDownloads、bytes
+ * [POS]: 单集页下载按钮与 PlayerBar 音频源；设置 › 存储清理；小宇宙 dts-api 播前归一成 xyzcdn 直链；清单在 store.init 预拉；本地 asset 失败可回退远端
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -126,8 +126,19 @@ export async function removeDownload(episodeId: string) {
   useStore.getState().notify("已删除下载");
 }
 
+/** 清空全部离线音频；字幕与收听进度保留。 */
+export async function clearDownloads() {
+  await api.clearDownloads();
+  useOffline.setState({ saved: {}, progress: {} });
+  useStore.getState().notify("已删除全部下载");
+}
+
 export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n < 1024 * 1024 * 1024) {
+    const mb = n / (1024 * 1024);
+    return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  }
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }

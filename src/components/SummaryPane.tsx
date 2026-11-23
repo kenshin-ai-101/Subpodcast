@@ -10,11 +10,13 @@ import { Loader2, RefreshCw } from "lucide-react";
 import type { Episode } from "../lib/api";
 import { shortModel } from "../lib/ai";
 import { ensureGuide, runGuide, useGuides } from "../lib/guides";
+import { createManualClip, rangeFromClock } from "../lib/highlights";
 import { llmReady, useJobs } from "../lib/jobs";
 import { seekSoon, useStore } from "../store";
 import { PageArt, PlugArt } from "./Illustrations";
 import { Markdown } from "./Markdown";
 import { ReadAloud } from "./ReadAloud";
+import { openVideoClipDialog } from "./VideoClipDialog";
 
 function useConnected() {
   const settings = useStore((s) => s.settings);
@@ -113,6 +115,16 @@ export function SummaryPane({ episode }: { episode: Episode }) {
   const text = job.streaming ?? job.summary;
   const busy = job.streaming != null;
   const ready = !!transcript?.segments.length;
+  const clipRange = (start: number, end?: number) => {
+    if (!episode.videoId || !transcript?.segments.length) {
+      useStore.getState().notify(episode.videoId ? "需要先有字幕才能剪视频" : "只有 YouTube 单集才能剪视频");
+      return;
+    }
+    const zh = useJobs.getState().translations[episode.id]?.items;
+    const { startIdx, endIdx } = rangeFromClock(transcript.segments, start, end);
+    const clip = createManualClip(transcript.segments, zh, startIdx, endIdx, episode);
+    openVideoClipDialog({ ep: episode, segments: transcript.segments, zh, clip });
+  };
 
   if (!text && connected === false && !skipConnect) {
     return (
@@ -179,7 +191,7 @@ export function SummaryPane({ episode }: { episode: Episode }) {
 
   return (
     <div className="summary-pane">
-      <Markdown text={text} onSeek={seek} />
+      <Markdown text={text} onSeek={seek} onClip={clipRange} />
       {!busy && (
         <div className="summary-foot">
           <span className="muted small">

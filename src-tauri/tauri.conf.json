@@ -18,8 +18,11 @@
         "scope": [
           "$DATA/Subpodcast/downloads/**/*",
           "$DATA/Subpodcast/clips/**/*",
+          "$DATA/Subpodcast/work/clips/**/*",
+          "$DATA/Subpodcast/tts-cache/**/*",
           "$APPDATA/downloads/**/*",
-          "$APPDATA/clips/**/*"
+          "$APPDATA/clips/**/*",
+          "$APPDATA/work/clips/**/*"
         ]
       }
     }

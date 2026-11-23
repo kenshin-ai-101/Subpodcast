@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Trash2 } from "lucide-react";
+import { Check, Trash2, X } from "lucide-react";
 import { errText } from "../lib/api";
 import { useAsrModels } from "../lib/asrModels";
 import { ask } from "../lib/confirm";
@@ -61,7 +61,6 @@ export function LocalAsrPicker() {
                   <span className="asr-model-name">{m.name}</span>
                   <span className="muted small">
                     {m.sizeMb} MB · {m.engine === "qwen3" ? "Qwen3" : "Whisper"}
-                    {m.installed ? (m.from ? ` · 已有（${m.from}）` : " · 已安装") : ""}
                   </span>
                   {m.note && <span className="muted small">{m.note}</span>}
                 </button>
@@ -73,19 +72,36 @@ export function LocalAsrPicker() {
                         取消
                       </button>
                     </>
+                  ) : m.installed && m.from ? (
+                    <>
+                      <span className="from-tag small">来自 {m.from}</span>
+                      <button
+                        type="button"
+                        className="icon-btn sm"
+                        title="不再使用（原文件保留）"
+                        onClick={() => void remove(m.id).catch((e) => notify(errText(e)))}
+                      >
+                        <X size={14} />
+                      </button>
+                    </>
                   ) : m.installed ? (
-                    <button
-                      type="button"
-                      className="btn ghost sm"
-                      title="删除模型文件"
-                      onClick={() =>
-                        void ask(`删除「${m.name}」？以后生成字幕需要重新下载。`).then((ok) => {
-                          if (ok) void remove(m.id).catch((e) => notify(errText(e)));
-                        })
-                      }
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <>
+                      <span className="ok-text small">
+                        <Check size={13} /> 已下载
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn sm"
+                        title="删除模型"
+                        onClick={() =>
+                          void ask(`删除「${m.name}」？以后生成字幕需要重新下载。`).then((ok) => {
+                            if (ok) void remove(m.id).catch((e) => notify(errText(e)));
+                          })
+                        }
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </>
                   ) : (
                     <button
                       type="button"

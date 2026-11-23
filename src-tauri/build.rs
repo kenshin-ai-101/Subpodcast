@@ -1,3 +1,8 @@
+//! [INPUT]: Rust Tauri 命令名与应用配置
+//! [OUTPUT]: 应用命令清单和生成的权限文件
+//! [POS]: 命令声明需要和 invoke_handler、capabilities 同步
+//! [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+
 const COMMANDS: &[&str] = &[
     "add_subscription",
     "refresh_show",
@@ -21,12 +26,19 @@ const COMMANDS: &[&str] = &[
     "share_guide",
     "share_translation",
     "tts_speak",
+    "tts_synthesize",
+    "tts_system_voices",
+    "clear_tts_cache",
+    "local_tts_status",
+    "local_tts_install",
+    "local_tts_delete",
     "get_blob",
     "set_blob",
     "qiaomu_detail",
     "download_episode",
     "list_downloads",
     "delete_download",
+    "clear_downloads",
     "get_settings",
     "set_settings",
     "set_api_key",
@@ -54,6 +66,13 @@ const COMMANDS: &[&str] = &[
     "learn_clip",
     "export_anki",
     "save_text",
+    "video_clip_env",
+    "video_clip_warm",
+    "video_clip_prepare",
+    "video_clip_render",
+    "reveal_file",
+    "file_exists",
+    "clipboard_write",
 ];
 
 fn main() {

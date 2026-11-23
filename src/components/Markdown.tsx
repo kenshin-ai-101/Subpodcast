@@ -1,35 +1,97 @@
 /**
  * [INPUT]: format.parseClock
- * [OUTPUT]: Markdown 组件（标题/列表/引用/粗体/表格/可点时间戳含区间）
+ * [OUTPUT]: Markdown 组件（标题/列表/引用/粗体/表格/可点时间戳；可选 onClip 剪视频）
  * [POS]: 导读与问答回答的轻量渲染；时间线列表走 .timeline 竖脊样式
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { Fragment, memo, type ReactNode } from "react";
+import { Scissors } from "lucide-react";
 import { parseClock } from "../lib/format";
 
 const INLINE =
   /(\*\*[^*]+\*\*|`[^`]+`|\[\d{1,2}:\d{2}(?::\d{2})?\](?:\s*[-–~至]\s*\[\d{1,2}:\d{2}(?::\d{2})?\])?)/g;
 
-function inline(text: string, onSeek: (t: number) => void, key: string): ReactNode[] {
+function inline(
+  text: string,
+  onSeek: (t: number) => void,
+  key: string,
+  onClip?: (start: number, end?: number) => void,
+): ReactNode[] {
   return text.split(INLINE).map((part, i) => {
     const k = `${key}-${i}`;
     if (part.startsWith("**") && part.endsWith("**")) return <strong key={k}>{part.slice(2, -2)}</strong>;
     if (part.startsWith("`") && part.endsWith("`")) return <code key={k}>{part.slice(1, -1)}</code>;
-    const stamp = part.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]/);
+    const range = part.match(
+      /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*[-–~至]\s*\[(\d{1,2}:\d{2}(?::\d{2})?)\]$/,
+    );
+    if (range) {
+      const s1 = parseClock(range[1]);
+      const s2 = parseClock(range[2]);
+      if (s1 == null) return <Fragment key={k}>{part}</Fragment>;
+      return (
+        <span key={k} className="stamp-range">
+          <button type="button" className="stamp" title="跳到这里播放" onClick={() => onSeek(s1)}>
+            {range[1]}
+          </button>
+          <span className="muted"> – </span>
+          <button
+            type="button"
+            className="stamp"
+            title="跳到结束"
+            onClick={() => onSeek(s2 ?? s1)}
+          >
+            {range[2]}
+          </button>
+          {onClip && (
+            <button
+              type="button"
+              className="stamp-clip"
+              title="剪成双语视频"
+              aria-label="剪成双语视频"
+              onClick={() => onClip(s1, s2 ?? undefined)}
+            >
+              <Scissors size={11} />
+            </button>
+          )}
+        </span>
+      );
+    }
+    const stamp = part.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]$/);
     if (stamp) {
       const sec = parseClock(stamp[1]);
       if (sec == null) return <Fragment key={k}>{part}</Fragment>;
       return (
-        <button key={k} type="button" className="stamp" title="跳到这里播放" onClick={() => onSeek(sec)}>
-          {stamp[1]}
-        </button>
+        <span key={k} className="stamp-range">
+          <button type="button" className="stamp" title="跳到这里播放" onClick={() => onSeek(sec)}>
+            {stamp[1]}
+          </button>
+          {onClip && (
+            <button
+              type="button"
+              className="stamp-clip"
+              title="剪成双语视频"
+              aria-label="剪成双语视频"
+              onClick={() => onClip(sec)}
+            >
+              <Scissors size={11} />
+            </button>
+          )}
+        </span>
       );
     }
     return <Fragment key={k}>{part}</Fragment>;
   });
 }
 
-export const Markdown = memo(function Markdown({ text, onSeek }: { text: string; onSeek: (t: number) => void }) {
+export const Markdown = memo(function Markdown({
+  text,
+  onSeek,
+  onClip,
+}: {
+  text: string;
+  onSeek: (t: number) => void;
+  onClip?: (start: number, end?: number) => void;
+}) {
   const blocks: ReactNode[] = [];
   let list: ReactNode[] = [];
   let ordered = false;
@@ -46,7 +108,7 @@ export const Markdown = memo(function Markdown({ text, onSeek }: { text: string;
           <thead>
             <tr>
               {head.map((c, j) => (
-                <th key={j}>{inline(c, onSeek, `${k}h${j}`)}</th>
+                <th key={j}>{inline(c, onSeek, `${k}h${j}`, onClip)}</th>
               ))}
             </tr>
           </thead>
@@ -54,7 +116,7 @@ export const Markdown = memo(function Markdown({ text, onSeek }: { text: string;
             {body.map((r, i) => (
               <tr key={i}>
                 {r.map((c, j) => (
-                  <td key={j}>{inline(c, onSeek, `${k}${i}-${j}`)}</td>
+                  <td key={j}>{inline(c, onSeek, `${k}${i}-${j}`, onClip)}</td>
                 ))}
               </tr>
             ))}
@@ -102,7 +164,7 @@ export const Markdown = memo(function Markdown({ text, onSeek }: { text: string;
       timeline &&= stamped;
       list.push(
         <li key={i} className={stamped ? "ts-item" : undefined}>
-          {inline(bullet[2], onSeek, `b${i}`)}
+          {inline(bullet[2], onSeek, `b${i}`, onClip)}
         </li>,
       );
       continue;
@@ -110,7 +172,7 @@ export const Markdown = memo(function Markdown({ text, onSeek }: { text: string;
     if (line.trim().startsWith(">")) {
       flush();
       blocks.push(
-        <blockquote key={i}>{inline(line.trim().replace(/^>\s*/, ""), onSeek, `q${i}`)}</blockquote>,
+        <blockquote key={i}>{inline(line.trim().replace(/^>\s*/, ""), onSeek, `q${i}`, onClip)}</blockquote>,
       );
       continue;
     }
@@ -119,15 +181,15 @@ export const Markdown = memo(function Markdown({ text, onSeek }: { text: string;
     if (heading) {
       blocks.push(
         heading[1].length <= 2 ? (
-          <h3 key={i}>{inline(heading[2], onSeek, `h${i}`)}</h3>
+          <h3 key={i}>{inline(heading[2], onSeek, `h${i}`, onClip)}</h3>
         ) : (
-          <h4 key={i}>{inline(heading[2], onSeek, `h${i}`)}</h4>
+          <h4 key={i}>{inline(heading[2], onSeek, `h${i}`, onClip)}</h4>
         ),
       );
     } else if (line.trim() === "---") {
       blocks.push(<hr key={i} />);
     } else if (line.trim()) {
-      blocks.push(<p key={i}>{inline(line, onSeek, `p${i}`)}</p>);
+      blocks.push(<p key={i}>{inline(line, onSeek, `p${i}`, onClip)}</p>);
     }
   }
   flush();

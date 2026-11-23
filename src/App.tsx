@@ -29,6 +29,8 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { ShowView } from "./components/ShowView";
 import { Splitter } from "./components/Splitter";
 import { remindReview, WordsView } from "./components/WordsBook";
+import { SelectionTools } from "./components/SelectionTools";
+import { VideoClipDialogHost } from "./components/VideoClipDialog";
 import { YtEngine } from "./components/YtEngine";
 
 const StatsView = lazy(() => import("./components/StatsView").then((m) => ({ default: m.StatsView })));
@@ -156,6 +158,8 @@ export default function App() {
       <MiniPlayer />
       <AddDialog />
       <SettingsDialog />
+      <VideoClipDialogHost />
+      <SelectionTools />
       <ConfirmHost />
       <Toast />
     </div>

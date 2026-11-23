@@ -40,7 +40,12 @@ tiny_http = "0.12"
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav", "flac", "ogg", "vorbis", "pcm"] }
 flate2 = "1"
 tar = "0.4"
+bzip2 = "0.6"
+tempfile = "3"
+tokio-socks = "0.5"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+arboard = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.14", features = ["metal"] }

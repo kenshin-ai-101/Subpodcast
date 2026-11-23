@@ -1,129 +1,124 @@
 /**
- * [INPUT]: tts.speak/stopSpeaking；settings.ttsVoice/ttsResource/VOICES；KeyField；store.speaking
- * [OUTPUT]: ReadAloud 按钮 + 音色/Key 小弹层
- * [POS]: 导读脚注与精读顶栏；朗读时暂停播客
+ * [INPUT]: 统一朗读会话、当前引擎和语速
+ * [OUTPUT]: 朗读／停止、语速和引擎快捷入口
+ * [POS]: 导读脚注与精读顶栏
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Square, Volume2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDown, ExternalLink, Square, Volume2 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { VOICES } from "../lib/settings";
-import { speak, stopSpeaking } from "../lib/tts";
+import { stopClip } from "../lib/clip";
+import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
+import { TTS_SERVICES } from "../lib/settings";
+import { currentTtsService, speak, stopSpeaking } from "../lib/tts";
 import { useStore } from "../store";
-import { KeyField } from "./SettingsDialog";
-
-const NO_AUTO = { autoCapitalize: "off" as const, autoCorrect: "off" as const, spellCheck: false };
+import { RatePicker } from "./RatePicker";
+import { LOCAL_TTS_MODELS, PreviewButton, useSystemVoices } from "./TtsSettings";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
-  const speaking = useStore((s) => s.speaking);
-  const notify = useStore((s) => s.notify);
+  const { speaking, notify } = useStore(useShallow((s) => ({ speaking: s.speaking, notify: s.notify })));
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
-    const h = (e: PointerEvent) => {
+    const closeOutside = (e: PointerEvent) => {
       if (!box.current?.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("pointerdown", h);
-    return () => document.removeEventListener("pointerdown", h);
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", escape);
+    };
   }, [open]);
 
-  const read = () =>
-    void speak(text(), (m) => {
-      notify(m);
-      if (m.includes("Key")) setOpen(true);
+  const read = () => {
+    stopClip();
+    void speak(text(), (message) => {
+      notify(message);
+      if (/Key|下载/.test(message)) setOpen(true);
     });
-
+  };
   return (
     <div className="read-aloud" ref={box}>
-      {speaking ? (
-        <button type="button" className="btn sm" onClick={stopSpeaking}>
-          <Square size={11} /> 停止朗读
-        </button>
-      ) : (
-        <button type="button" className="btn sm" title={title ?? "朗读"} onClick={read}>
-          <Volume2 size={13} /> 朗读
-        </button>
-      )}
-      <button
-        type="button"
-        className="icon-btn sm"
-        aria-label="朗读设置"
-        title="朗读设置"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
+      <button type="button" className="btn sm" title={title ?? "朗读"} onClick={speaking ? stopSpeaking : read}>
+        {speaking ? <Square size={11} /> : <Volume2 size={13} />}
+        {speaking ? "停止朗读" : "朗读"}
+      </button>
+      <RatePicker />
+      <button type="button" className="icon-btn sm" aria-label="朗读引擎与音色" title="朗读引擎与音色" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ChevronDown size={13} />
       </button>
-      {open && <ReadAloudSettings />}
+      {open && <ReadAloudSettings onClose={() => setOpen(false)} />}
     </div>
   );
 }
 
-function ReadAloudSettings() {
-  const { settings, saveSettings } = useStore(
-    useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })),
-  );
-  const [custom, setCustom] = useState(!VOICES.some(([id]) => id === settings.ttsVoice));
+function ReadAloudSettings({ onClose }: { onClose: () => void }) {
+  const { service, save, set } = useStore(useShallow((s) => ({
+    service: currentTtsService(s.settings), save: s.saveSettings, set: s.set,
+  })));
+  const status = useLocalTts((s) => s.status);
+  const systemVoices = useSystemVoices(service.id === "system");
+  const voices = service.id === "system" ? systemVoices : service.voices;
+  useEffect(() => { void refreshLocalTts().catch(() => {}); }, []);
+
+  const select = (value: string) => {
+    stopSpeaking();
+    const local = LOCAL_TTS_MODELS.find(({ id }) => id === value);
+    const settings = useStore.getState().settings;
+    if (local) {
+      void save({
+        ttsEngine: "local",
+        ttsServices: { ...settings.ttsServices, local: { ...settings.ttsServices.local, model: local.id } },
+      });
+    } else {
+      void save({ ttsEngine: value });
+    }
+  };
+
+  const setVoice = (value: string) => {
+    stopSpeaking();
+    const settings = useStore.getState().settings;
+    void save({ ttsServices: { ...settings.ttsServices, [service.id]: { ...service, voice: value } } });
+  };
+  const missing = service.id === "local" && !localInstalled(status, service.model ?? "melo");
   return (
     <div className="read-aloud-pop" role="dialog" aria-label="朗读设置">
-      <p className="setup-title">音色</p>
-      <div className="model-chips">
-        {VOICES.map(([id, name]) => (
-          <button
-            key={id}
-            type="button"
-            className={`chip sm ${settings.ttsVoice === id ? "on" : ""}`}
-            onClick={() => void saveSettings({ ttsVoice: id, ttsResource: "seed-tts-2.0" })}
-          >
-            {name}
-          </button>
-        ))}
-      </div>
-      <p className="setup-title">豆包语音 Key</p>
-      <KeyField account="tts.doubao" placeholder="填过豆包语音识别的可以留空" />
-      <div className="row-actions">
-        <button
-          type="button"
-          className="link-btn small"
-          onClick={() =>
-            void openUrl(
-              "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default",
-            )
-          }
-        >
-          <ExternalLink size={12} /> 获取 Key
-        </button>
-        <span className="spacer" />
-        <button type="button" className="link-btn small" onClick={() => setCustom(!custom)}>
-          自定义音色
-        </button>
-      </div>
-      {custom && (
-        <>
-          <input
-            {...NO_AUTO}
-            value={settings.ttsVoice}
-            onChange={(e) => void saveSettings({ ttsVoice: e.target.value.trim() })}
-            placeholder="复刻音色或其他音色的 ID"
-          />
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={settings.ttsResource === "seed-icl-2.0"}
-              onChange={(e) =>
-                void saveSettings({
-                  ttsResource: e.target.checked ? "seed-icl-2.0" : "seed-tts-2.0",
-                })
-              }
-            />{" "}
-            这是我复刻的声音
-          </label>
-        </>
+      <label className="tts-field">
+        引擎
+        <select value={service.id === "local" ? service.model ?? "melo" : service.id} onChange={(e) => select(e.target.value)}>
+          <option value="system">系统增强语音</option>
+          {LOCAL_TTS_MODELS.map(({ id, name }) =>
+            <option key={id} value={id} disabled={!localInstalled(status, id)}>{name}</option>
+          )}
+          <optgroup label="云端">
+            {TTS_SERVICES.filter((item) => item.group === "cloud").map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </optgroup>
+        </select>
+      </label>
+      {voices.length > 0 && (service.id !== "local" || service.model === "kokoro") && (
+        <label className="tts-field">
+          音色
+          <select value={service.voice} onChange={(e) => setVoice(e.target.value)}>
+            {service.id === "system" && <option value="">按语言自动选择</option>}
+            {service.voice && !voices.some((v) => v.id === service.voice) && <option value={service.voice}>{service.voice}</option>}
+            {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
+          </select>
+        </label>
       )}
-      <p className="muted small">朗读时文字会发送到豆包语音。</p>
+      <div className="row-actions">
+        <PreviewButton service={service} disabled={missing} />
+        <button type="button" className="link-btn small" onClick={() => {
+          stopSpeaking();
+          onClose();
+          set({ settingsOpen: true, settingsSection: "tts" });
+        }}>打开朗读设置</button>
+      </div>
+      {service.group === "cloud" && <p className="privacy-note">朗读文字会发送到所选服务。</p>}
     </div>
   );
 }

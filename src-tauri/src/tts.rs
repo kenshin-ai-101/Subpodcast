@@ -1,7 +1,7 @@
 /**
- * [INPUT]: secrets.get_key；net.client；豆包 unidirectional TTS
- * [OUTPUT]: synthesize → WAV 字节（导读/精读朗读）
- * [POS]: 豆包语音合成；Key 优先 tts.doubao，回落 asr.doubao
+ * [INPUT]: speech.resolve_key；net.client；豆包 unidirectional TTS
+ * [OUTPUT]: synthesize 与 synthesize_at_rate → WAV 字节
+ * [POS]: 豆包语音合成；旧 tts_speak 与统一缓存入口共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Result};
@@ -34,11 +34,16 @@ fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
 
 /// 合成至多 1000 字，返回 WAV。
 pub async fn synthesize(voice: &str, resource: &str, text: &str) -> Result<Vec<u8>> {
-    let key = crate::secrets::get_key("tts.doubao")
-        .ok()
-        .flatten()
-        .or_else(|| crate::secrets::get_key("asr.doubao").ok().flatten())
-        .filter(|k| !k.is_empty())
+    synthesize_at_rate(voice, resource, text, 1.0).await
+}
+
+pub async fn synthesize_at_rate(
+    voice: &str,
+    resource: &str,
+    text: &str,
+    rate: f64,
+) -> Result<Vec<u8>> {
+    let key = crate::speech::resolve_key("doubao")
         .ok_or_else(|| anyhow!("请先在设置里填写豆包语音的 API Key"))?;
     let text = text.trim();
     if text.is_empty() || text.chars().count() > 1000 {
@@ -58,7 +63,7 @@ pub async fn synthesize(voice: &str, resource: &str, text: &str) -> Result<Vec<u
             "req_params": {
                 "text": text,
                 "speaker": voice,
-                "audio_params": { "format": "pcm", "sample_rate": TTS_RATE }
+                "audio_params": { "format": "pcm", "sample_rate": TTS_RATE, "speech_rate": ((rate - 1.0) * 100.0).round() as i32 }
             }
         }))
         .timeout(std::time::Duration::from_secs(180))
@@ -71,7 +76,7 @@ pub async fn synthesize(voice: &str, resource: &str, text: &str) -> Result<Vec<u
             resp.status()
         ));
     }
-    let body = resp.text().await?;
+    let body = resp.text().await.map_err(|_| anyhow!("读取豆包音频失败"))?;
     let mut pcm = vec![];
     for line in body.lines().filter(|l| !l.trim().is_empty()) {
         let v: Value =
@@ -79,8 +84,7 @@ pub async fn synthesize(voice: &str, resource: &str, text: &str) -> Result<Vec<u
         let code = v["code"].as_i64().unwrap_or(0);
         if code != 0 && code != 20_000_000 {
             return Err(anyhow!(
-                "豆包拒绝了合成请求（{code}）：{}",
-                v["message"].as_str().unwrap_or("检查 Key、模型和音色")
+                "豆包拒绝了合成请求（{code}），请检查 Key、模型和音色"
             ));
         }
         if let Some(d) = v["data"].as_str() {

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store；api；ReadingSettings / ModelSettings / ShortcutSettings；plugin-opener
- * [OUTPUT]: 设置对话框（字幕 / AI / 通用 / 学英语）；KeyRow / KeyField / DefaultButton / ProviderEditor
+ * [INPUT]: store；api；ReadingSettings / ModelSettings / TtsSettings / ShortcutSettings；plugin-opener
+ * [OUTPUT]: 设置对话框（字幕 / AI / 朗读 / 通用 / 学英语）；KeyRow / KeyField / DefaultButton / ProviderEditor
  * [POS]: 与 SubCast 设置项与布局对齐的原创实现；不做「关于」；保持对话框不改成页面
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -21,11 +21,15 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Volume2,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, errText } from "../lib/api";
+import { api, errText, type StorageInfo } from "../lib/api";
+import { ask } from "../lib/confirm";
+import { bytes, clearDownloads, useOffline } from "../lib/offline";
+import { stopSpeaking } from "../lib/tts";
 import {
   ASR_SERVICES,
   CLOUD_ASR_MAIN,
@@ -42,12 +46,14 @@ import { LocalAsrPicker } from "./LocalAsrSettings";
 import { ModelSettings } from "./ModelSettings";
 import { ReadingSettings } from "./ReadingSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { TtsSettings } from "./TtsSettings";
 
 const NO_AUTO = { autoCapitalize: "off" as const, autoCorrect: "off" as const, spellCheck: false };
 
 const NAV: [SettingsSection, string, LucideIcon][] = [
   ["subtitles", "字幕", Captions],
   ["ai", "AI", Sparkles],
+  ["tts", "朗读", Volume2],
   ["general", "通用", SlidersHorizontal],
   ["learn", "学英语", GraduationCap],
 ];
@@ -382,46 +388,119 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
   );
 }
 
-function StorageTotal() {
-  const [total, setTotal] = useState<number | null>(null);
+function StorageSettings({ expanded, toggle, onAsr, onTts }: {
+  expanded: boolean; toggle: () => void; onAsr: () => void; onTts: () => void;
+}) {
+  const saved = useOffline((s) => s.saved);
+  const [info, setInfo] = useState<StorageInfo | null>(null);
+  const reload = () => void api.storageInfo().then(setInfo).catch(() => {});
   useEffect(() => {
-    void api
-      .storageInfo()
-      .then((i) => setTotal(i.downloads + i.models + i.library + i.temp))
-      .catch(() => {});
-  }, []);
-  if (total == null) return null;
-  const mb = total / (1024 * 1024);
-  const size = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
-  return <span className="muted small">占用 {size}</span>;
+    if (expanded) reload();
+  }, [expanded, saved]);
+  const total = info
+    ? info.downloads + info.models + info.library + info.temp
+      + (info.audioCache ?? 0) + (info.ttsCache ?? 0) + (info.ttsModels ?? 0)
+    : null;
+  return (
+    <>
+      <button type="button" className="setting-row" aria-expanded={expanded} onClick={toggle}>
+        <HardDrive size={15} /> <span>存储</span>
+        {total != null && <span className="muted small">占用 {bytes(total)}</span>}
+        <ChevronDown size={14} className={expanded ? "flip" : ""} />
+      </button>
+      {expanded && <Storage info={info} reload={reload} onAsr={onAsr} onTts={onTts} />}
+    </>
+  );
 }
 
-function Storage({ onAsr }: { onAsr: () => void }) {
-  const [info, setInfo] = useState<{ downloads: number; models: number; library: number; temp: number } | null>(null);
-  const load = () => void api.storageInfo().then(setInfo).catch(() => {});
-  useEffect(load, []);
-  const size = (b?: number) => {
-    if (!info) return "…";
-    if (!b) return "0 MB";
-    const mb = b / (1024 * 1024);
-    return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+/** 高光剪辑默认落到系统「下载」，可改到自选目录。 */
+function ClipExportRow() {
+  const { clipExportDir, saveSettings } = useStore(
+    useShallow((s) => ({
+      clipExportDir: s.settings.clipExportDir ?? "",
+      saveSettings: s.saveSettings,
+    })),
+  );
+  const pick = async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: clipExportDir || undefined,
+    });
+    if (typeof dir === "string" && dir) void saveSettings({ clipExportDir: dir });
+  };
+  return (
+    <div className="storage-row">
+      <div className="storage-row-text">
+        <p className="storage-row-name">高光剪辑导出到</p>
+        <p className="muted small clamp1" title={clipExportDir || undefined}>
+          {clipExportDir || "「下载」文件夹"}
+        </p>
+      </div>
+      <button type="button" className="btn sm" onClick={() => void pick()}>
+        <FolderOpen size={13} /> 选择文件夹
+      </button>
+      {!!clipExportDir && (
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => void api.revealFile(clipExportDir).catch(() => {})}
+        >
+          打开
+        </button>
+      )}
+      {!!clipExportDir && (
+        <button type="button" className="btn ghost sm" onClick={() => void saveSettings({ clipExportDir: "" })}>
+          恢复默认
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Storage({ info, reload, onAsr, onTts }: {
+  info: StorageInfo | null; reload: () => void; onAsr: () => void; onTts: () => void;
+}) {
+  const saved = useOffline((s) => s.saved);
+  const notify = useStore((s) => s.notify);
+  const n = Object.keys(saved).length;
+  const size = (b?: number) => (info ? (b ? bytes(b) : "0 MB") : "…");
+  const clearAll = async () => {
+    if (!(await ask("删除全部已下载的音频？字幕、精读和收听进度都会保留。"))) return;
+    await clearDownloads();
+    reload();
+  };
+  const clearTts = async () => {
+    if (!(await ask("清理朗读缓存？下次朗读会重新合成，字幕与精读内容不受影响。"))) return;
+    stopSpeaking();
+    await api.clearTtsCache();
+    reload();
   };
   return (
     <div className="storage-list">
       <div className="storage-row">
         <div className="storage-row-text">
           <p className="storage-row-name">离线下载</p>
-          <p className="muted small">MVP 暂未开放离线下载</p>
+          <p className="muted small">
+            {n ? `${n} 集音频，没有网络也能听` : "在单集页点下载按钮，就能离线收听"}
+          </p>
         </div>
         <span className="storage-size">{size(info?.downloads)}</span>
         <button type="button" className="btn sm" onClick={() => void api.openDataFolder("downloads")}>
           <FolderOpen size={13} /> 打开文件夹
         </button>
+        {n > 0 && (
+          <button type="button" className="icon-btn" title="全部删除" onClick={() => void clearAll().catch((e) => notify(errText(e)))}>
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
+      <ClipExportRow />
       <div className="storage-row">
         <div className="storage-row-text">
           <p className="storage-row-name">语音识别模型</p>
-          <p className="muted small">本机识别用的模型（二期），在「字幕」里管理</p>
+          <p className="muted small">本机识别用的模型，在「字幕」里下载或删除</p>
         </div>
         <span className="storage-size">{size(info?.models)}</span>
         <button type="button" className="btn sm" onClick={() => void api.openDataFolder("models")}>
@@ -434,13 +513,49 @@ function Storage({ onAsr }: { onAsr: () => void }) {
       <div className="storage-row">
         <div className="storage-row-text">
           <p className="storage-row-name">节目库</p>
-          <p className="muted small">订阅、字幕、翻译和收听进度</p>
+          <p className="muted small">订阅、字幕、翻译、精读和收听进度</p>
         </div>
         <span className="storage-size">{size(info?.library)}</span>
         <button type="button" className="btn ghost sm" onClick={() => void api.openDataFolder("data")}>
           <FolderOpen size={13} /> 打开文件夹
         </button>
       </div>
+      {!!info?.ttsModels && (
+        <div className="storage-row">
+          <div className="storage-row-text">
+            <p className="storage-row-name">本地语音模型</p>
+            <p className="muted small">Melo、Kokoro 离线朗读用的模型，在「朗读」里下载或删除</p>
+          </div>
+          <span className="storage-size">{size(info.ttsModels)}</span>
+          <button type="button" className="btn sm" onClick={() => void api.openDataFolder("tts-models")}>
+            <FolderOpen size={13} /> 打开文件夹
+          </button>
+          <button type="button" className="btn ghost sm" onClick={onTts}>
+            管理
+          </button>
+        </div>
+      )}
+      {!!info?.ttsCache && (
+        <div className="storage-row">
+          <div className="storage-row-text">
+            <p className="storage-row-name">朗读缓存</p>
+            <p className="muted small">
+              朗读精读和字幕中文翻译生成的语音缓存；最多占 500 MB，久不用的先删
+            </p>
+          </div>
+          <span className="storage-size">{size(info.ttsCache)}</span>
+          <button type="button" className="btn ghost sm" onClick={() => void api.openDataFolder("tts-cache")}>
+            <FolderOpen size={13} /> 打开文件夹
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => void clearTts().catch((e) => notify(errText(e)))}
+          >
+            清理
+          </button>
+        </div>
+      )}
       {!!info?.temp && (
         <div className="storage-row">
           <div className="storage-row-text">
@@ -448,7 +563,7 @@ function Storage({ onAsr }: { onAsr: () => void }) {
             <p className="muted small">中断的识别留下的音频，可以放心清理</p>
           </div>
           <span className="storage-size">{size(info.temp)}</span>
-          <button type="button" className="btn sm" onClick={() => void api.clearTemp().then(load)}>
+          <button type="button" className="btn sm" onClick={() => void api.clearTemp().then(reload)}>
             清理
           </button>
         </div>
@@ -480,6 +595,10 @@ export function SettingsDialog() {
       setProxy(settings.proxy);
     }
   }, [settingsOpen, settingsSection]);
+
+  useEffect(() => {
+    if (settingsOpen) return stopSpeaking;
+  }, [settingsOpen]);
 
   if (!settingsOpen) return null;
   const close = () => set({ settingsOpen: false, settingsSection: null });
@@ -581,6 +700,8 @@ export function SettingsDialog() {
               )}
 
               {section === "ai" && <ModelSettings ProviderEditor={ProviderEditor} />}
+
+              {section === "tts" && <TtsSettings />}
 
               {section === "learn" && <LearnSettings />}
 
@@ -697,17 +818,8 @@ export function SettingsDialog() {
                       <ChevronDown size={14} className={showKeys ? "flip" : ""} />
                     </button>
                     {showKeys && <ShortcutSettings />}
-                    <button
-                      type="button"
-                      className="setting-row"
-                      aria-expanded={showStorage}
-                      onClick={() => setShowStorage(!showStorage)}
-                    >
-                      <HardDrive size={15} /> <span>存储</span>
-                      <StorageTotal />
-                      <ChevronDown size={14} className={showStorage ? "flip" : ""} />
-                    </button>
-                    {showStorage && <Storage onAsr={() => setSection("subtitles")} />}
+                    <StorageSettings expanded={showStorage} toggle={() => setShowStorage(!showStorage)}
+                      onAsr={() => setSection("subtitles")} onTts={() => setSection("tts")} />
                   </section>
                 </>
               )}

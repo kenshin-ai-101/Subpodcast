@@ -1,6 +1,6 @@
 /**
  * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytHost / ytKick、offline.loadDownloads
- * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly、theater）；offerPlayer
+ * [OUTPUT]: 全局导航；播放态；notify（可选 toast 操作按钮）；offerPlayer
  * [POS]: view⊥current；load→prepareEngines 先停另一路再装载；init 先拉离线清单
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -73,6 +73,7 @@ interface State {
   speaking: boolean;
   player: PlayerHandle | null;
   toast: string | null;
+  toastAction: { label: string; run: () => void } | null;
   settingsOpen: boolean;
   settingsSection: SettingsSection | null;
   addOpen: boolean;
@@ -86,7 +87,7 @@ interface State {
   openEpisode(ep: Episode): void;
   /** 装入播放器并预缓冲；不起播（起播用 playSoon） */
   load(ep: Episode): void;
-  notify(text: string): void;
+  notify(text: string, action?: { label: string; run: () => void }): void;
   set(patch: Partial<State>): void;
 }
 
@@ -111,6 +112,7 @@ export const useStore = create<State>((set, get) => ({
   speaking: false,
   player: null,
   toast: null,
+  toastAction: null,
   settingsOpen: false,
   settingsSection: null,
   addOpen: false,
@@ -183,10 +185,13 @@ export const useStore = create<State>((set, get) => ({
     });
     prepareEngines(ep, audioOnly);
   },
-  notify(text) {
-    set({ toast: text });
+  notify(text, action) {
+    set({ toast: text, toastAction: action ?? null });
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => set({ toast: null }), 2800);
+    toastTimer = window.setTimeout(
+      () => set({ toast: null, toastAction: null }),
+      action ? 8000 : 2800,
+    );
   },
   set(patch) {
     set(patch);

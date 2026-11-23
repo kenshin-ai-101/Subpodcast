@@ -1,6 +1,6 @@
 /**
  * [INPUT]: @tauri-apps/api invoke
- * [OUTPUT]: 类型化后端命令封装（含 shared_guide / share_guide / tts_speak / shared_transcript / saveDownload / learnClip / exportAnki）
+ * [OUTPUT]: 类型化后端命令封装（含 shared_* / learnClip / 朗读合成与存储 / clearDownloads / 高光 videoClip* / revealFile / clipboardWrite）
  * [POS]: 前后端边界；字段名与 Rust camelCase 对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -52,6 +52,36 @@ export interface Transcript {
   source: string;
   language: string;
   segments: Segment[];
+}
+
+export interface TtsRequest {
+  engine: string;
+  protocol: "system" | "local" | "edge" | "doubao" | "deepseek" | "mimo" | "qwen" | "openai" | "minimax" | "elevenlabs";
+  baseUrl?: string;
+  model?: string;
+  voice: string;
+  resource?: string;
+  text: string;
+  rate?: number;
+  needsKey?: boolean;
+}
+
+export interface TtsResult { path: string; seconds: number }
+export interface SystemVoice { id: string; name: string; lang: string }
+export type LocalModelId = "melo" | "kokoro";
+export interface LocalTtsStatus {
+  supported: boolean;
+  runtime: boolean;
+  models: { id: LocalModelId; installed: boolean; bytes: number }[];
+}
+export interface StorageInfo {
+  downloads: number;
+  models: number;
+  library: number;
+  temp: number;
+  ttsCache: number;
+  ttsModels: number;
+  audioCache: number;
 }
 
 export interface ChatMessage {
@@ -122,6 +152,13 @@ export const api = {
     invoke<string>("share_guide", { episodeId, text, model }),
   ttsSpeak: (text: string, voice: string, resource?: string) =>
     invoke<string>("tts_speak", { text, voice, resource: resource ?? null }),
+  ttsSynthesize: (req: TtsRequest) => invoke<TtsResult>("tts_synthesize", { req }),
+  ttsSystemVoices: () => invoke<SystemVoice[]>("tts_system_voices"),
+  clearTtsCache: () => invoke<void>("clear_tts_cache"),
+  localTtsStatus: () => invoke<LocalTtsStatus>("local_tts_status"),
+  localTtsInstall: (id: LocalModelId, mirrorFirst: boolean) =>
+    invoke<void>("local_tts_install", { id, mirrorFirst }),
+  localTtsDelete: (id: LocalModelId) => invoke<void>("local_tts_delete", { id }),
   getBlob: (episodeId: string, kind: string) => invoke<string | null>("get_blob", { episodeId, kind }),
   setBlob: (episodeId: string, kind: string, data: string) => invoke<void>("set_blob", { episodeId, kind, data }),
   qiaomuDetail: (episodeId: string) =>
@@ -133,6 +170,7 @@ export const api = {
   listDownloads: () =>
     invoke<{ episodeId: string; path: string; bytes: number; savedAt: number }[]>("list_downloads"),
   deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
+  clearDownloads: () => invoke<void>("clear_downloads"),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   getSettings: () => invoke<string | null>("get_settings"),
   setSettings: (value: string) => invoke<void>("set_settings", { value }),
@@ -145,6 +183,9 @@ export const api = {
     protocol: string;
     messages: ChatMessage[];
     stream?: boolean;
+    maxTokens?: number;
+    jsonMode?: boolean;
+    quick?: boolean;
   }) => invoke<string>("llm_chat", { req }),
   translateBatch: (req: {
     texts: string[];
@@ -201,7 +242,7 @@ export const api = {
   saveDownload: (name: string, data: string, binary = false) =>
     invoke<string>("save_download", { name, data, binary }),
   storageInfo: () =>
-    invoke<{ downloads: number; models: number; library: number; temp: number }>("storage_info"),
+    invoke<StorageInfo>("storage_info"),
   openDataFolder: (kind: string) => invoke<void>("open_data_folder", { kind }),
   clearTemp: () => invoke<void>("clear_temp"),
   /** 裁出单句音频路径，供生词复习播放。 */
@@ -212,7 +253,99 @@ export const api = {
   /** 写出 Anki 包；返回带原声音频的笔记数。 */
   exportAnki: (path: string, deck: string, model: string, notes: AnkiNote[]) =>
     invoke<number>("export_anki", { path, deck, model, notes }),
+  videoClipEnv: () => invoke<FfmpegStatus>("video_clip_env"),
+  videoClipWarm: (videoId: string, ranges?: [number, number][]) =>
+    invoke<void>("video_clip_warm", { videoId, ranges: ranges ?? null }),
+  videoClipPrepare: (
+    jobId: string,
+    videoId: string,
+    start: number,
+    end: number,
+    ranges?: [number, number][],
+  ) =>
+    invoke<PreparedClip>("video_clip_prepare", {
+      jobId,
+      videoId,
+      start,
+      end,
+      ranges: ranges ?? null,
+    }),
+  videoClipRender: (jobId: string, req: RenderVideoClipRequest) =>
+    invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
+  revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  /** 本地文件是否仍在。 */
+  fileExists: (path: string) => invoke<boolean>("file_exists", { path }),
+  /** 系统剪贴板（不依赖 WebView 用户手势）。 */
+  clipboardWrite: (text: string) => invoke<void>("clipboard_write", { text }),
 };
+
+export interface FfmpegStatus {
+  installed: boolean;
+  path?: string | null;
+  hardwareH264: boolean;
+}
+
+export interface PreparedClip {
+  path: string;
+  duration: number;
+  lead: number;
+  width: number;
+  height: number;
+  hasBurnedSubtitles: boolean;
+  cached: boolean;
+  frames: string[];
+  bestFrame: number;
+}
+
+export interface CueOverlay {
+  start: number;
+  end: number;
+  y: number;
+  pngBase64: string;
+}
+
+export interface RenderVideoClipRequest {
+  rawPath: string;
+  outputPath?: string | null;
+  defaultName: string;
+  layout: "frame" | "landscape" | "portrait_card" | "portrait_fill";
+  outputDir?: string | null;
+  lead?: number;
+  speed?: number;
+  frame?: {
+    w: number;
+    h: number;
+    fit: "card" | "fill";
+    vx: number;
+    vy: number;
+    vw: number;
+    vh: number;
+    cropBox: boolean;
+  };
+  cardBg: "blur" | "night" | "paper";
+  cropX: number;
+  duration: number;
+  staticOverlayPng?: string | null;
+  cues: CueOverlay[];
+  coverPng?: string | null;
+  coverMode: "flash" | "hold" | "none";
+  embedThumbnail: boolean;
+  saveCoverSidecar: boolean;
+  landscapeCoverPng?: string | null;
+}
+
+export interface RenderVideoClipResult {
+  videoPath: string;
+  coverPath?: string | null;
+  landscapeCoverPath?: string | null;
+}
+
+export interface VideoClipProgress {
+  jobId: string;
+  stage: string;
+  progress: number;
+  message: string;
+}
 
 /** 导出 Anki 时的单条笔记（含可选原声剪辑路径）。 */
 export interface AnkiNote {
