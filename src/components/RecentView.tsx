@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.recentEpisodes、library favorites
  * [OUTPUT]: RecentView — 最近播放 / 收藏
- * [POS]: 首页「接下来听 › 全部」
+ * [POS]: 首页「接下来听 › 全部」；列表用 EpFeed
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
@@ -10,18 +10,18 @@ import { api, type Episode } from "../lib/api";
 import { clearQueue, playAll, useQueue } from "../lib/queue";
 import { useLibrary } from "../lib/library";
 import { useStore } from "../store";
-import { EpisodeRow } from "./HomeView";
+import { EpFeed, EpisodeRow } from "./HomeView";
 
 function EpisodeList({ episodes }: { episodes: Episode[] | null }) {
   const openEpisode = useStore((s) => s.openEpisode);
   if (episodes == null) return <p className="muted">加载中…</p>;
   if (!episodes.length) return <p className="muted">这里还没有内容</p>;
   return (
-    <div className="ep-feed">
+    <EpFeed>
       {episodes.map((ep) => (
         <EpisodeRow key={ep.id} ep={ep} showShow onOpen={() => openEpisode(ep)} />
       ))}
-    </div>
+    </EpFeed>
   );
 }
 

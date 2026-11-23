@@ -1,21 +1,15 @@
 /**
- * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack；exportTranscript
- * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 MD·PDF；学英语标词/词卡/跟读听写 / 行列表）
- * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt
+ * [INPUT]: jobs 字幕/译文/asr、asrModels 下载进度、store.time/playing/settings；switchYoutubeTrack；SubtitleExport
+ * [OUTPUT]: 右侧字幕面板（查找中 / 模型下载 / GenCard；导出 SRT·VTT·ASS·LRC·TXT·MD；学英语标词/词卡/跟读听写 / 行列表）
+ * [POS]: 听懂主路径；官方瀑布由 EpisodeView+ensureTranscript；无字幕空态走 GenCard+WaveToTextArt；中文栏显式导出，外语进「…」
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronDown, Download, Ellipsis, FileText, Languages, ListChecks, Loader2, Mic, PenLine } from "lucide-react";
+import { ChevronDown, Download, Ellipsis, Languages, ListChecks, Loader2, Mic, PenLine } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errText, type Episode, type Segment } from "../lib/api";
 import { useAsrModels, type AsrModel } from "../lib/asrModels";
 import { looksEnglish } from "../lib/dict";
-import {
-  runTranscriptExport,
-  type ExportFormat,
-  type ExportMode,
-} from "../lib/exportTranscript";
 import { clock } from "../lib/format";
 import {
   cancelAsr,
@@ -31,6 +25,7 @@ import { useStore } from "../store";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
 import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
+import { SubtitleExport } from "./SubtitleExport";
 
 type Mode = "bilingual" | "translation" | "original";
 
@@ -577,96 +572,6 @@ function NoTranscript({
 /** 错误文案可读化：长 URL 对听者无意义，完整内容留在 title。 */
 const plainError = (m: string) => m.replace(/[：:]?\s*https?:\/\/\S+/g, "").trim() || m;
 
-function ExportMenu({
-  episode,
-  segments,
-  translations,
-  mode,
-  foreign,
-  source,
-}: {
-  episode: Episode;
-  segments: { start: number; end: number; text: string }[];
-  translations?: (string | null)[];
-  mode: ExportMode;
-  foreign: boolean;
-  source: string;
-}) {
-  const notify = useStore((s) => s.notify);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const k = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", h);
-    document.addEventListener("keydown", k);
-    return () => {
-      document.removeEventListener("pointerdown", h);
-      document.removeEventListener("keydown", k);
-    };
-  }, [open]);
-
-  const run = async (format: ExportFormat) => {
-    setOpen(false);
-    setBusy(true);
-    try {
-      const path = await runTranscriptExport({
-        format,
-        episode,
-        segments,
-        translations,
-        mode,
-        foreign,
-        sourceLabel: sourceLabel(source),
-      });
-      notify(`已导出到「下载」：${path.split(/[\\/]/).pop() ?? ""}`);
-      void revealItemInDir(path).catch(() => {});
-    } catch (e) {
-      notify(errText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="panel-menu" ref={box}>
-      <button
-        type="button"
-        className="track-pick"
-        title="导出字幕"
-        aria-label="导出字幕"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={busy || !segments.length}
-        onClick={() => setOpen(!open)}
-      >
-        {busy ? <Loader2 size={13} className="spin" /> : <Download size={14} />}
-        <span>导出</span>
-        <ChevronDown size={12} className={open ? "flip" : ""} />
-      </button>
-      {open && (
-        <div className="panel-menu-pop export-pop" role="menu">
-          <button type="button" role="menuitem" onClick={() => void run("md")}>
-            <FileText size={14} />
-            <span>Markdown</span>
-          </button>
-          <button type="button" role="menuitem" onClick={() => void run("pdf")}>
-            <FileText size={14} />
-            <span>PDF</span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** 无字幕时居中空态卡：插画 + 标题 + 说明 + 动作。 */
 function GenCard({
   icon,
@@ -704,8 +609,26 @@ interface LearnMenuState {
   canShadow: boolean;
 }
 
-function LearnPanelMenu({ ep, learn }: { ep: Episode; learn: LearnMenuState }) {
+/** 「…」：外语导出 + 学英语工具。中文播客用栏上显式「导出」按钮。 */
+function PanelMenu({
+  ep,
+  segments,
+  zh,
+  foreign,
+  mode,
+  source,
+  learn,
+}: {
+  ep: Episode;
+  segments: Segment[];
+  zh?: (string | null | undefined)[];
+  foreign: boolean;
+  mode: Mode;
+  source: string;
+  learn?: LearnMenuState;
+}) {
   const [menu, setMenu] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [words, setWords] = useState(false);
   const [dictation, setDictation] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -733,31 +656,52 @@ function LearnPanelMenu({ ep, learn }: { ep: Episode; learn: LearnMenuState }) {
       </button>
       {menu && (
         <div className="panel-menu-pop" role="menu">
-          <button type="button" role="menuitem" onClick={() => { setMenu(false); setWords(true); }}>
-            <ListChecks size={14} /> 本期生词…
-          </button>
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={learn.shadow}
-            disabled={!learn.canShadow}
-            title={learn.canShadow ? undefined : "先播放这一集"}
-            onClick={() => {
-              setMenu(false);
-              learn.setShadow(!learn.shadow);
-            }}
-          >
-            <Mic size={14} /> {learn.shadow ? "退出跟读模式" : "跟读模式"}
-          </button>
-          <button type="button" role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}>
-            <PenLine size={14} /> 听写练习…
-          </button>
+          {learn && (
+            <>
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); setWords(true); }}>
+                <ListChecks size={14} /> 本期生词…
+              </button>
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={learn.shadow}
+                disabled={!learn.canShadow}
+                title={learn.canShadow ? undefined : "先播放这一集"}
+                onClick={() => {
+                  setMenu(false);
+                  learn.setShadow(!learn.shadow);
+                }}
+              >
+                <Mic size={14} /> {learn.shadow ? "退出跟读模式" : "跟读模式"}
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}>
+                <PenLine size={14} /> 听写练习…
+              </button>
+              <div className="menu-sep" role="separator" />
+            </>
+          )}
+          {foreign && (
+            <button type="button" role="menuitem" onClick={() => { setMenu(false); setExporting(true); }}>
+              <Download size={14} /> 导出字幕…
+            </button>
+          )}
         </div>
       )}
-      {words && (
+      {exporting && (
+        <SubtitleExport
+          episode={ep}
+          segments={segments}
+          translations={zh}
+          foreign={foreign}
+          mode={mode}
+          sourceLabel={sourceLabel(source)}
+          onClose={() => setExporting(false)}
+        />
+      )}
+      {words && learn && (
         <EpisodeWords ep={ep} segments={learn.segments} zh={learn.zh} onClose={() => setWords(false)} />
       )}
-      {dictation && (
+      {dictation && learn && (
         <Dictation
           ep={ep}
           segments={learn.segments}
@@ -794,6 +738,7 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const setMode = (next: Mode) => void saveSettings({ subtitleMode: next });
   const [card, setCard] = useState<CardTarget | null>(null);
   const [shadow, setShadow] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const closeCard = useCallback(() => setCard(null), []);
 
   useEffect(() => {
@@ -860,25 +805,39 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           />
         )}
         <div className="spacer" />
-        <ExportMenu
-          episode={episode}
-          segments={segs}
-          translations={translation?.items}
-          mode={mode}
-          foreign={foreign}
-          source={transcript!.source}
-        />
-        {learning && (
-          <LearnPanelMenu
+        {!foreign && (
+          <button
+            type="button"
+            className="track-pick"
+            title="导出字幕"
+            aria-label="导出字幕"
+            disabled={!segs.length}
+            onClick={() => setExporting(true)}
+          >
+            <Download size={14} />
+            <span>导出</span>
+          </button>
+        )}
+        {(foreign || learning) && (
+          <PanelMenu
             ep={episode}
-            learn={{
-              segments: segs,
-              zh: translation?.items,
-              active,
-              shadow,
-              setShadow,
-              canShadow: isCurrent,
-            }}
+            segments={segs}
+            zh={translation?.items}
+            foreign={foreign}
+            mode={mode}
+            source={transcript!.source}
+            learn={
+              learning
+                ? {
+                    segments: segs,
+                    zh: translation?.items,
+                    active,
+                    shadow,
+                    setShadow,
+                    canShadow: isCurrent,
+                  }
+                : undefined
+            }
           />
         )}
         {foreign && (
@@ -940,6 +899,17 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         })}
         {card && <WordCard target={card} ep={episode} onClose={closeCard} />}
       </div>
+      {exporting && !foreign && (
+        <SubtitleExport
+          episode={episode}
+          segments={segs}
+          translations={translation?.items}
+          foreign={false}
+          mode="original"
+          sourceLabel={sourceLabel(transcript!.source)}
+          onClose={() => setExporting(false)}
+        />
+      )}
     </div>
   );
 }

@@ -7,13 +7,15 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { usesYtEngine } from "../lib/media";
+import { pauseAudioHost, releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { noteListening } from "../lib/listening";
+import { preferAudio, usesYtEngine } from "../lib/media";
 import { audioSrc } from "../lib/offline";
 import { flushProgress, resetTrackSave, track, waiting } from "../lib/playback";
 import { playNext } from "../lib/queue";
 import { applyYtPlayerVolume, useVolume } from "../lib/volume";
 import { hideYouTubeCaptions, loadYouTube, type YtPlayer } from "../lib/youtube";
+import { registerYtHost } from "../lib/ytHost";
 import { useYtKick } from "../lib/ytKick";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
 
@@ -38,13 +40,18 @@ export function VideoSlot() {
 }
 
 function fallbackToAudio() {
-  const id = useStore.getState().current?.id;
-  useStore.getState().set({
+  const s = useStore.getState();
+  const cur = s.current;
+  const id = cur?.id;
+  const wanted = !!s.loadingSince || s.playing;
+  s.set({
     audioOnly: true,
-    playWhenReady: id ?? null,
+    playWhenReady: null,
     player: null,
   });
-  useStore.getState().notify(UNPLAYABLE);
+  if (cur && preferAudio(cur)) takeAudioEngine(cur, { play: wanted });
+  else if (id) s.set({ playWhenReady: id });
+  s.notify(UNPLAYABLE);
 }
 
 export function YtEngine() {
@@ -158,6 +165,18 @@ export function YtEngine() {
     return () => cancelAnimationFrame(raf);
   }, [active, slotEl, shell, videoId, theater]);
 
+  // 供 audioHost / store 同步停声（不靠本 effect 的异步）
+  useEffect(() => {
+    return registerYtHost(() => {
+      stopTick();
+      try {
+        ytRef.current?.pauseVideo();
+      } catch {
+        /* ignore */
+      }
+    });
+  }, []);
+
   // 失活：暂停并交权，保留 iframe 供下次秒切
   useEffect(() => {
     if (active) return;
@@ -182,6 +201,10 @@ export function YtEngine() {
     const ep = current;
     if (!active || !vid || !hostRef.current) return;
     if (!ep && !fromKick) return;
+
+    // 激活视频引擎时先停 HTMLAudio，防止与上一集音频叠声
+    pauseAudioHost();
+    releaseAudioHost();
 
     const epId = fromKick ? kick.episodeId : ep!.id;
     const startAt = fromKick
@@ -279,6 +302,9 @@ export function YtEngine() {
             onStateChange: (e: { data: number; target: YtPlayer }) => {
               // 不看 cancelled：iframe 跨音视频切换复用，cleanup 会误杀后续态
               if (!window.YT || e.target !== ytRef.current) return;
+              const st = useStore.getState();
+              // 已切到音频引擎时，忽略 iframe 迟到的 pause（否则会把刚起的音频 playing 踩灭）
+              if (!usesYtEngine(st.current, st.audioOnly)) return;
               const cur = epRef.current;
               if (!cur || cur.videoId !== videoIdRef.current) return;
               hideYouTubeCaptions(e.target);

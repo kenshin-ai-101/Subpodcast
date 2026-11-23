@@ -390,6 +390,8 @@ body.resizing video { pointer-events: none; }
   transition: background 0.12s var(--ease); width: 100%; text-align: left; border: 0;
   background: transparent; color: inherit;
 }
+/* 子节点不接指针：封面/标题的 overflow 在 WKWebView 会吞滚轮，事件落到整行再交给 .page */
+.ep-item > * { pointer-events: none; }
 .ep-item + .ep-item { margin-top: 2px; }
 .ep-item:hover { background: var(--soft); }
 .ep-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -397,7 +399,7 @@ body.resizing video { pointer-events: none; }
 .ep-item.played .ep-title2 { color: var(--text-2); font-weight: 500; }
 .ep-thumb,
 .ep-thumb.wide {
-  flex: none; width: 112px; height: 63px; border-radius: 10px; overflow: hidden;
+  flex: none; width: 112px; height: 63px; border-radius: 10px; overflow: clip;
   background: var(--soft); margin-top: 2px; position: relative;
 }
 .ep-thumb .thumb-img { position: relative; width: 100%; height: 100%; object-fit: cover; }
@@ -892,6 +894,23 @@ body.resizing video { pointer-events: none; }
 .panel-menu-pop button:hover { background: var(--soft); }
 .panel-menu-pop button.on { font-weight: 600; }
 .panel-menu-pop.export-pop { left: auto; right: 0; min-width: 140px; }
+.sub-export { display: flex; flex-direction: column; gap: 10px; }
+.sub-export .reading-row { padding: 2px 0; }
+.sub-export-preview {
+  margin: 4px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  color: var(--text-2);
+}
 button.track-pick {
   display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px;
   border: 0; border-radius: 8px; background: transparent; color: var(--muted);

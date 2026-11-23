@@ -1,7 +1,7 @@
 /**
- * [INPUT]: Episode、offline.audioSrc / remoteAudioSrc / isLocalAssetSrc / isSaved、store、playback、volume
- * [OUTPUT]: prepareAudio / pauseAudioHost / releaseAudioHost / getAudioEl / recoverStuckPlay
- * [POS]: 单例 Audio；立刻 play；播中不抢切源、暂停再切本地；本地 asset 失败回退远端
+ * [INPUT]: Episode、offline.*、ytHost.pauseYoutubeHost、store、playback、volume
+ * [OUTPUT]: prepareAudio / takeAudioEngine / pauseAudioHost / releaseAudioHost / getAudioEl / recoverStuckPlay
+ * [POS]: 单例 Audio；换集/交权前停 YouTube；与 YtEngine 互斥，禁止叠声
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Episode } from "./api";
@@ -9,6 +9,7 @@ import { noteListening } from "./listening";
 import { audioSrc, isLocalAssetSrc, isSaved, remoteAudioSrc } from "./offline";
 import { flushProgress, resetTrackSave, track, waiting } from "./playback";
 import { followVolume } from "./volume";
+import { pauseYoutubeHost } from "./ytHost";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
 
 let el: HTMLAudioElement | null = null;
@@ -211,30 +212,48 @@ function bindHandle(a: HTMLAudioElement, id: string) {
   offVol = followVolume(a);
 }
 
+export type PrepareAudioOpts = {
+  /** 覆盖 audioSrc；视频→音频切换时在线优先远端，避开未授权的本地 asset */
+  src?: string;
+  /** 强制重绑（忽略同 src 幂等），用于引擎交接后清掉 error 态 */
+  force?: boolean;
+};
+
 /**
  * load 路径：换源 + preload + offer，不自动 play。
  * 同集正在播时：下载完成不换 src；暂停后再 adopt。
  */
-export function prepareAudio(ep: Episode): boolean {
-  const src = audioSrc(ep);
+export function prepareAudio(ep: Episode, opts?: PrepareAudioOpts): boolean {
+  const src = opts?.src ?? (
+    fellBackRemoteFor === ep.id ? (remoteAudioSrc(ep) ?? audioSrc(ep)) : audioSrc(ep)
+  );
   if (!src) return false;
 
   const a = getAudioEl();
   const resolved = resolveHref(src);
+  const mediaError = a.error != null || a.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
 
-  if (epId === ep.id && handle && boundSrc && (sameSrc(boundSrc, src) || a.src === resolved)) {
+  if (
+    !opts?.force
+    && !mediaError
+    && epId === ep.id
+    && handle
+    && boundSrc
+    && (sameSrc(boundSrc, src) || a.src === resolved)
+  ) {
     return true;
   }
 
-  // 播中：远端 → 本地不打断；停住后再切
-  if (epId === ep.id && handle && boundSrc && !a.paused && !sameSrc(boundSrc, src)) {
+  // 播中：远端 → 本地不打断；停住后再切（强制交接除外）
+  if (
+    !opts?.force
+    && epId === ep.id
+    && handle
+    && boundSrc
+    && !a.paused
+    && !sameSrc(boundSrc, src)
+  ) {
     return true;
-  }
-
-  // 本集刚回退过远端：不要再被 audioSrc 的本地优先抢回去
-  if (epId === ep.id && fellBackRemoteFor === ep.id) {
-    const remote = remoteAudioSrc(ep);
-    if (remote && boundSrc && sameSrc(boundSrc, remote)) return true;
   }
 
   const time = useStore.getState().current?.id === ep.id
@@ -245,15 +264,17 @@ export function prepareAudio(ep: Episode): boolean {
   playGen += 1;
   recoverCount = 0;
   pendingSeek = null;
-  if (epId !== ep.id) fellBackRemoteFor = null;
+  // 换集或重绑前先停 iframe，避免音频播客与未停干净的 YouTube 叠声
+  if (epId !== ep.id) {
+    fellBackRemoteFor = null;
+    pauseYoutubeHost();
+  }
 
-  const prefer =
-    fellBackRemoteFor === ep.id ? (remoteAudioSrc(ep) ?? src) : src;
-
-  const same = a.src === resolveHref(prefer)
-    || (a.src.length > 0 && (a.src === prefer || a.src.endsWith(prefer)));
-  if (!same) assignSrc(a, prefer);
-  else boundSrc = prefer;
+  const same = !opts?.force
+    && !mediaError
+    && (a.src === resolved || (a.src.length > 0 && (a.src === src || a.src.endsWith(src))));
+  if (!same) assignSrc(a, src);
+  else boundSrc = src;
 
   a.playbackRate = useStore.getState().rate;
   bindHandle(a, ep.id);
@@ -313,4 +334,29 @@ export function releaseAudioHost() {
   epId = null;
   boundSrc = null;
   fellBackRemoteFor = null;
+  // 清空 src，避免视频→音频切换时带着 MEDIA_ERR / 旧缓冲去 play()
+  if (el) {
+    mutedSrcSwap = true;
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    } finally {
+      mutedSrcSwap = false;
+    }
+  }
+}
+
+/**
+ * 视频→仅音频 / 换集到音频：先停 YouTube，再 release→prepare→可选 play（点击手势内同步起播）。
+ */
+export function takeAudioEngine(ep: Episode, opts?: { play?: boolean }): boolean {
+  pauseYoutubeHost();
+  releaseAudioHost();
+  const ok = prepareAudio(ep);
+  if (!ok) return false;
+  if (opts?.play) playNow(getAudioEl());
+  return true;
 }

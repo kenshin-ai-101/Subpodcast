@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.listEpisodes / refreshShow / removeShow；MonthFilter；queue.playAll；store.shows.episodeCount
  * [OUTPUT]: 订阅节目详情页（封面头图、筛选计数、月份轴、分组单集）；打开时回写侧栏单集总数
- * [POS]: Sidebar 点选订阅后的主面板；刷新提示含当前总期数，避免「已是最新」掩盖半量目录
+ * [POS]: Sidebar 点选订阅后的主面板；单集列表走 EpFeed，悬停不挡页面滚动
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -22,7 +22,7 @@ import { groupLabel, plainText } from "../lib/format";
 import { alreadySubscribedDeep, deepPickFor } from "../lib/deepPicks";
 import { playAll } from "../lib/queue";
 import { useStore } from "../store";
-import { EpisodeRow } from "./HomeView";
+import { EpFeed, EpisodeRow } from "./HomeView";
 import { MonthFilter, useMonthFilter } from "./MonthFilter";
 
 type Filter = "all" | "unplayed" | "subs";
@@ -324,11 +324,11 @@ export function ShowView({ showId }: { showId: string }) {
         hits.length ? (
           <>
             <p className="muted small search-count">找到 {hits.length} 集</p>
-            <div className="ep-feed">
+            <EpFeed>
               {hits.map((ep) => (
                 <EpisodeRow key={ep.id} ep={ep} onOpen={() => openEpisode(ep)} />
               ))}
-            </div>
+            </EpFeed>
           </>
         ) : (
           <div className="panel-empty soft">
@@ -372,7 +372,7 @@ function EpisodeList({
   }
 
   return (
-    <div className="ep-feed">
+    <EpFeed>
       {groups.map((g) => (
         <section key={g.label} className="ep-group">
           <h3 className="ep-group-h">{g.label}</h3>
@@ -381,6 +381,6 @@ function EpisodeList({
           ))}
         </section>
       ))}
-    </div>
+    </EpFeed>
   );
 }

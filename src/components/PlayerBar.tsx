@@ -22,7 +22,7 @@ import {
 import type { Episode } from "../lib/api";
 import { clock } from "../lib/format";
 import { useJobs } from "../lib/jobs";
-import { prepareAudio, pauseAudioHost, releaseAudioHost } from "../lib/audioHost";
+import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
 import { activeIndex, flushProgress, playSoon } from "../lib/playback";
@@ -184,13 +184,13 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       player: sameYt ? s.player : null,
     });
     if (sameYt) {
+      // 无独立音轨：仍走 iframe，仅音频壳
       if (wanted) window.setTimeout(() => useStore.getState().player?.play(), 0);
     } else if (audio && preferAudio(ep)) {
-      pauseAudioHost();
-      prepareAudio(ep);
-      if (wanted) playSoon(ep.id);
+      // 视频→音频：release 清掉旧 MEDIA_ERR，并在点击手势内同步 play（勿只靠 playSoon 异步）
+      takeAudioEngine(ep, { play: wanted });
     } else {
-      pauseAudioHost();
+      // 音频→视频
       releaseAudioHost();
       kickYoutube(ep, { time: t, play: false });
       if (wanted) playSoon(ep.id);

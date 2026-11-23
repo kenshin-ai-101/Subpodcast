@@ -1,7 +1,7 @@
 /**
- * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytKick、offline.loadDownloads
+ * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytHost / ytKick、offline.loadDownloads
  * [OUTPUT]: 全局导航；播放态（playWhenReady 按集、seekWhenReady、audioOnly、theater）；offerPlayer
- * [POS]: view 与 current 正交；openEpisode 只导航；load 只装载+预缓冲；init 先拉离线清单再 ready
+ * [POS]: view⊥current；load→prepareEngines 先停另一路再装载；init 先拉离线清单
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
@@ -10,11 +10,13 @@ import { prepareAudio, pauseAudioHost, releaseAudioHost } from "./lib/audioHost"
 import { initialAudioOnly, usesAudioEngine, usesYtEngine } from "./lib/media";
 import { loadDownloads } from "./lib/offline";
 import { DEFAULTS, loadSettings, saveSettings, type Settings, type SettingsSection } from "./lib/settings";
+import { pauseYoutubeHost } from "./lib/ytHost";
 import { kickYoutube } from "./lib/ytKick";
 
-/** load 当下预缓冲；play 留给 playSoon。 */
+/** load 当下预缓冲；play 留给 playSoon。先停另一路引擎，禁止叠声。 */
 function prepareEngines(ep: Episode, audioOnly: boolean) {
   if (usesAudioEngine(ep, audioOnly)) {
+    pauseYoutubeHost();
     prepareAudio(ep);
     return;
   }
@@ -22,6 +24,8 @@ function prepareEngines(ep: Episode, audioOnly: boolean) {
   releaseAudioHost();
   if (usesYtEngine(ep, audioOnly)) {
     kickYoutube(ep, { play: false });
+  } else {
+    pauseYoutubeHost();
   }
 }
 

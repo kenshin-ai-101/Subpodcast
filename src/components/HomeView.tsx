@@ -1,10 +1,10 @@
 /**
  * [INPUT]: api、recommend、library、queue.playAll
- * [OUTPUT]: HomeView；共享 EpisodeRow
+ * [OUTPUT]: HomeView；共享 EpisodeRow / EpFeed（WKWebView 悬停不吞滚轮）
  * [POS]: 默认首页；卡片只打开，▶ / 继续听走 playAll（load+导航+playSoon）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Check, ChevronRight, Loader2, Play, Plus } from "lucide-react";
 import { api, errText, type Episode, type Show } from "../lib/api";
@@ -325,6 +325,43 @@ export function HomeView() {
   );
 }
 
+/**
+ * 单集列表容器：把滚轮显式交给最近的 `.page`。
+ * WKWebView 在悬停 overflow 子节点时经常不链式滚动，仅靠 CSS 不够稳。
+ */
+export function EpFeed({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.defaultPrevented) return;
+      const page = root.closest(".page");
+      if (!(page instanceof HTMLElement)) return;
+      const dy =
+        e.deltaMode === 1
+          ? e.deltaY * 16
+          : e.deltaMode === 2
+            ? e.deltaY * page.clientHeight
+            : e.deltaY;
+      if (!dy) return;
+      const max = page.scrollHeight - page.clientHeight;
+      if (max <= 0) return;
+      const next = Math.min(max, Math.max(0, page.scrollTop + dy));
+      if (next === page.scrollTop) return;
+      page.scrollTop = next;
+      e.preventDefault();
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
+  return (
+    <div className="ep-feed" ref={ref}>
+      {children}
+    </div>
+  );
+}
+
 export function EpisodeRow({
   ep,
   showShow,
@@ -345,7 +382,18 @@ export function EpisodeRow({
     : ep.cover ?? undefined;
 
   return (
-    <button type="button" className={`ep-item ${playing ? "playing" : ""} ${done ? "played" : ""}`} onClick={onOpen}>
+    <div
+      className={`ep-item ${playing ? "playing" : ""} ${done ? "played" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
       <div className={`ep-thumb ${square ? "square" : "wide"}`}>
         {ep.cover && square && <img className="thumb-bg" src={ep.cover} alt="" aria-hidden loading="lazy" />}
         {thumb ? (
@@ -389,6 +437,6 @@ export function EpisodeRow({
           </p>
         )}
       </div>
-    </button>
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api.previewShow/cachedShow、MonthFilter、picks
  * [OUTPUT]: ChannelView — 订阅前频道预览
- * [POS]: 从发现点进精选节目
+ * [POS]: 从发现点进精选节目；列表用 EpFeed
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import { PICKS, pickName, pickSub, sameFeed, showName } from "../lib/picks";
 import { showLinks } from "../lib/showLinks";
 import { playAll } from "../lib/queue";
 import { useStore } from "../store";
-import { EpisodeRow } from "./HomeView";
+import { EpFeed, EpisodeRow } from "./HomeView";
 import { MonthFilter, useMonthFilter } from "./MonthFilter";
 import { AlsoOn, usePromo, YtButton } from "./PromoBanner";
 
@@ -22,11 +22,11 @@ function EpisodeList({ episodes }: { episodes: Episode[] | null }) {
   if (episodes == null) return <p className="muted">加载中…</p>;
   if (!episodes.length) return <p className="muted">暂无单集</p>;
   return (
-    <div className="ep-feed">
+    <EpFeed>
       {episodes.map((ep) => (
         <EpisodeRow key={ep.id} ep={ep} onOpen={() => openEpisode(ep)} />
       ))}
-    </div>
+    </EpFeed>
   );
 }
 

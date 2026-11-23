@@ -4,15 +4,16 @@
 成员清单
 App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / remindReview（离线清单在 store.init）
 main.tsx: React 挂载入口
-store.ts: Zustand；openEpisode 只导航；load 用 initialAudioOnly；init 并行拉离线清单后 ready
+store.ts: Zustand；load→prepareEngines（先停另一路引擎再装载）；init 并行拉离线清单
 styles.css: 暖纸底 + 橙强调；yt-dock（舞台 z>dock 透出）；theater；mini；单集右四 Tab / 叠字幕
 lib/media.ts: preferAudio / initialAudioOnly（断网已下载 YouTube→仅音频）/ usesAudioEngine / usesYtEngine
-lib/audioHost.ts: 单例 Audio；立刻 play；播中不抢切源；本地 asset 失败回退远端；续听延后 seek
+lib/audioHost.ts: 单例 Audio；takeAudioEngine；换集前 pauseYoutubeHost；本地失败回退远端
+lib/ytHost.ts: registerYtHost / pauseYoutubeHost — 与 audioHost 互斥停声
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
 lib/playback.ts: track/flush、waiting（20s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
 lib/offline.ts: 离线下载；audioSrc 本地优先 / remoteAudioSrc 回退；清单 store.init 预拉
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSpeak；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
-lib/exportTranscript.ts: 字幕导出 MD/PDF（按显示模式组装；PDF 画布分页；落盘 saveDownload）
+lib/exportTranscript.ts: 字幕导出 SRT/WebVTT/ASS/LRC/TXT/Markdown（按内容模式组装；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
 lib/settings.ts: Settings / LearnLevel / PRESETS / VOICES；shareTranscripts；ttsVoice；learn*（含 learnSounds）
 lib/dict.ts: 离线 ECDICT（/dict/en.json）；lookup / isNew / looksEnglish / useDict
@@ -43,7 +44,7 @@ lib/recommend.ts: 首页「为你推荐」本地打分
 lib/showLinks.ts: 主推节目站外链接；mayHaveYoutubeTwin 后台配对（不堵起播）
 components/Chrome.tsx: Sidebar（首页/发现/统计/生词本；收起为图标轨）/ TopBar / Toast
 components/Splitter.tsx: 列宽拖条（左栏 / 单集右栏；过 snap 收起 / 双击恢复）
-components/HomeView.tsx: 卡片只打开；▶ / 继续听走 playAll
+components/HomeView.tsx: 卡片只打开；▶ / 继续听走 playAll；EpisodeRow + EpFeed（滚轮交给 .page）
 components/RecentView.tsx: 最近播放 / 收藏
 components/DiscoverView.tsx: Topic + 精选网格 + 横幅
 components/ChannelView.tsx: 订阅前预览（cached/preview）
@@ -66,12 +67,13 @@ components/ReadingSettings.tsx: 阅读预览与字号/字体
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio 预缓冲；订阅 savedPath（播中锁源）
-components/YtEngine.tsx: App 根持久 iframe + VideoSlot；loadVideoById 换片；theater-host 抬 z-index
+components/YtEngine.tsx: App 根持久 iframe；registerYtHost；激活时 releaseAudio；失活 pauseVideo
 components/MiniPlayer.tsx: 非单集页音频迷你条
-components/PlayerBar.tsx: 绑页内 episode；initialAudioOnly 浏览态；视频双击/角标/F→theater
+components/PlayerBar.tsx: 绑页内 episode；switchTo 用 takeAudioEngine；视频双击/角标/F→theater
 components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
-components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出 MD·PDF / 学英语标词词卡 / 实时识别行 + YouTube 语言切换 + 行列表
+components/TranscriptPane.tsx: 查找/模型下载/GenCard+插画（开播自启）/导出（中文栏按钮；外语进「…」）/学英语标词词卡 / 实时识别行 + YouTube 语言切换 + 行列表
+components/SubtitleExport.tsx: 字幕导出弹窗（格式 SRT·VTT·ASS·LRC·TXT·MD + 内容模式 + 预览）
 components/EpisodeView.tsx: 打开不抢播；后台配对/字幕；右栏拖宽/收起
 components/DeepRead.tsx: 乔木精读 HTML（右栏精读 Tab）
 components/SummaryPane.tsx: 右栏导读（共享查找 / 生成 / 朗读脚注）
