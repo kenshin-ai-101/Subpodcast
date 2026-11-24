@@ -68,8 +68,22 @@ pub struct SharedTranslation {
     pub items: Vec<Option<String>>,
 }
 
+#[derive(Deserialize, Default)]
+pub struct SharedAudio {
+    pub bytes: u64,
+    #[serde(default)]
+    pub etag: String,
+    pub secs: f64,
+    #[serde(default)]
+    pub fp: bool,
+}
+
 #[derive(Deserialize)]
 pub struct Shared {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub audio: Option<SharedAudio>,
     pub source: String,
     pub language: String,
     pub segments: Vec<Segment>,
@@ -150,6 +164,16 @@ struct ClientInfo {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadAudio<'a> {
+    bytes: u64,
+    etag: &'a str,
+    secs: f64,
+    fp_algo: &'static str,
+    fp: &'a str,
+}
+
+#[derive(Serialize)]
 struct Upload<'a> {
     keys: &'a [String],
     title: &'a str,
@@ -161,6 +185,8 @@ struct Upload<'a> {
     segments: &'a [Segment],
     translation: Option<UploadTranslation>,
     client: ClientInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<UploadAudio<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +203,7 @@ pub struct UploadMeta {
     pub language: String,
     pub install: String,
     pub translation: Option<(String, Vec<Option<String>>)>,
+    pub audio: Option<crate::align::AudioRef>,
 }
 
 pub async fn upload_with(
@@ -206,6 +233,15 @@ pub async fn upload_with(
             version: env!("CARGO_PKG_VERSION"),
             install: meta.install,
         },
+        audio: meta.audio.as_ref().and_then(|a| {
+            Some(UploadAudio {
+                bytes: a.bytes,
+                etag: &a.etag,
+                secs: a.secs,
+                fp_algo: crate::align::FP_ALGO,
+                fp: a.fp.as_deref()?,
+            })
+        }),
     };
     let resp = net::client()
         .post(API)
@@ -218,6 +254,31 @@ pub async fn upload_with(
     }
     let reply: UploadReply = resp.json().await?;
     Ok(reply.action.unwrap_or_default())
+}
+
+/// 获取共享字幕对应的参考音频声纹（用于跨剪辑自动对齐）。
+pub async fn fetch_fingerprint(shared_id: &str) -> Option<Vec<u32>> {
+    if shared_id.is_empty() {
+        return None;
+    }
+    let resp = net::client()
+        .get(format!("{API}/{}/fingerprint", urlencoding::encode(shared_id)))
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    #[derive(Deserialize)]
+    struct FpReply {
+        algo: String,
+        fp: String,
+    }
+    let reply: FpReply = resp.json().await.ok()?;
+    (reply.algo == crate::align::FP_ALGO)
+        .then(|| crate::align::decode_fp(&reply.fp))
+        .flatten()
 }
 
 pub fn into_transcript(episode_id: &str, hit: Shared) -> Transcript {

@@ -4,6 +4,7 @@
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+mod align;
 mod anki;
 mod asr;
 mod captions;
@@ -219,14 +220,30 @@ fn resolve_saved_base_url(
     }
 }
 
-/// 共享库命中则落库字幕，并写入节目方译文（engine=shared）。
+/// 共享库命中则落库字幕，并写入节目方译文（engine=shared）及参考音频元信息（audio-ref）。
 async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
     let mut hit = shared::lookup(&shared::keys(ep)).await?;
     let translation = hit.translation.take();
+    let audio_ref = hit.audio.take().map(|a| align::AudioRef {
+        bytes: a.bytes,
+        etag: a.etag,
+        secs: a.secs,
+        fp: None,
+        shared_id: (!hit.id.is_empty()).then(|| hit.id.clone()),
+        has_fp: a.fp,
+    });
     let t = shared::into_transcript(&ep.id, hit);
     {
         let conn = state.db.lock().ok()?;
         db::save_transcript(&conn, &t).ok()?;
+        if let Some(ref aref) = audio_ref {
+            let _ = db::set_blob(
+                &conn,
+                &ep.id,
+                "audio-ref",
+                &serde_json::to_string(aref).unwrap_or_default(),
+            );
+        }
         if let Some(tr) =
             translation.filter(|tr| tr.items.len() == t.segments.len() && tr.lang.starts_with("zh"))
         {
@@ -240,6 +257,15 @@ async fn take_shared(state: &AppState, ep: &Episode) -> Option<Transcript> {
         }
     }
     Some(t)
+}
+
+fn load_audio_ref(state: &AppState, episode_id: &str) -> Option<align::AudioRef> {
+    let conn = state.db.lock().ok()?;
+    db::get_blob(&conn, episode_id, "audio-ref")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<align::AudioRef>(&s).ok())
+        .filter(|r| r.fp.is_some())
 }
 
 fn data_dir() -> PathBuf {
@@ -938,6 +964,7 @@ async fn share_translation(
         language: t.language.clone(),
         install,
         translation: Some(("zh-CN".to_string(), items)),
+        audio: load_audio_ref(&state, &episode_id),
     };
     shared::upload_with(&keys, meta, &t.segments, &engine, &model)
         .await
@@ -1270,6 +1297,7 @@ async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<T
                 language: t.language.clone(),
                 install,
                 translation: None,
+                audio: None,
             };
             let segs = t.segments.clone();
             tokio::spawn(async move {
@@ -1386,13 +1414,24 @@ async fn learn_clip(
             .map_err(e)?
             .ok_or_else(|| "节目不存在".to_string())?
     };
-    if let Some(saved) = offline::find(&data, &episode_id) {
+    if let Some(saved) = offline::find(&data, &episode_id).or_else(|| offline::find_cached(&data, &episode_id)) {
+        let tmap = state
+            .db
+            .lock()
+            .ok()
+            .and_then(|conn| db::get_blob(&conn, &episode_id, "tmap").ok().flatten())
+            .and_then(|raw| serde_json::from_str::<align::TimeMap>(&raw).ok())
+            .filter(|m| m.play_bytes == saved.bytes && !m.pieces.is_empty());
+        let (play_start, play_end) = match tmap {
+            Some(m) => (m.to_play(start), m.to_play(end)),
+            None => (start, end),
+        };
         return clip::make(
             &data,
             clip::Source::File(PathBuf::from(saved.path)),
             &episode_id,
-            start,
-            end,
+            play_start,
+            play_end,
         )
         .await
         .map(|p| p.to_string_lossy().into_owned())
@@ -1677,8 +1716,7 @@ fn storage_info(state: State<'_, AppState>) -> serde_json::Value {
         "temp": dir_bytes(&d.join("work")),
         "ttsCache": dir_bytes(&speech::cache_dir(d)),
         "ttsModels": dir_bytes(&local_tts::models_dir(d)),
-        // 字幕对齐音频缓存尚未接入，占位 0；有占用时前端才会显示该行
-        "audioCache": 0,
+        "audioCache": dir_bytes(&offline::cache_dir(d)),
     })
 }
 
@@ -1727,11 +1765,323 @@ fn clear_downloads(state: State<'_, AppState>) -> Res<()> {
     offline::clear(&state.data).map_err(e)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AlignedResp {
+    /// same | aligned | unknown | failed
+    status: &'static str,
+    map: Option<align::TimeMap>,
+    path: Option<String>,
+    local_bytes: u64,
+}
+
+/// 将单集字幕与当前播放音频对齐：
+/// 1) 字节数一致直接返回 same；
+/// 2) 有参考声纹（本机或共享库）则自动下载到 audio-cache 并做声纹分段对齐；
+/// 3) 无参考声纹（YouTube 字幕播 RSS 音频 / 旧共享字幕 / Podscribe）且 `force=true` 时，用本机 ASR 做语音探针对齐。
+#[tauri::command]
+async fn align_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    episode_id: String,
+    force: bool,
+    model: Option<String>,
+) -> Res<AlignedResp> {
+    let (ep, aref, saved_map) = {
+        let conn = state.db.lock().map_err(e)?;
+        let ep = db::get_episode(&conn, &episode_id)
+            .map_err(e)?
+            .ok_or_else(|| "单集不存在".to_string())?;
+        let aref = db::get_blob(&conn, &episode_id, "audio-ref")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<align::AudioRef>(&s).ok());
+        let saved = db::get_blob(&conn, &episode_id, "tmap")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<align::TimeMap>(&s).ok());
+        (ep, aref, saved)
+    };
+    let local = offline::find(&state.data, &episode_id)
+        .or_else(|| offline::find_cached(&state.data, &episode_id));
+    let local_bytes = local.as_ref().map(|l| l.bytes).unwrap_or(0);
+    let reply_none = |status: &'static str| {
+        Ok(AlignedResp {
+            status,
+            map: None,
+            path: None,
+            local_bytes,
+        })
+    };
+
+    let Some(audio_url) = ep.audio_url.clone().filter(|u| !u.is_empty()) else {
+        return reply_none("same");
+    };
+
+    if let Some(m) = saved_map {
+        let fits = m.play_bytes == local_bytes || (m.method == "same" && local.is_none());
+        if fits && m.method != "same" && !(force && m.method != "manual") {
+            return Ok(AlignedResp {
+                status: "aligned",
+                map: Some(m),
+                path: local.map(|l| l.path),
+                local_bytes,
+            });
+        }
+        if fits && m.method == "same" && !force {
+            return reply_none("same");
+        }
+    }
+
+    let has_fp = aref.as_ref().is_some_and(|a| a.fp.is_some() || a.has_fp);
+    if !has_fp && !force {
+        return reply_none("unknown");
+    }
+
+    let job_key = format!("al:{episode_id}");
+    {
+        let jobs = state.jobs.lock().map_err(e)?;
+        if jobs.contains_key(&job_key) {
+            return reply_none("unknown");
+        }
+    }
+    let _guard = begin_job(&state, &job_key);
+    let cancel = _guard.cancel_flag();
+
+    let save_map = |m: &align::TimeMap| {
+        if let Ok(conn) = state.db.lock() {
+            let _ = db::set_blob(
+                &conn,
+                &episode_id,
+                "tmap",
+                &serde_json::to_string(m).unwrap_or_default(),
+            );
+        }
+    };
+
+    if let Some(ref a) = aref {
+        let current_bytes = match &local {
+            Some(l) => Some(l.bytes),
+            None => align::fetch_remote_meta(&audio_url).await.map(|x| x.0),
+        };
+        if current_bytes == Some(a.bytes) && !force {
+            save_map(&align::TimeMap::same(a.bytes));
+            return reply_none("same");
+        }
+    }
+
+    let path = match &local {
+        Some(l) => PathBuf::from(&l.path),
+        None => {
+            let dest = offline::cache_path(&state.data, &episode_id, &audio_url);
+            let ext = dest
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("mp3")
+                .to_string();
+            let part = dest.with_extension("part");
+            let _ = tokio::fs::create_dir_all(offline::cache_dir(&state.data)).await;
+            let (app_dl, id_dl) = (app.clone(), episode_id.clone());
+            asr::download_audio_url(&audio_url, &part, &cancel, move |pct| {
+                let _ = app_dl.emit(
+                    "align",
+                    serde_json::json!({ "episodeId": id_dl, "progress": pct }),
+                );
+            })
+            .await
+            .map_err(e)?;
+            let kept = offline::commit_cached(&state.data, &episode_id, &part, &ext).map_err(e)?;
+            PathBuf::from(kept.path)
+        }
+    };
+    let _ = app.emit(
+        "align",
+        serde_json::json!({ "episodeId": episode_id, "progress": null }),
+    );
+    let file_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let path_for_fp = path.clone();
+    let (secs, play_fp) = tokio::task::spawn_blocking(move || align::fingerprint_audio(&path_for_fp))
+        .await
+        .map_err(e)?
+        .map_err(e)?;
+
+    let (pieces, method) = if let Some(mut a) = aref.clone().filter(|_| has_fp) {
+        let ref_fp = match a.fp.as_deref().and_then(align::decode_fp) {
+            Some(fp) => fp,
+            None => {
+                let sid = a.shared_id.as_deref().unwrap_or("");
+                let fp = shared::fetch_fingerprint(sid)
+                    .await
+                    .ok_or_else(|| "没有拿到字幕对应音频的声纹".to_string())?;
+                a.fp = Some(align::encode_fp(&fp));
+                if let Ok(conn) = state.db.lock() {
+                    let _ = db::set_blob(
+                        &conn,
+                        &episode_id,
+                        "audio-ref",
+                        &serde_json::to_string(&a).unwrap_or_default(),
+                    );
+                }
+                fp
+            }
+        };
+        (align::match_fingerprints(&ref_fp, &play_fp), "fingerprint")
+    } else {
+        let transcript = {
+            let conn = state.db.lock().map_err(e)?;
+            db::load_transcript(&conn, &episode_id)
+                .map_err(e)?
+                .ok_or_else(|| "这集还没有字幕".to_string())?
+        };
+        let picked_model = model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .and_then(|m| asr::resolve(&state.data, m).filter(|r| r.path.is_file()))
+            .or_else(|| {
+                asr::MODELS
+                    .iter()
+                    .find_map(|m| asr::resolve(&state.data, m.id).filter(|r| r.path.is_file()))
+            })
+            .ok_or_else(|| "请先在「设置 › 字幕」里下载任意一个本机识别模型，才能自动比对对齐".to_string())?;
+
+        let mut anchors: Vec<(f64, f64)> = Vec::new();
+        let stride = if secs > 3600.0 { 180.0 } else { 120.0 };
+        let mut starts = align::initial_probe_points(secs, stride);
+        for _round in 0..2 {
+            if starts.is_empty() {
+                break;
+            }
+            let heard = transcribe_probe_slices(
+                &state,
+                &path,
+                &starts,
+                &picked_model,
+                &transcript.language,
+                cancel.clone(),
+            )
+            .await?;
+            anchors.extend(align::locate_probes(&transcript.segments, &heard, &starts));
+            starts = align::refinement_probe_points(&anchors);
+        }
+        (align::build_pieces_from_anchors(&anchors), "probe")
+    };
+
+    let shared_secs: f64 = pieces.iter().map(|p| p.ref_end - p.ref_start).sum();
+    if pieces.is_empty() || (method == "fingerprint" && shared_secs < secs / 3.0) {
+        return Ok(AlignedResp {
+            status: "failed",
+            map: None,
+            path: Some(path.to_string_lossy().into_owned()),
+            local_bytes: file_bytes,
+        });
+    }
+    let map = align::TimeMap {
+        play_bytes: file_bytes,
+        method: method.into(),
+        pieces,
+    };
+    save_map(&map);
+    Ok(AlignedResp {
+        status: "aligned",
+        map: Some(map),
+        path: Some(path.to_string_lossy().into_owned()),
+        local_bytes: file_bytes,
+    })
+}
+
+async fn transcribe_probe_slices(
+    state: &AppState,
+    audio_path: &std::path::Path,
+    starts: &[f64],
+    model: &asr::Resolved,
+    language: &str,
+    cancel: Arc<AtomicBool>,
+) -> Res<Vec<model::Segment>> {
+    let work = state
+        .data
+        .join("work")
+        .join(format!("align-{}", Uuid::new_v4().simple()));
+    tokio::fs::create_dir_all(&work).await.map_err(e)?;
+    let wav = work.join("probes.wav");
+    let (src_path, starts_vec, wav_out) = (audio_path.to_path_buf(), starts.to_vec(), wav.clone());
+    let build_res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let ext = src_path
+            .extension()
+            .and_then(|x| x.to_str())
+            .map(str::to_string);
+        let slot_samples = (align::SLOT_LEN_SECS * 16000.0) as usize;
+        let mut combined: Vec<f32> = Vec::with_capacity(slot_samples * starts_vec.len());
+        for s in starts_vec {
+            let file = std::fs::File::open(&src_path)?;
+            let mut slice = clip::extract_raw(
+                Box::new(file),
+                ext.as_deref(),
+                s,
+                s + align::PROBE_LEN_SECS,
+            )
+            .unwrap_or_default();
+            slice.resize(slot_samples, 0.0);
+            combined.extend(slice);
+        }
+        asr::write_wav(&wav_out, &combined)
+    })
+    .await
+    .map_err(e)?;
+
+    let lang = if language.is_empty() || language == "und" {
+        "auto"
+    } else {
+        language
+    };
+
+    let heard = match build_res {
+        Err(err) => Err(e(err)),
+        Ok(()) if model.engine == "qwen3" => {
+            let bin = match asr::find_crispasr(&state.data) {
+                Some(b) => Ok(b),
+                None => asr::ensure_crispasr(&state.data, &cancel, |_, _| {})
+                    .await
+                    .map_err(e),
+            };
+            match bin {
+                Ok(b) => asr::run_crispasr(&b, &model.path, &wav, lang, cancel, |_| {})
+                    .await
+                    .map_err(e),
+                Err(err) => Err(err),
+            }
+        }
+        Ok(()) => asr::run_whisper_worker(&wav, &model.path, lang, cancel, |_| {})
+            .await
+            .map(|r| r.segments)
+            .map_err(e),
+    };
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    heard
+}
+
+#[tauri::command]
+fn save_time_map(state: State<'_, AppState>, episode_id: String, map: align::TimeMap) -> Res<()> {
+    let conn = state.db.lock().map_err(e)?;
+    let raw = serde_json::to_string(&map).map_err(e)?;
+    db::set_blob(&conn, &episode_id, "tmap", &raw).map_err(e)
+}
+
+#[tauri::command]
+fn list_audio_cache(state: State<'_, AppState>) -> Vec<offline::Saved> {
+    offline::list_cached(&state.data)
+}
+
+#[tauri::command]
+fn clear_audio_cache(state: State<'_, AppState>) -> Res<()> {
+    offline::clear_cached(&state.data).map_err(e)
+}
+
 #[tauri::command]
 fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) -> Res<()> {
     use tauri_plugin_opener::OpenerExt;
     let dir = match kind.as_str() {
         "downloads" => offline::dir(&state.data),
+        "audio-cache" => offline::cache_dir(&state.data),
         "models" => asr::models_dir(&state.data),
         "tts-cache" => speech::cache_dir(&state.data),
         "tts-models" => local_tts::models_dir(&state.data),
@@ -2049,20 +2399,52 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
             language: language_out,
             segments,
         };
+        let audio_for_fp = audio.clone();
+        let file_bytes = std::fs::metadata(&audio).map(|m| m.len()).unwrap_or(0);
+        let audio_ref = if file_bytes > 0 {
+            tokio::task::spawn_blocking(move || align::fingerprint_audio(&audio_for_fp))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .map(|(secs, fp)| align::AudioRef {
+                    bytes: file_bytes,
+                    etag: String::new(),
+                    secs,
+                    fp: Some(align::encode_fp(&fp)),
+                    shared_id: None,
+                    has_fp: true,
+                })
+        } else {
+            None
+        };
         {
             let conn = state.db.lock().map_err(e)?;
             db::save_transcript(&conn, &t).map_err(e)?;
             let meta = serde_json::json!({ "source": source, "model": req.model });
             let _ = db::set_blob(&conn, &ep.id, "asr-meta", &meta.to_string());
+            if let Some(ref aref) = audio_ref {
+                let _ = db::set_blob(
+                    &conn,
+                    &ep.id,
+                    "audio-ref",
+                    &serde_json::to_string(aref).unwrap_or_default(),
+                );
+                let _ = db::set_blob(
+                    &conn,
+                    &ep.id,
+                    "tmap",
+                    &serde_json::to_string(&align::TimeMap::same(file_bytes)).unwrap_or_default(),
+                );
+            }
         }
         emit_asr("done", 1.0, None);
-        Ok(t)
+        Ok((t, audio_ref))
     };
 
     let result = run.await;
     let _ = tokio::fs::remove_dir_all(&work).await;
     drop(_guard);
-    if let (Ok(ref t), false) = (&result, share_keys.is_empty()) {
+    if let (Ok((ref t, ref audio_ref)), false) = (&result, share_keys.is_empty()) {
         let (on, install) = match state.db.lock() {
             Ok(conn) => (share_on(&conn) && !is_private_episode(&conn, &ep), install_id(&conn)),
             Err(_) => (false, String::new()),
@@ -2079,6 +2461,7 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
                 language: t.language.clone(),
                 install,
                 translation: None,
+                audio: audio_ref.clone(),
             };
             let segs = t.segments.clone();
             let keys = share_keys;
@@ -2098,7 +2481,7 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
             }),
         );
     }
-    result
+    result.map(|(t, _)| t)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2164,6 +2547,10 @@ pub fn run() {
             list_downloads,
             delete_download,
             clear_downloads,
+            align_audio,
+            save_time_map,
+            list_audio_cache,
+            clear_audio_cache,
             get_settings,
             set_settings,
             set_api_key,

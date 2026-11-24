@@ -171,6 +171,20 @@ export const api = {
     invoke<{ episodeId: string; path: string; bytes: number; savedAt: number }[]>("list_downloads"),
   deleteDownload: (episodeId: string) => invoke<void>("delete_download", { episodeId }),
   clearDownloads: () => invoke<void>("clear_downloads"),
+  alignAudio: (episodeId: string, force = false, model?: string) =>
+    invoke<{
+      status: "same" | "aligned" | "unknown" | "failed";
+      map: { playBytes: number; method: "same" | "fingerprint" | "probe" | "manual"; pieces: { refStart: number; refEnd: number; playStart: number }[] } | null;
+      path: string | null;
+      localBytes: number;
+    }>("align_audio", { episodeId, force, model: model ?? null }),
+  saveTimeMap: (
+    episodeId: string,
+    map: { playBytes: number; method: "same" | "fingerprint" | "probe" | "manual"; pieces: { refStart: number; refEnd: number; playStart: number }[] },
+  ) => invoke<void>("save_time_map", { episodeId, map }),
+  listAudioCache: () =>
+    invoke<{ episodeId: string; path: string; bytes: number; savedAt: number }[]>("list_audio_cache"),
+  clearAudioCache: () => invoke<void>("clear_audio_cache"),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   getSettings: () => invoke<string | null>("get_settings"),
   setSettings: (value: string) => invoke<void>("set_settings", { value }),

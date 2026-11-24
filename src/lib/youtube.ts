@@ -1,6 +1,6 @@
 /**
  * [INPUT]: youtube.com/iframe_api
- * [OUTPUT]: loadYouTube() → window.YT
+ * [OUTPUT]: loadYouTube() → window.YT；YtPlayer（含 cue/stop，避免 load 强制起播叠声）
  * [POS]: YouTube IFrame Player API 一次性加载；App 启动预热；YtEngine 换片复用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -22,6 +22,8 @@ export interface YtPlayer {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
   pauseVideo(): void;
+  /** 停掉并卸流，比 pause 更能挡住迟到的 loadVideoById 起播。 */
+  stopVideo(): void;
   getPlayerState(): number;
   getCurrentTime(): number;
   getDuration(): number;
@@ -29,8 +31,10 @@ export interface YtPlayer {
   setVolume(vol: number): void;
   mute(): void;
   unMute(): void;
-  /** 换集复用同一 iframe，避免 destroy + 重建的秒级冷启动。 */
+  /** 换集并立刻播放。仅在明确要出声时用。 */
   loadVideoById(opts: string | { videoId: string; startSeconds?: number }): void;
+  /** 换集只 cue、不起播；等 playVideo / playSoon。 */
+  cueVideoById(opts: string | { videoId: string; startSeconds?: number }): void;
   unloadModule?(name: string): void;
   setOption?(module: string, option: string, value: unknown): void;
 }

@@ -17,10 +17,12 @@
         "enable": true,
         "scope": [
           "$DATA/Subpodcast/downloads/**/*",
+          "$DATA/Subpodcast/audio-cache/**/*",
           "$DATA/Subpodcast/clips/**/*",
           "$DATA/Subpodcast/work/clips/**/*",
           "$DATA/Subpodcast/tts-cache/**/*",
           "$APPDATA/downloads/**/*",
+          "$APPDATA/audio-cache/**/*",
           "$APPDATA/clips/**/*",
           "$APPDATA/work/clips/**/*",
           "$APPDATA/tts-cache/**/*"

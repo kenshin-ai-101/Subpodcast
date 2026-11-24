@@ -68,6 +68,8 @@ export interface Settings {
   subtitleLook?: "box" | "outline";
   chatSize?: "m" | "l";
   audioNextLine?: boolean;
+  /** 有 TimeMap 时自动跳过仅播放文件有的空隙（多半是广告）。 */
+  skipAds?: boolean;
   autoNext?: boolean;
   /** 播放倍速（与控制条同步）。 */
   playbackRate?: number;
@@ -377,6 +379,7 @@ export const DEFAULTS: Settings = {
   subtitleLook: "outline",
   chatSize: "m",
   audioNextLine: false,
+  skipAds: false,
   autoNext: false,
   playbackRate: 1,
   uiLang: "auto",

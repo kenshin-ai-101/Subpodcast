@@ -1,7 +1,7 @@
 /**
- * [INPUT]: store.current / audioOnly / playWhenReady / rate / theater；media.usesYtEngine；youtube / playback / volume
+ * [INPUT]: store.current / audioOnly / playWhenReady / rate / theater；media.usesYtEngine；youtube / mediaClock / playback / volume
  * [OUTPUT]: VideoSlot + YtEngine（App 根持久 iframe）；useYtUi.error
- * [POS]: load() 后立刻建/换片，不堵在 EpisodeView；槽位就位后 CSS 贴合，不搬 DOM；theater 时抬高 z-index
+ * [POS]: load 后建/换片；cue 预热 / load 起播；失活 stop+mute 挡迟到 autoplay；rAF+mediaClock 驱动字幕
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef } from "react";
@@ -11,16 +11,19 @@ import { pauseAudioHost, releaseAudioHost, takeAudioEngine } from "../lib/audioH
 import { tNow } from "../lib/i18n";
 import { noteListening } from "../lib/listening";
 import { preferAudio, usesYtEngine } from "../lib/media";
+import { createMediaClock } from "../lib/mediaClock";
 import { audioSrc } from "../lib/offline";
 import { flushProgress, resetTrackSave, track, waiting } from "../lib/playback";
 import { playNext } from "../lib/queue";
+import { currentMap, toContent } from "../lib/timemap";
 import { applyYtPlayerVolume, useVolume } from "../lib/volume";
 import { hideYouTubeCaptions, loadYouTube, type YtPlayer } from "../lib/youtube";
 import { registerYtHost } from "../lib/ytHost";
 import { useYtKick } from "../lib/ytKick";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
 
-const TICK_MS = 250;
+/** 叠字要跟口型：约 20Hz 采样；getCurrentTime 粗跳时靠 mediaClock 外推。 */
+const TICK_MS = 50;
 
 export const useYtUi = create<{ error: string | null }>(() => ({ error: null }));
 
@@ -74,6 +77,11 @@ export function YtEngine() {
   const tickRef = useRef<number | undefined>(undefined);
   const handleRef = useRef<PlayerHandle | null>(null);
   const lastKickGen = useRef(0);
+  const clockRef = useRef(createMediaClock());
+  /** 复用 iframe 换片后，在新片进入 PLAYING/CUED 前忽略旧片残留的 getCurrentTime。 */
+  const switchingRef = useRef(false);
+
+  const ytRate = (r: number) => Math.min(2, Math.max(0.25, Number.isFinite(r) && r > 0 ? r : 1));
 
   const active = usesYtEngine(current, audioOnly);
   const videoId = active ? current?.videoId ?? kick?.videoId ?? null : null;
@@ -82,30 +90,50 @@ export function YtEngine() {
 
   const stopTick = () => {
     if (tickRef.current) {
-      window.clearInterval(tickRef.current);
+      window.cancelAnimationFrame(tickRef.current);
       tickRef.current = undefined;
     }
   };
 
   const startTick = (p: YtPlayer, epId: string) => {
     stopTick();
-    tickRef.current = window.setInterval(() => {
+    const clock = clockRef.current;
+    clock.setRate(ytRate(useStore.getState().rate));
+    let lastSample = 0;
+    const step = (now: number) => {
+      tickRef.current = window.requestAnimationFrame(step);
+      if (now - lastSample < TICK_MS) return;
+      lastSample = now;
       const ep = epRef.current;
       if (!ep || ep.id !== epId) return;
+      if (switchingRef.current) return;
       try {
-        track(ep, p.getCurrentTime(), p.getDuration());
-        noteListening(ep, useStore.getState().playing);
+        if (!window.YT) return;
+        const state = p.getPlayerState();
+        const playing = state === window.YT.PlayerState.PLAYING;
+        clock.setPlaying(playing);
+        if (!playing && state !== window.YT.PlayerState.PAUSED) {
+          // 缓冲中：冻结外推，仍跟一次真实时钟
+          clock.setPlaying(false);
+        }
+        const raw = p.getCurrentTime();
+        const smooth = clock.sample(raw);
+        track(ep, smooth, p.getDuration());
+        noteListening(ep, playing);
       } catch {
         /* mid-destroy */
       }
-    }, TICK_MS);
+    };
+    tickRef.current = window.requestAnimationFrame(step);
   };
 
   const offer = (p: YtPlayer, episodeId: string) => {
     const handle: PlayerHandle = {
       episodeId,
       seek(seconds) {
-        useStore.getState().set({ time: seconds });
+        switchingRef.current = false;
+        useStore.getState().set({ time: seconds, rawTime: seconds, gapEnd: null });
+        clockRef.current.reset(seconds);
         p.seekTo(seconds, true);
       },
       toggle() {
@@ -123,8 +151,10 @@ export function YtEngine() {
       setRate(r) {
         useStore.getState().set({ rate: r });
         void useStore.getState().saveSettings({ playbackRate: r });
+        const applied = ytRate(r);
+        clockRef.current.setRate(applied);
         try {
-          p.setPlaybackRate(r);
+          p.setPlaybackRate(applied);
         } catch {
           /* ignore */
         }
@@ -179,27 +209,35 @@ export function YtEngine() {
     };
   }, [active, slotEl, shell, videoId, theater]);
 
-  // 供 audioHost / store 同步停声（不靠本 effect 的异步）
-  useEffect(() => {
-    return registerYtHost(() => {
-      stopTick();
+  const hardStopYt = () => {
+    stopTick();
+    const p = ytRef.current;
+    if (!p) return;
+    try {
+      p.stopVideo();
+    } catch {
       try {
-        ytRef.current?.pauseVideo();
+        p.pauseVideo();
       } catch {
         /* ignore */
       }
-    });
-  }, []);
-
-  // 失活：暂停并交权，保留 iframe 供下次秒切
-  useEffect(() => {
-    if (active) return;
-    stopTick();
+    }
     try {
-      ytRef.current?.pauseVideo();
+      p.mute();
     } catch {
       /* ignore */
     }
+  };
+
+  // 供 audioHost / store 同步硬停（不靠本 effect 的异步）
+  useEffect(() => {
+    return registerYtHost(() => hardStopYt());
+  }, []);
+
+  // 失活：硬停并交权，保留 iframe 供下次秒切（挡 in-flight load 起播）
+  useEffect(() => {
+    if (active) return;
+    hardStopYt();
     if (handleRef.current) {
       withdrawPlayer(handleRef.current);
       handleRef.current = null;
@@ -227,19 +265,35 @@ export function YtEngine() {
     useYtUi.setState({ error: null });
     resetTrackSave();
 
+    /** 仍归本引擎管才 offer；否则硬停，防音视频交权竞态叠声。 */
+    const stillMine = () => {
+      const st = useStore.getState();
+      return usesYtEngine(st.current, st.audioOnly);
+    };
+
+    const wantPlayNow =
+      (fromKick && !!kick?.play) || useStore.getState().playWhenReady === epId;
+
     const onReady = (p: YtPlayer) => {
       ytRef.current = p;
       videoIdRef.current = vid;
+      if (!stillMine()) {
+        hardStopYt();
+        return;
+      }
       applyYtPlayerVolume(p);
       hideYouTubeCaptions(p);
+      clockRef.current.reset(startAt > 0 ? startAt : useStore.getState().time || 0);
+      const applied = ytRate(useStore.getState().rate);
+      clockRef.current.setRate(applied);
       try {
-        p.setPlaybackRate(useStore.getState().rate);
+        p.setPlaybackRate(applied);
       } catch {
         /* ignore */
       }
       offer(p, epId);
       startTick(p, epId);
-      // 起播意图交给 playSoon 订阅；此处只 offer。kick.play 兼容显式续播。
+      // 起播意图交给 playSoon 订阅；此处只在 kick.play 时显式续播
       if (fromKick && kick.play) {
         p.playVideo();
         useStore.getState().set({ playWhenReady: null });
@@ -257,20 +311,25 @@ export function YtEngine() {
       }
     };
 
-    // 复用：只换 videoId
+    // 复用：同 videoId 只重新 offer
     if (ytRef.current && videoIdRef.current === vid) {
       onReady(ytRef.current);
       const unsubVol = useVolume.subscribe(() => applyYtPlayerVolume(ytRef.current));
       return () => unsubVol();
     }
+    // 换片：要播用 load（强制起播）；只预热用 cue（不起播）——叠声根因之一
     if (ytRef.current && videoIdRef.current && videoIdRef.current !== vid) {
       waiting(true);
+      switchingRef.current = true;
       try {
-        ytRef.current.loadVideoById({ videoId: vid, startSeconds: startAt > 0 ? startAt : 0 });
+        const opts = { videoId: vid, startSeconds: startAt > 0 ? startAt : 0 };
+        if (wantPlayNow) ytRef.current.loadVideoById(opts);
+        else ytRef.current.cueVideoById(opts);
         onReady(ytRef.current);
         const unsubVol = useVolume.subscribe(() => applyYtPlayerVolume(ytRef.current));
         return () => unsubVol();
       } catch {
+        switchingRef.current = false;
         try {
           ytRef.current.destroy();
         } catch {
@@ -286,6 +345,7 @@ export function YtEngine() {
     void loadYouTube()
       .then((YT) => {
         if (cancelled || !hostRef.current) return;
+        if (!stillMine()) return;
         if (ytRef.current && videoIdRef.current === vid) {
           onReady(ytRef.current);
           return;
@@ -298,7 +358,7 @@ export function YtEngine() {
           width: "100%",
           height: "100%",
           playerVars: {
-            autoplay: (fromKick && kick.play) || useStore.getState().playWhenReady === epId ? 1 : 0,
+            autoplay: wantPlayNow ? 1 : 0,
             start: startAt > 0 ? startAt : undefined,
             rel: 0,
             modestbranding: 1,
@@ -311,6 +371,10 @@ export function YtEngine() {
           events: {
             onReady: (e: { target: YtPlayer }) => {
               if (cancelled) return;
+              if (!stillMine()) {
+                hardStopYt();
+                return;
+              }
               if (startAt > 0) e.target.seekTo(startAt, true);
               onReady(e.target);
             },
@@ -318,29 +382,47 @@ export function YtEngine() {
               // 不看 cancelled：iframe 跨音视频切换复用，cleanup 会误杀后续态
               if (!window.YT || e.target !== ytRef.current) return;
               const st = useStore.getState();
-              // 已切到音频引擎时，忽略 iframe 迟到的 pause（否则会把刚起的音频 playing 踩灭）
-              if (!usesYtEngine(st.current, st.audioOnly)) return;
+              // 已切到音频引擎：立刻硬停迟到的 PLAYING，否则后台继续出声
+              if (!usesYtEngine(st.current, st.audioOnly)) {
+                if (e.data === window.YT.PlayerState.PLAYING) hardStopYt();
+                return;
+              }
               const cur = epRef.current;
               if (!cur || cur.videoId !== videoIdRef.current) return;
               hideYouTubeCaptions(e.target);
               if (e.data === window.YT.PlayerState.PLAYING) {
+                switchingRef.current = false;
                 waiting(false);
                 useStore.getState().set({ playing: true });
+                clockRef.current.setPlaying(true);
                 startTick(e.target, cur.id);
+              } else if (e.data === window.YT.PlayerState.CUED) {
+                switchingRef.current = false;
+                waiting(false);
               } else if (e.data === window.YT.PlayerState.PAUSED) {
+                if (switchingRef.current) return;
                 useStore.getState().set({ playing: false });
+                clockRef.current.setPlaying(false);
                 try {
-                  flushProgress(cur, e.target.getCurrentTime());
+                  const raw = e.target.getCurrentTime();
+                  clockRef.current.reset(raw);
+                  flushProgress(cur, toContent(currentMap(cur.id), raw).at);
                 } catch {
                   /* ignore */
                 }
               } else if (e.data === window.YT.PlayerState.BUFFERING) {
                 waiting(true);
+                clockRef.current.setPlaying(false);
               } else if (e.data === window.YT.PlayerState.ENDED) {
+                if (switchingRef.current) return;
                 stopTick();
                 useStore.getState().set({ playing: false });
+                clockRef.current.setPlaying(false);
                 try {
-                  flushProgress(cur, e.target.getDuration() || useStore.getState().time);
+                  flushProgress(
+                    cur,
+                    toContent(currentMap(cur.id), e.target.getDuration() || useStore.getState().time).at,
+                  );
                 } catch {
                   /* ignore */
                 }
@@ -350,6 +432,7 @@ export function YtEngine() {
             onError: () => {
               // iframe 复用期忽略已销毁实例的迟到错误
               if (!ytRef.current) return;
+              if (!stillMine()) return;
               waiting(false);
               useStore.getState().set({ playing: false });
               const cur = epRef.current;
@@ -395,8 +478,10 @@ export function YtEngine() {
 
   useEffect(() => {
     if (!active || !ytRef.current) return;
+    const applied = ytRate(rate);
+    clockRef.current.setRate(applied);
     try {
-      ytRef.current.setPlaybackRate(rate);
+      ytRef.current.setPlaybackRate(applied);
     } catch {
       /* ignore */
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeIndex } from "../playback";
+import { pieceAt, pieces } from "../pieces";
 import { isSafeHttpUrl } from "../safeUrl";
 import { ACTIONS, checkCombo, keymap, prettyCombo } from "../shortcuts";
 import { resolveChatModel } from "../modelResolve";
@@ -8,15 +9,91 @@ import { buildCues, renderTranscript } from "../exportTranscript";
 import { shortLines } from "../clipLines";
 import { buildPlatformPost } from "../highlights";
 import { resolveLocale, translate } from "../i18n";
+import { createMediaClock } from "../mediaClock";
+import { initialAudioOnly } from "../media";
+import { anchorAt, toContent, toPlay, type TimeMap } from "../timemap";
 
 describe("playback.activeIndex", () => {
-  it("finds active segment via binary search", () => {
+  it("finds active segment via binary search with read-ahead lead", () => {
     const starts = [0, 5.2, 12.0, 20.5, 45.0];
     expect(activeIndex(starts, 0)).toBe(0);
-    expect(activeIndex(starts, 5.19)).toBe(0);
+    // 5.04 + 0.15 < 5.2 → 仍在首句；5.05 + 0.15 ≥ 5.2 → 提前切到下一句
+    expect(activeIndex(starts, 5.04)).toBe(0);
+    expect(activeIndex(starts, 5.05)).toBe(1);
     expect(activeIndex(starts, 5.2)).toBe(1);
     expect(activeIndex(starts, 19.9)).toBe(2);
     expect(activeIndex(starts, 100)).toBe(4);
+    // 片头尚未开讲返回 -1，避免提前显示首句
+    expect(activeIndex([15.0, 22.0], 3.0)).toBe(-1);
+    expect(activeIndex([], 0)).toBe(-1);
+  });
+});
+
+describe("media.initialAudioOnly", () => {
+  it("prefers video when online episode has videoId to stay synced with YouTube captions", () => {
+    const dual = {
+      id: "e1",
+      showId: "s1",
+      guid: "g1",
+      title: "Dual Episode",
+      videoId: "ZAzWPE9CItg",
+      audioUrl: "https://example.com/ep.mp3",
+      progress: 0,
+      hasTranscript: true,
+    };
+    expect(initialAudioOnly(dual)).toBe(false);
+    expect(initialAudioOnly({ ...dual, videoId: null })).toBe(true);
+  });
+});
+
+describe("pieces", () => {
+  it("splits English blocks into readable cues", () => {
+    const ps = pieces("Hello world. Next sentence here.", false);
+    expect(ps.length).toBeGreaterThanOrEqual(2);
+    expect(pieceAt("Hello world. Next sentence here.", false, 0.1)).toContain("Hello");
+  });
+});
+
+describe("timemap", () => {
+  const map: TimeMap = {
+    playBytes: 1,
+    method: "manual",
+    pieces: [
+      { refStart: 0, refEnd: 10, playStart: 5 },
+      { refStart: 10, refEnd: 20, playStart: 20 },
+    ],
+  };
+
+  it("converts subtitle time to play clock and back", () => {
+    expect(toPlay(map, 3)).toBe(8);
+    expect(toContent(map, 8).at).toBe(3);
+    // 播放文件 10–20 是广告空隙
+    expect(toContent(map, 15).gapEnd).toBe(20);
+  });
+
+  it("anchors a line so later speech follows the play clock", () => {
+    const next = anchorAt(null, 5, 12, 1);
+    expect(toPlay(next, 5)).toBeCloseTo(12, 5);
+  });
+});
+
+describe("mediaClock", () => {
+  it("extrapolates while playing when the player clock stalls", () => {
+    const c = createMediaClock();
+    c.setPlaying(true);
+    c.setRate(1);
+    const a = c.sample(10);
+    expect(a).toBe(10);
+    // 同一读数：应略往前走（墙钟外推）
+    const b = c.sample(10);
+    expect(b).toBeGreaterThanOrEqual(a);
+  });
+
+  it("re-anchors on seek jumps", () => {
+    const c = createMediaClock();
+    c.setPlaying(true);
+    c.sample(10);
+    expect(c.sample(40)).toBe(40);
   });
 });
 

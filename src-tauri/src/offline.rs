@@ -25,6 +25,18 @@ pub fn dir(data: &Path) -> PathBuf {
     data.join("downloads")
 }
 
+/// 字幕对齐临时音频缓存目录（上限 2 GB，超出按旧到新清理）。
+pub fn cache_dir(data: &Path) -> PathBuf {
+    data.join("audio-cache")
+}
+
+const CACHE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+pub fn cache_path(data: &Path, episode_id: &str, url: &str) -> PathBuf {
+    let ext = asr::audio_ext(&crate::shared::canonical_audio_url(url));
+    cache_dir(data).join(format!("{episode_id}.{ext}"))
+}
+
 fn saved_file(p: &Path) -> Option<Saved> {
     let id = p.file_stem()?.to_str()?;
     let ext = p.extension()?.to_str()?;
@@ -46,8 +58,8 @@ fn saved_file(p: &Path) -> Option<Saved> {
     })
 }
 
-pub fn list(data: &Path) -> Vec<Saved> {
-    let Ok(rd) = std::fs::read_dir(dir(data)) else {
+fn list_in(folder: &Path) -> Vec<Saved> {
+    let Ok(rd) = std::fs::read_dir(folder) else {
         return vec![];
     };
     let mut out: Vec<Saved> = rd.flatten().filter_map(|e| saved_file(&e.path())).collect();
@@ -55,8 +67,56 @@ pub fn list(data: &Path) -> Vec<Saved> {
     out
 }
 
+pub fn list(data: &Path) -> Vec<Saved> {
+    list_in(&dir(data))
+}
+
 pub fn find(data: &Path, episode_id: &str) -> Option<Saved> {
     list(data).into_iter().find(|s| s.episode_id == episode_id)
+}
+
+pub fn list_cached(data: &Path) -> Vec<Saved> {
+    list_in(&cache_dir(data))
+}
+
+pub fn find_cached(data: &Path, episode_id: &str) -> Option<Saved> {
+    list_cached(data).into_iter().find(|s| s.episode_id == episode_id)
+}
+
+/// 将对齐下载完成的 .part 原子移入 audio-cache/，并按 LRU 控制总占用。
+pub fn commit_cached(data: &Path, episode_id: &str, part: &Path, ext: &str) -> Result<Saved> {
+    let folder = cache_dir(data);
+    std::fs::create_dir_all(&folder)?;
+    // 清掉同集旧扩展名缓存，避免重名残留
+    for old in list_cached(data) {
+        if old.episode_id == episode_id {
+            let _ = std::fs::remove_file(&old.path);
+        }
+    }
+    let dest = folder.join(format!("{episode_id}.{ext}"));
+    std::fs::rename(part, &dest)?;
+    let kept = saved_file(&dest).ok_or_else(|| anyhow!("缓存音频写入失败"))?;
+    let mut all = list_cached(data);
+    let mut total: u64 = all.iter().map(|s| s.bytes).sum();
+    while total > CACHE_CAP_BYTES && all.len() > 1 {
+        if let Some(oldest) = all.pop() {
+            if oldest.episode_id == episode_id {
+                continue;
+            }
+            if std::fs::remove_file(&oldest.path).is_ok() {
+                total = total.saturating_sub(oldest.bytes);
+            }
+        }
+    }
+    Ok(kept)
+}
+
+pub fn clear_cached(data: &Path) -> Result<()> {
+    let d = cache_dir(data);
+    if d.is_dir() {
+        std::fs::remove_dir_all(&d)?;
+    }
+    Ok(())
 }
 
 pub fn remove(data: &Path, episode_id: &str) -> Result<()> {

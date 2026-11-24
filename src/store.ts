@@ -1,6 +1,6 @@
 /**
- * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytHost / ytKick、offline.loadDownloads
- * [OUTPUT]: 全局导航；播放态；notify（可选 toast 操作按钮）；offerPlayer
+ * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytHost / ytKick、offline.loadDownloads；timemap.Aligned
+ * [OUTPUT]: 全局导航；播放态（time=字幕时钟 / rawTime=媒体时钟）；align；notify；offerPlayer
  * [POS]: view⊥current；load→prepareEngines 先停另一路再装载；init 先拉离线清单
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,6 +10,8 @@ import { prepareAudio, pauseAudioHost, releaseAudioHost } from "./lib/audioHost"
 import { initialAudioOnly, usesAudioEngine, usesYtEngine } from "./lib/media";
 import { loadDownloads } from "./lib/offline";
 import { DEFAULTS, loadSettings, saveSettings, type Settings, type SettingsSection } from "./lib/settings";
+import type { Aligned, AlignStatus } from "./lib/timemap";
+import { loadAlign } from "./lib/timemap";
 import { pauseYoutubeHost } from "./lib/ytHost";
 import { kickYoutube } from "./lib/ytKick";
 
@@ -40,13 +42,21 @@ export type View =
   | { kind: "episode"; id: string };
 
 export interface PlayerHandle {
+  /** 字幕时间 → 引擎自行 toPlay */
   seek(seconds: number): void;
+  /** 直接写媒体时钟（跳过广告空隙） */
+  seekRaw?(seconds: number): void;
   toggle(): void;
   play(): void;
   setRate(rate: number): void;
   /** 该 handle 服务的单集；用于防误触 */
   episodeId?: string;
 }
+
+export type AlignState = (Omit<Aligned, "status"> & {
+  id: string;
+  status: AlignStatus | "working";
+}) | null;
 
 interface State {
   ready: boolean;
@@ -55,7 +65,14 @@ interface State {
   view: View;
   history: View[];
   current: Episode | null;
+  /** 字幕时间（面板 / 叠字 / 进度条统一用它） */
   time: number;
+  /** 媒体元素时钟；有 TimeMap 时与 time 不同 */
+  rawTime?: number;
+  /** 本集字幕与播放音轨的对齐态 */
+  align?: AlignState;
+  /** 落在播放文件独有空隙时，正文恢复的媒体时钟 */
+  gapEnd?: number | null;
   length: number;
   playing: boolean;
   rate: number;
@@ -65,7 +82,7 @@ interface State {
   playWhenReady: string | null;
   /** 播放器出现后 seek 到此 */
   seekWhenReady: { id: string; at: number } | null;
-  /** true=仅音频引擎；false=视频（YouTube）。有音轨时默认 true。 */
+  /** true=仅音频引擎；false=视频（YouTube）。有 videoId 且在线默认 false（视频与字幕同源）。 */
   audioOnly: boolean;
   /** 视频 theater 全屏（布局级，非 element Fullscreen API） */
   theater: boolean;
@@ -101,6 +118,9 @@ export const useStore = create<State>((set, get) => ({
   history: [],
   current: null,
   time: 0,
+  rawTime: undefined,
+  align: null,
+  gapEnd: null,
   length: 0,
   playing: false,
   rate: 1,
@@ -175,6 +195,9 @@ export const useStore = create<State>((set, get) => ({
     set({
       current: ep,
       time: ep.progress || 0,
+      rawTime: undefined,
+      gapEnd: null,
+      align: null,
       length: ep.duration || 0,
       playing: false,
       loadingSince: null,
@@ -184,6 +207,8 @@ export const useStore = create<State>((set, get) => ({
       player: keep,
     });
     prepareEngines(ep, audioOnly);
+    // 走 HTMLAudio 时装 TimeMap（含「有视频但播音轨」——字幕常来自视频轨，需可手动对齐）
+    if (usesAudioEngine(ep, audioOnly) && ep.audioUrl) void loadAlign(ep.id, true);
   },
   notify(text, action) {
     set({ toast: text, toastAction: action ?? null });

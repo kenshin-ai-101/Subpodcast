@@ -29,7 +29,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errText, type StorageInfo } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { useT } from "../lib/i18n";
-import { bytes, clearDownloads, useOffline } from "../lib/offline";
+import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
 import { stopSpeaking } from "../lib/tts";
 import {
   ASR_SERVICES,
@@ -494,6 +494,11 @@ function Storage({ info, reload, onAsr, onTts }: {
     await api.clearTtsCache();
     reload();
   };
+  const clearAlignCache = async () => {
+    if (!(await ask(t("清理字幕对齐音频缓存？之后需要对齐时会重新下载。")))) return;
+    await clearAudioCache();
+    reload();
+  };
   return (
     <div className="storage-list">
       <div className="storage-row">
@@ -568,6 +573,27 @@ function Storage({ info, reload, onAsr, onTts }: {
             type="button"
             className="btn sm"
             onClick={() => void clearTts().catch((e) => notify(errText(e)))}
+          >
+            {t("清理")}
+          </button>
+        </div>
+      )}
+      {!!info?.audioCache && (
+        <div className="storage-row">
+          <div className="storage-row-text">
+            <p className="storage-row-name">{t("对齐音频缓存")}</p>
+            <p className="muted small">
+              {t("用于声纹/语音对齐的播客音频缓存，最多占 2 GB，久不用的会自动清理")}
+            </p>
+          </div>
+          <span className="storage-size">{size(info.audioCache)}</span>
+          <button type="button" className="btn ghost sm" onClick={() => void api.openDataFolder("audio-cache")}>
+            <FolderOpen size={13} /> {t("打开文件夹")}
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => void clearAlignCache().catch((e) => notify(errText(e)))}
           >
             {t("清理")}
           </button>

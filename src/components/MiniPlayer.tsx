@@ -20,7 +20,7 @@ export function MiniPlayer() {
       view: s.view,
       playing: s.playing,
       player: s.player,
-      time: Math.floor(s.time),
+      time: Math.floor(s.rawTime ?? s.time),
       length: s.length,
       loadingSince: s.loadingSince,
       theater: s.theater,

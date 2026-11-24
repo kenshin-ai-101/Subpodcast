@@ -1,7 +1,7 @@
 /**
- * [INPUT]: api、settings；event asr；asrModels；store.time（播放头优先机翻）
+ * [INPUT]: api、settings；event asr；asrModels；store.time（播放头优先机翻）；offline.loadDownloads
  * [OUTPUT]: ensureTranscript、autoTranslate、translateEpisode、generateTranscript、switchYoutubeTrack、llmReady
- * [POS]: 跨屏幕长任务；缓存→官方（含 twin 回填）→共享库→空态→用户触发识别；机翻播放头优先
+ * [POS]: 跨屏幕长任务；缓存→官方（含 twin 回填）→共享库→空态→用户触发识别；ASR 落盘后刷新离线清单；机翻播放头优先
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { listen } from "@tauri-apps/api/event";
@@ -10,6 +10,7 @@ import { api, errText, type Episode, type Segment, type Transcript } from "./api
 import { useAsrModels } from "./asrModels";
 import { tNow } from "./i18n";
 import { resolveChatModel } from "./modelResolve";
+import { loadDownloads } from "./offline";
 import { activeCloudAsr } from "./settings";
 import { useStore } from "../store";
 
@@ -493,6 +494,8 @@ export async function generateTranscript(ep: Episode) {
     patch("official", ep.id, "found");
     patch("translations", ep.id, { items: [], running: false });
     patch("asrProgress", ep.id, { stage: "done", progress: 1 });
+    // ASR 会把音轨写入 downloads/：刷新清单，AudioEngine 才能认领本地源（播中仍锁源）
+    void loadDownloads();
     autoTranslate(ep);
   } catch (e) {
     const msg = errText(e);

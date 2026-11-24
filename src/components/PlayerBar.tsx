@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 页内 episode；store；jobs；offline；YtEngine；SeekHighlights
- * [OUTPUT]: 媒体切换 + 封面/视频槽 + Controls（进度条叠高光标记）；toggleTheater
- * [POS]: 单集左栏播控；页 episode 与 store.current 正交
+ * [INPUT]: 页内 episode；store；jobs；offline；YtEngine；SeekHighlights；pieces
+ * [OUTPUT]: 媒体切换 + 封面/视频槽 + Controls；音频台短句叠字（now/next）
+ * [POS]: 单集左栏播控；页 episode 与 store.current 正交；字幕时钟与原站一致
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useState } from "react";
@@ -19,20 +19,135 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import type { Episode } from "../lib/api";
+import type { Episode, Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
 import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
-import { activeIndex, flushProgress, playSoon } from "../lib/playback";
+import { pieceIndex, pieces } from "../lib/pieces";
+import { activeIndex, flushProgress, playSoon, SUBTITLE_LEAD } from "../lib/playback";
+import { alignCurrent, loadAlign } from "../lib/timemap";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
 import { kickYoutube } from "../lib/ytKick";
 import { useStore } from "../store";
 import { SeekHighlights } from "./HighlightViews";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { useYtUi, VideoSlot } from "./YtEngine";
+
+const isCjk = (x: string) => /[\u4e00-\u9fff]/.test(x);
+
+/** 音频台：当前短句 + 淡化下一句（由 settings.audioNextLine / data-next-line 控制显隐）。 */
+function AudioSubtitles({
+  episodeId,
+  segs,
+  items,
+  mode,
+  progressFallback,
+}: {
+  episodeId: string;
+  segs: Segment[];
+  items?: (string | null | undefined)[];
+  mode: string;
+  progressFallback: number;
+}) {
+  const t = useT();
+  const gapLeft = useStore((s) =>
+    s.current?.id === episodeId && s.gapEnd && s.rawTime != null
+      ? Math.ceil(s.gapEnd - s.rawTime)
+      : 0,
+  );
+  const starts = useMemo(() => segs.map((x) => x.start), [segs]);
+  const pos = useStore(
+    useShallow((s) => {
+      if (!segs.length) return { i: -1, k: 0 };
+      const clock = s.current?.id === episodeId ? s.time : progressFallback;
+      const i = activeIndex(starts, clock);
+      if (i < 0) return { i: -1, k: 0 };
+      const seg = segs[i];
+      if (!seg || clock > seg.end + 1.5) return { i: -1, k: 0 };
+      const progress = Math.min(
+        1,
+        Math.max(0, (clock + SUBTITLE_LEAD - seg.start) / Math.max(0.5, seg.end - seg.start)),
+      );
+      return { i, k: pieceIndex(pieces(seg.text, isCjk(seg.text)), progress) };
+    }),
+  );
+
+  if (gapLeft > 0) {
+    return (
+      <div className="asub asub-gap" aria-live="off">
+        <p>{t("这一段只在你的音频里，多半是广告，{n} 秒后回到正文", { n: gapLeft })}</p>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => {
+            const s = useStore.getState();
+            if (s.gapEnd != null) s.player?.seekRaw?.(s.gapEnd);
+          }}
+        >
+          {t("跳过")}
+        </button>
+      </div>
+    );
+  }
+  if (!segs.length || pos.i < 0) return null;
+  const { i, k } = pos;
+  const seg = segs[i]!;
+  const origPs = pieces(seg.text, isCjk(seg.text));
+  const zh = items?.[i];
+  const zhPs = zh ? pieces(zh, true) : [];
+  const kz = zhPs.length
+    ? Math.min(zhPs.length - 1, Math.floor((k / origPs.length) * zhPs.length + 1e-9))
+    : 0;
+  const nextSeg = segs[i + 1];
+  const nextZh = items?.[i + 1];
+  const nowLine = {
+    orig: origPs[k]!,
+    zh: zhPs.length
+      ? zhPs.length === origPs.length
+        ? zhPs[k]
+        : zhPs[kz]
+      : undefined,
+  };
+  const nextLine =
+    k + 1 < origPs.length
+      ? {
+          orig: origPs[k + 1]!,
+          zh: zhPs.length
+            ? zhPs.length === origPs.length
+              ? zhPs[k + 1]
+              : kz + 1 < zhPs.length
+                ? zhPs[kz + 1]
+                : undefined
+            : undefined,
+        }
+      : nextSeg
+        ? {
+            orig: pieces(nextSeg.text, isCjk(nextSeg.text))[0]!,
+            zh: nextZh ? pieces(nextZh, true)[0] : undefined,
+          }
+        : null;
+
+  const line = (
+    l: { orig: string; zh?: string | null },
+    role: "now" | "next",
+    key: string,
+  ) => (
+    <div key={key} className={`asub-line ${role}`} aria-hidden={role === "next"}>
+      {l.zh && mode !== "original" && <p className="sub-zh">{l.zh}</p>}
+      {(mode !== "translation" || !l.zh) && <p className="sub-orig">{l.orig}</p>}
+    </div>
+  );
+
+  return (
+    <div className="asub" aria-live="off">
+      {line(nowLine, "now", `${i}-${k}`)}
+      {nextLine && line(nextLine, "next", `${i}-${k}-n`)}
+    </div>
+  );
+}
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
@@ -89,10 +204,11 @@ function VolumeControl() {
 
 export function PlayerBar({ episode }: { episode: Episode }) {
   const t = useT();
-  const { current, time, length, playing, rate, audioOnly, loadingSince, theater, set } = useStore(
+  const { current, time, rawTime, length, playing, rate, audioOnly, loadingSince, theater, set } = useStore(
     useShallow((s) => ({
       current: s.current,
       time: s.time,
+      rawTime: s.rawTime,
       length: s.length,
       playing: s.playing,
       rate: s.rate,
@@ -107,7 +223,6 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const transcript = useJobs((s) => s.transcripts[episode.id]);
   const items = useJobs((s) => s.translations[episode.id]?.items);
   const mode = useStore((s) => s.settings.subtitleMode);
-  const nextLine = useStore((s) => s.settings.audioNextLine === true);
   const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
 
@@ -150,7 +265,9 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   // 浏览他集时用本集默认形态展示，不借用正在播那集的 audioOnly；断网已下载 YouTube 显示音频台
   const pageAudioOnly = live ? audioOnly : initialAudioOnly(source);
   const showVideo = canVideo && !pageAudioOnly;
-  const shownTime = live ? time : source.progress || 0;
+  const shownSubTime = live ? time : source.progress || 0;
+  // 进度条与时钟跟随播放器自身时钟（有 TimeMap 时与字幕时间区分，避免拖动进度条二次映射）
+  const shownBarTime = live ? (rawTime ?? time) : source.progress || 0;
   const shownLength = live ? length || source.duration || 0 : source.duration || 0;
   const shownPlaying = live && playing;
   const busy = live && !!loadingSince;
@@ -181,6 +298,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
     set({
       current: ep,
       time: t,
+      rawTime: audio ? undefined : t,
+      gapEnd: null,
       audioOnly: audio,
       playing: sameYt ? s.playing : false,
       loadingSince: null,
@@ -191,10 +310,11 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       // 无独立音轨：仍走 iframe，仅音频壳
       if (wanted) window.setTimeout(() => useStore.getState().player?.play(), 0);
     } else if (audio && preferAudio(ep)) {
-      // 视频→音频：release 清掉旧 MEDIA_ERR，并在点击手势内同步 play（勿只靠 playSoon 异步）
+      // 视频→音频：先装已有 TimeMap，再由音频引擎起播并触发自动对齐检测
       takeAudioEngine(ep, { play: wanted });
+      void loadAlign(ep.id, true).then(() => alignCurrent(false));
     } else {
-      // 音频→视频
+      // 音频→视频：片源与字幕同源，不用 TimeMap
       releaseAudioHost();
       kickYoutube(ep, { time: t, play: false });
       if (wanted) playSoon(ep.id);
@@ -202,13 +322,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
     if (why) s.notify(why);
   };
 
-  const fill = `${shownLength ? Math.min(100, (shownTime / shownLength) * 100) : 0}%`;
+  const fill = `${shownLength ? Math.min(100, (shownBarTime / shownLength) * 100) : 0}%`;
   const segs = transcript?.segments ?? [];
-  const starts = useMemo(() => segs.map((s) => s.start), [segs]);
-  const i = segs.length ? activeIndex(starts, shownTime) : -1;
-  const showI = nextLine && i >= 0 && i + 1 < segs.length ? i + 1 : i;
-  const seg = showI >= 0 ? segs[showI] : null;
-  const zh = showI >= 0 ? items?.[showI] : null;
 
   return (
     <>
@@ -291,10 +406,15 @@ export function PlayerBar({ episode }: { episode: Episode }) {
               {shownPlaying ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
             </span>
           </button>
-          {seg && (
+          {segs.length > 0 && (
             <div className="audio-sub">
-              {mode !== "original" && zh && <p className="sub-zh">{zh}</p>}
-              {mode !== "translation" && <p className="sub-orig">{seg.text}</p>}
+              <AudioSubtitles
+                episodeId={source.id}
+                segs={segs}
+                items={items}
+                mode={mode}
+                progressFallback={source.progress || 0}
+              />
             </div>
           )}
         </div>
@@ -306,7 +426,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
           className="icon-btn"
           title={t("后退 15 秒")}
           disabled={!live}
-          onClick={() => useStore.getState().player?.seek(Math.max(0, shownTime - 15))}
+          onClick={() => useStore.getState().player?.seek(Math.max(0, shownSubTime - 15))}
         >
           <RotateCcw size={16} />
         </button>
@@ -330,11 +450,11 @@ export function PlayerBar({ episode }: { episode: Episode }) {
           className="icon-btn"
           title={t("前进 30 秒")}
           disabled={!live}
-          onClick={() => useStore.getState().player?.seek(shownTime + 30)}
+          onClick={() => useStore.getState().player?.seek(shownSubTime + 30)}
         >
           <RotateCw size={16} />
         </button>
-        <span className="time">{clock(shownTime)}</span>
+        <span className="time">{clock(shownBarTime)}</span>
         <div className="seek-wrap">
           {live && (
             <SeekHighlights
@@ -349,10 +469,15 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             min={0}
             max={Math.max(shownLength, 1)}
             step={0.1}
-            value={Math.min(shownTime, shownLength || shownTime)}
+            value={Math.min(shownBarTime, shownLength || shownBarTime)}
             style={{ "--fill": fill } as React.CSSProperties}
             disabled={!live}
-            onChange={(e) => useStore.getState().player?.seek(Number(e.target.value))}
+            onChange={(e) => {
+              const p = useStore.getState().player;
+              const val = Number(e.target.value);
+              if (p?.seekRaw) p.seekRaw(val);
+              else p?.seek(val);
+            }}
           />
         </div>
         <span className="time">{clock(shownLength)}</span>

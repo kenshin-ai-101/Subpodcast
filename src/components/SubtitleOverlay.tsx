@@ -1,17 +1,17 @@
 /**
- * [INPUT]: jobs 字幕/译文（含节目方中文对齐）、store.time / settings.subtitleMode
- * [OUTPUT]: 视频上的双语叠字幕
- * [POS]: YouTube 舞台叠加层；与字幕面板共用时间轴与 autoTranslate 结果
+ * [INPUT]: jobs 字幕/译文；store.time / subtitleMode；pieces.pieceAt；playback.activeIndex
+ * [OUTPUT]: 视频上的双语叠字幕（按块内进度只显示正在说的那一句）
+ * [POS]: YouTube 舞台叠加层；与原站一致——长块按字长均摊切句，同句不因 time tick 重建
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useJobs } from "../lib/jobs";
-import { activeIndex } from "../lib/playback";
+import { pieceAt } from "../lib/pieces";
+import { activeIndex, SUBTITLE_LEAD } from "../lib/playback";
 import { useStore } from "../store";
 
 export function SubtitleOverlay({ episodeId }: { episodeId: string }) {
-  const time = useStore((s) => s.time);
   const mode = useStore((s) => s.settings.subtitleMode);
   const { transcript, items } = useJobs(
     useShallow((s) => ({
@@ -19,18 +19,36 @@ export function SubtitleOverlay({ episodeId }: { episodeId: string }) {
       items: s.translations[episodeId]?.items,
     })),
   );
-  const segs = transcript?.segments ?? [];
-  const starts = useMemo(() => segs.map((x) => x.start), [segs]);
-  if (!segs.length) return null;
-  const i = activeIndex(starts, time);
-  const seg = segs[i];
-  if (!seg || time > seg.end + 1.5) return null;
-  const zh = items?.[i];
+  const segs = transcript?.segments;
+  const starts = useMemo(() => segs?.map((x) => x.start) ?? [], [segs]);
+  // 只订阅当前显示的文案：Object.is 同句同进度片内恒等
+  const cue = useStore(
+    useShallow((s) => {
+      if (!segs?.length || !starts.length) return { i: -1, orig: "", zh: "" };
+      const t = s.current?.id === episodeId ? s.time : 0;
+      const i = activeIndex(starts, t);
+      if (i < 0) return { i: -1, orig: "", zh: "" };
+      const seg = segs[i];
+      if (!seg || t > seg.end + 1.5) return { i: -1, orig: "", zh: "" };
+      const progress = Math.min(
+        1,
+        Math.max(0, (t + SUBTITLE_LEAD - seg.start) / Math.max(0.5, seg.end - seg.start)),
+      );
+      const cjk = /[\u4e00-\u9fff]/.test(seg.text);
+      const zhRaw = items?.[i];
+      return {
+        i,
+        orig: pieceAt(seg.text, cjk, progress),
+        zh: zhRaw ? pieceAt(zhRaw, true, progress) : "",
+      };
+    }),
+  );
+  if (cue.i < 0) return null;
   return (
     <div className="subtitle-overlay" aria-hidden>
       <div className="sub-box">
-        {zh && mode !== "original" && <p className="sub-zh">{zh}</p>}
-        {(mode !== "translation" || !zh) && <p className="sub-orig">{seg.text}</p>}
+        {cue.zh && mode !== "original" && <p className="sub-zh">{cue.zh}</p>}
+        {(mode !== "translation" || !cue.zh) && <p className="sub-orig">{cue.orig}</p>}
       </div>
     </div>
   );

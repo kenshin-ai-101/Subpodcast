@@ -923,6 +923,81 @@ pub fn decode_16k_mono_progressive(
     Ok(resampler.map(Resampler::finish).unwrap_or_default())
 }
 
+/// 按原生采样率顺序解码为单声道分片回调，供声纹对齐流式消费（数小时音频也不占满内存）。
+pub fn decode_mono_stream(
+    path: &Path,
+    mut on_chunk: impl FnMut(u32, &[f32]),
+) -> Result<()> {
+    use symphonia::core::{
+        audio::SampleBuffer, codecs::DecoderOptions, errors::Error, formats::FormatOptions,
+        io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
+    };
+    let file = std::fs::File::open(path)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .map_err(|e| anyhow!("无法识别音频格式：{e}"))?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| {
+            t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL
+                && (t.codec_params.sample_rate.is_some() || t.codec_params.channels.is_some())
+        })
+        .or_else(|| {
+            format
+                .tracks()
+                .iter()
+                .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+        })
+        .ok_or_else(|| anyhow!("没有音轨"))?;
+    let track_id = track.id;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| anyhow!("不支持的音频编码：{e}"))?;
+    let mut buf: Option<SampleBuffer<f32>> = None;
+    let mut mono: Vec<f32> = Vec::new();
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(Error::ResetRequired) => break,
+            Err(e) => return Err(anyhow!("读取音频失败：{e}")),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(Error::DecodeError(_)) => continue,
+            Err(e) => return Err(anyhow!("解码失败：{e}")),
+        };
+        let spec = *decoded.spec();
+        let channels = spec.channels.count().max(1);
+        if buf
+            .as_ref()
+            .is_none_or(|b| b.capacity() < decoded.capacity() * channels)
+        {
+            buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
+        }
+        let b = buf.as_mut().unwrap();
+        b.copy_interleaved_ref(decoded);
+        mono.clear();
+        for frame in b.samples().chunks(channels) {
+            mono.push(frame.iter().sum::<f32>() / channels as f32);
+        }
+        if !mono.is_empty() {
+            on_chunk(spec.rate, &mono);
+        }
+    }
+    Ok(())
+}
+
 pub async fn run_crispasr(
     bin: &Path,
     model: &Path,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-align-audio"
+description = "Enables the align_audio command without any pre-configured scope."
+commands.allow = ["align_audio"]
+
+[[permission]]
+identifier = "deny-align-audio"
+description = "Denies the align_audio command without any pre-configured scope."
+commands.deny = ["align_audio"]

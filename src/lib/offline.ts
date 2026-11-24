@@ -20,12 +20,14 @@ export interface Saved {
 
 interface OfflineState {
   saved: Record<string, Saved>;
+  cached: Record<string, Saved>;
   progress: Record<string, number | null>;
   ready: boolean;
 }
 
 export const useOffline = create<OfflineState>(() => ({
   saved: {},
+  cached: {},
   progress: {},
   ready: false,
 }));
@@ -45,14 +47,32 @@ async function ensureListen() {
 export async function loadDownloads() {
   await ensureListen();
   try {
-    const list = await api.listDownloads();
+    const [list, cachedList] = await Promise.all([
+      api.listDownloads(),
+      api.listAudioCache().catch(() => [] as Saved[]),
+    ]);
     useOffline.setState({
       saved: Object.fromEntries(list.map((x) => [x.episodeId, x])),
+      cached: Object.fromEntries(cachedList.map((x) => [x.episodeId, x])),
       ready: true,
     });
   } catch {
     useOffline.setState({ ready: true });
   }
+}
+
+export function noteCachedAudio(episodeId: string, path: string, bytesCount: number) {
+  useOffline.setState((s) => ({
+    cached: {
+      ...s.cached,
+      [episodeId]: { episodeId, path, bytes: bytesCount, savedAt: Date.now() },
+    },
+  }));
+}
+
+export async function clearAudioCache() {
+  await api.clearAudioCache();
+  useOffline.setState({ cached: {} });
 }
 
 export const isSaved = (id: string) => !!useOffline.getState().saved[id];
@@ -69,10 +89,11 @@ export function canonicalAudioUrl(url: string): string {
   return bare;
 }
 
-/** 播放优先用已下载文件，否则用归一后的远端 audioUrl。 */
+/** 播放优先用已下载文件，其次对齐缓存文件，最后归一后的远端 audioUrl。 */
 export function audioSrc(ep: Episode): string | undefined {
-  const saved = useOffline.getState().saved[ep.id];
-  if (saved) return convertFileSrc(saved.path);
+  const st = useOffline.getState();
+  const local = st.saved[ep.id] ?? st.cached[ep.id];
+  if (local) return convertFileSrc(local.path);
   return remoteAudioSrc(ep);
 }
 

@@ -1,13 +1,14 @@
 /**
  * [INPUT]: jobs 字幕/译文/asr、asrModels、store；switchYoutubeTrack；SubtitleExport；highlights
- * [OUTPUT]: 右侧字幕面板（GenCard/导出/学英语/行列表）+「高光」子模式
- * [POS]: 听懂主路径；高光列表与行内标记；剪视频走 VideoClipDialog
+ * [OUTPUT]: 右侧字幕面板（GenCard/导出/学英语/行列表）+「高光」子模式 + AlignBar
+ * [POS]: 听懂主路径；高光列表与行内标记；按句订阅 activeIndex；纯音频可手动锚点对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
+  Crosshair,
   Download,
   Ellipsis,
   Languages,
@@ -41,7 +42,9 @@ import {
 } from "../lib/jobs";
 import { activeIndex, seekEpisode } from "../lib/playback";
 import { activeCloudAsr, ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
+import { alignCurrent, anchorHere } from "../lib/timemap";
 import { useStore } from "../store";
+import { AlignBar } from "./AlignBar";
 import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
@@ -643,7 +646,7 @@ interface LearnMenuState {
   canShadow: boolean;
 }
 
-/** 「…」：外语导出 + 学英语工具。中文播客用栏上显式「导出」按钮。 */
+/** 「…」：外语导出 + 学英语工具 + 调整字幕。中文播客用栏上显式「导出」按钮。 */
 function PanelMenu({
   ep,
   segments,
@@ -652,6 +655,7 @@ function PanelMenu({
   mode,
   source,
   learn,
+  onAlign,
 }: {
   ep: Episode;
   segments: Segment[];
@@ -660,6 +664,7 @@ function PanelMenu({
   mode: Mode;
   source: string;
   learn?: LearnMenuState;
+  onAlign?: () => void;
 }) {
   const t = useT();
   const [menu, setMenu] = useState(false);
@@ -727,6 +732,18 @@ function PanelMenu({
               <Download size={14} /> {t("导出字幕…")}
             </button>
           )}
+          {onAlign && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenu(false);
+                onAlign();
+              }}
+            >
+              <Crosshair size={14} /> {t("调整字幕")}
+            </button>
+          )}
         </div>
       )}
       {exporting && (
@@ -757,8 +774,6 @@ function PanelMenu({
 
 export function TranscriptPane({ episode }: { episode: Episode }) {
   const t = useT();
-  const time = useStore((s) => s.time);
-  const currentId = useStore((s) => s.current?.id);
   const { subtitleMode, learnOn, learnCard } = useStore(
     useShallow((s) => ({
       subtitleMode: s.settings.subtitleMode,
@@ -797,11 +812,42 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
     void loadHighlights(episode.id);
   }, [episode.id]);
 
-  const isCurrent = currentId === episode.id;
   const segs = transcript?.segments ?? [];
   useClipWarm(episode, segs);
   const starts = useMemo(() => segs.map((s) => s.start), [segs]);
-  const active = isCurrent && segs.length ? activeIndex(starts, time) : -1;
+  // 只在「当前句」变化时重渲，避免 time 每 250ms 拖垮虚拟列表导致字幕滞后
+  const active = useStore((s) =>
+    s.current?.id === episode.id && starts.length ? activeIndex(starts, s.time) : -1,
+  );
+  const isCurrent = useStore((s) => s.current?.id === episode.id);
+  // HTMLAudio 播音轨时才有「点句对齐」（含有视频但切到仅音频——字幕常对视频轨）
+  const { audioOnly, alignState, mediaLength } = useStore(
+    useShallow((s) => ({
+      audioOnly: s.audioOnly,
+      alignState: s.current?.id === episode.id ? s.align : null,
+      mediaLength: s.current?.id === episode.id ? s.length : 0,
+    })),
+  );
+  const canAlign = isCurrent && !!episode.audioUrl && (!episode.videoId || audioOnly);
+  const [aligning, setAligning] = useState(false);
+  const [dismissedMismatch, setDismissedMismatch] = useState<string | null>(null);
+  useEffect(() => {
+    if (!canAlign) setAligning(false);
+  }, [canAlign]);
+  // 自动对齐进行中时自动展开 AlignBar 展示进度
+  useEffect(() => {
+    if (canAlign && alignState?.status === "working") setAligning(true);
+  }, [canAlign, alignState?.status]);
+  const lastSegEnd = segs.length ? segs[segs.length - 1]!.end : 0;
+  const likelyMismatch =
+    canAlign &&
+    !aligning &&
+    dismissedMismatch !== episode.id &&
+    alignState?.status !== "aligned" &&
+    alignState?.status !== "same" &&
+    alignState?.status !== "working" &&
+    ((transcript?.source === "youtube" || transcript?.source === "youtube-auto") ||
+      (mediaLength > 0 && lastSegEnd > 0 && Math.abs(mediaLength - lastSegEnd) > 10));
   const zhItems = translation?.items;
 
   const hlStarts = useMemo(() => {
@@ -862,6 +908,21 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && learnOn);
   const zhTag = engineLabel(translation?.engine);
+  const uiLang = useStore((s) => s.settings.uiLang);
+  const enUi = resolveLocale(uiLang) === "en";
+  // 英文 UI 用短标签，避免 Both/Chinese/Original 撑破右栏
+  const modeLabel = (k: Mode) =>
+    enUi
+      ? k === "bilingual"
+        ? "Both"
+        : k === "translation"
+          ? "CN"
+          : "EN"
+      : k === "bilingual"
+        ? t("双语")
+        : k === "translation"
+          ? t("中文")
+          : t("原文");
 
   useShadowing(shadow && isCurrent, episode.id, segs);
   useEffect(() => {
@@ -898,80 +959,123 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   return (
     <div className="transcript">
       <div className="panel-bar">
-        <span className="source-tag">{sourceLabel(transcript!.source)}</span>
-        {zhTag && foreign && <span className="source-tag muted">{zhTag}</span>}
-        {episode.videoId && transcript && (
-          <TrackPicker
-            episode={episode}
-            language={transcript.language}
-            auto={transcript.source === "youtube-auto"}
-          />
-        )}
-        <div className="spacer" />
-        <button
-          type="button"
-          className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
-          title={t("高光金句片段")}
-          aria-pressed={showHighlights}
-          onClick={() => setShowHighlights((v) => !v)}
-        >
-          <Sparkles size={13} />
-          <span>{t("高光")}</span>
-          {(hlBundle?.clips.length || hlLoading) && (
-            <span className="hl-badge">{hlLoading ? "…" : hlBundle?.clips.length}</span>
+        <div className="panel-bar-main">
+          {foreign && (
+            <div className="seg-control" role="group" aria-label={t("字幕显示")}>
+              {(["bilingual", "translation", "original"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={mode === k ? "on" : ""}
+                  title={k === "bilingual" ? t("双语") : k === "translation" ? t("中文") : t("原文")}
+                  onClick={() => setMode(k)}
+                >
+                  {modeLabel(k)}
+                </button>
+              ))}
+            </div>
           )}
-        </button>
-        {!foreign && (
+          <span className="source-tag panel-bar-source" title={sourceLabel(transcript!.source)}>
+            {sourceLabel(transcript!.source)}
+          </span>
+          {zhTag && foreign && <span className="source-tag muted">{zhTag}</span>}
+          {episode.videoId && transcript && (
+            <TrackPicker
+              episode={episode}
+              language={transcript.language}
+              auto={transcript.source === "youtube-auto"}
+            />
+          )}
+        </div>
+        <div className="panel-bar-tools">
           <button
             type="button"
-            className="track-pick"
-            title={t("导出字幕")}
-            aria-label={t("导出字幕")}
-            disabled={!segs.length}
-            onClick={() => setExporting(true)}
+            className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
+            title={t("高光金句片段")}
+            aria-pressed={showHighlights}
+            onClick={() => setShowHighlights((v) => !v)}
           >
-            <Download size={14} />
-            <span>{t("导出")}</span>
+            <Sparkles size={13} />
+            <span>{t("高光")}</span>
+            {(hlBundle?.clips.length || hlLoading) && (
+              <span className="hl-badge">{hlLoading ? "…" : hlBundle?.clips.length}</span>
+            )}
           </button>
-        )}
-        {(foreign || learning) && (
-          <PanelMenu
-            ep={episode}
-            segments={segs}
-            zh={translation?.items}
-            foreign={foreign}
-            mode={mode}
-            source={transcript!.source}
-            learn={
-              learning
-                ? {
-                    segments: segs,
-                    zh: translation?.items,
-                    active,
-                    shadow,
-                    setShadow,
-                    canShadow: isCurrent,
-                  }
-                : undefined
-            }
-          />
-        )}
-        {foreign && (
-          <div className="seg-control" role="group" aria-label={t("字幕显示")}>
-            {(
-              [
-                ["bilingual", t("双语")],
-                ["translation", t("中文")],
-                ["original", t("原文")],
-              ] as const
-            ).map(([k, label]) => (
-              <button key={k} type="button" className={mode === k ? "on" : ""} onClick={() => setMode(k)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
+          {!foreign && (
+            <button
+              type="button"
+              className="track-pick"
+              title={t("导出字幕")}
+              aria-label={t("导出字幕")}
+              disabled={!segs.length}
+              onClick={() => setExporting(true)}
+            >
+              <Download size={14} />
+              <span>{t("导出")}</span>
+            </button>
+          )}
+          {(foreign || learning || canAlign) && (
+            <PanelMenu
+              ep={episode}
+              segments={segs}
+              zh={translation?.items}
+              foreign={foreign}
+              mode={mode}
+              source={transcript!.source}
+              onAlign={canAlign ? () => setAligning(true) : undefined}
+              learn={
+                learning
+                  ? {
+                      segments: segs,
+                      zh: translation?.items,
+                      active,
+                      shadow,
+                      setShadow,
+                      canShadow: isCurrent,
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </div>
       </div>
+      {aligning && canAlign && <AlignBar onClose={() => setAligning(false)} />}
+      {likelyMismatch && (
+        <div className="align-bar">
+          <div className="align-row">
+            <Crosshair size={13} />
+            <span className="align-status">
+              {t("当前播放的音频与字幕可能不是同一剪辑版本，容易出现时间错位")}
+            </span>
+          </div>
+          <div className="align-row">
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => {
+                setAligning(true);
+                void alignCurrent(true);
+              }}
+            >
+              {t("自动对齐")}
+            </button>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => setAligning(true)}
+            >
+              {t("手动调整")}
+            </button>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => setDismissedMismatch(episode.id)}
+            >
+              {t("忽略")}
+            </button>
+          </div>
+        </div>
+      )}
       {translation?.running && <div className="translate-bar">{t("正在翻译成中文…")}</div>}
       {translation?.error && <div className="translate-bar">{translation.error}</div>}
       {shadow && isCurrent && (
@@ -1042,11 +1146,14 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
                   role="button"
                   tabIndex={0}
                   className={`line ${i === active ? "active" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
-                  onClick={() => seekEpisode(episode, s.start)}
+                  onClick={() =>
+                    aligning && canAlign ? anchorHere(s.start) : seekEpisode(episode, s.start)
+                  }
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      seekEpisode(episode, s.start);
+                      if (aligning && canAlign) anchorHere(s.start);
+                      else seekEpisode(episode, s.start);
                     }
                   }}
                 >

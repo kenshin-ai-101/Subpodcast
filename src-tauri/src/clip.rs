@@ -130,12 +130,32 @@ fn url_ext(url: &str) -> Option<String> {
     }
 }
 
+/// 精确截取 `[start, end]` 为 16kHz 单声道 PCM（无留白/淡入淡出，供字幕语音探针对齐复用）。
+pub fn extract_raw(
+    src: Box<dyn MediaSource>,
+    ext: Option<&str>,
+    start: f64,
+    end: f64,
+) -> Result<Vec<f32>> {
+    extract_window(src, ext, start.max(0.0), end, false)
+}
+
 /// 解第一音轨，取 `[start-PAD_BEFORE, end+PAD_AFTER]`，混成 16k mono。
 fn extract(
     src: Box<dyn MediaSource>,
     ext: Option<&str>,
     start: f64,
     end: f64,
+) -> Result<Vec<f32>> {
+    extract_window(src, ext, (start - PAD_BEFORE).max(0.0), end + PAD_AFTER, true)
+}
+
+fn extract_window(
+    src: Box<dyn MediaSource>,
+    ext: Option<&str>,
+    from: f64,
+    to: f64,
+    apply_fade: bool,
 ) -> Result<Vec<f32>> {
     let stream = MediaSourceStream::new(src, Default::default());
     let mut hint = Hint::new();
@@ -165,8 +185,6 @@ fn extract(
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|err| anyhow!("不支持的音频编码：{err}"))?;
 
-    let from = (start - PAD_BEFORE).max(0.0);
-    let to = end + PAD_AFTER;
     if from > 1.0 {
         let t = Time::new(from.floor() as u64, from.fract());
         fmt.seek(
@@ -229,13 +247,15 @@ fn extract(
     }
 
     let mut out = resample.finish();
-    // ~20ms 淡入淡出，避免咔哒声。
-    let fade = ((SAMPLE_RATE as usize) / 50).min(out.len() / 2);
-    let n = out.len();
-    for i in 0..fade {
-        let g = i as f32 / fade as f32;
-        out[i] *= g;
-        out[n - 1 - i] *= g;
+    if apply_fade {
+        // ~20ms 淡入淡出，避免咔哒声。
+        let fade = ((SAMPLE_RATE as usize) / 50).min(out.len() / 2);
+        let n = out.len();
+        for i in 0..fade {
+            let g = i as f32 / fade as f32;
+            out[i] *= g;
+            out[n - 1 - i] *= g;
+        }
     }
     Ok(out)
 }

@@ -4,14 +4,17 @@
 成员清单
 App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / remindReview（离线清单在 store.init）
 main.tsx: React 挂载入口
-store.ts: Zustand；load→prepareEngines（先停另一路引擎再装载）；init 并行拉离线清单
-styles.css: 暖纸底 + 橙强调；yt-dock（舞台 z>dock 透出）；theater；mini；单集右四 Tab / 叠字幕
-lib/media.ts: preferAudio / initialAudioOnly（断网已下载 YouTube→仅音频）/ usesAudioEngine / usesYtEngine
-lib/audioHost.ts: 单例 Audio；takeAudioEngine；换集前 pauseYoutubeHost；本地失败回退远端
-lib/ytHost.ts: registerYtHost / pauseYoutubeHost — 与 audioHost 互斥停声
+store.ts: Zustand；load→prepareEngines；align/rawTime/gapEnd（字幕时钟 vs 媒体时钟）；init 并行拉离线清单
+styles.css: 暖纸底 + 橙强调；yt-dock；theater；mini；asub 短句叠字；align-bar
+lib/media.ts: preferAudio / initialAudioOnly（在线有 videoId 视频优先，避免 RSS 音频与 YouTube 字幕错位；纯音频或断网已下载→仅音频）/ usesAudioEngine / usesYtEngine
+lib/audioHost.ts: 单例 Audio；rAF→toContent；seek→toPlay；pendingSeek 按字幕时钟重映射；对齐到达无缝切源；prepare 必硬停 YT
+lib/ytHost.ts: registerYtHost / pauseYoutubeHost — stop+mute 硬停，挡 loadVideoById 迟到起播
 lib/ytKick.ts: load 投递换片（默认不播）；起播由 playSoon
-lib/playback.ts: track/flush、waiting（20s 看门狗）、playSoon、armPlayerIntentListener、activeIndex
-lib/offline.ts: 离线下载；clearDownloads；audioSrc 本地优先 / remoteAudioSrc 回退；清单 store.init 预拉
+lib/playback.ts: track（媒体→字幕时钟）/ flush / waiting / playSoon（迟到 offer 校验 handle）/ activeIndex（开讲前返回 -1）
+lib/pieces.ts: 长字幕块切短句；pieceAt / timedPieces（叠字与音频台按进度取当前句）
+lib/timemap.ts: TimeMap toPlay/toContent/anchorAt；loadAlign / alignCurrent / setManualMap / registerAudioAlignBridge；YT 引擎下恒等
+lib/mediaClock.ts: YouTube 粗采样墙钟外推（带 0.5s 缓冲上限），供 YtEngine 驱动字幕
+lib/offline.ts: 离线下载 + 对齐音频缓存（audio-cache）；clearDownloads / clearAudioCache；audioSrc 本地→对齐缓存→远端；清单 store.init 预拉
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSynthesize / 朗读缓存与本地模型；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 SRT/WebVTT/ASS/LRC/TXT/Markdown（按内容模式组装；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
@@ -29,7 +32,7 @@ lib/reading.ts: 字幕/问答 CSS 变量（--sub-scale 乘基准 px；列表/音
 lib/fonts.ts: 字幕可选字体与按需加载
 lib/layout.ts: 侧栏/右栏几何（sideOpen → 72px 图标轨；localStorage）
 lib/shortcuts.ts: 快捷键注册表与录制校验
-lib/jobs.ts: 字幕瀑布（缓存/官方/共享库）+ 播放头优先自适应机翻 + switchYoutubeTrack + ASR + llmReady
+lib/jobs.ts: 字幕瀑布（缓存/官方/共享库）+ 机翻 + switchYoutubeTrack + ASR（成功后 loadDownloads）+ llmReady
 lib/asrModels.ts: 本机模型列表/下载/删除进度
 lib/ai.ts: 问答/导读提示词与文稿打包
 lib/guides.ts: 导读任务态；共享查找/上传；blob summary + summary-from
@@ -38,7 +41,7 @@ lib/localTts.ts: Melo / Kokoro 状态、下载进度、取消与删除
 lib/chats.ts: 问答会话/历史持久化 + 流式 ask
 lib/llmGate.ts: 串行化 llm-delta
 lib/listening.ts: 墙钟收听累计 noteListening / flushListening
-lib/youtube.ts: YouTube IFrame API + loadVideoById 换片 + 关自带 CC
+lib/youtube.ts: YouTube IFrame API；cue 预热 / load 起播 / stopVideo；关自带 CC
 lib/format.ts: 日期/时长/clock/parseClock/月份文案
 lib/safeUrl.ts: openExternalUrl / isSafeHttpUrl（仅放行 http/https 外部链接）
 lib/modelResolve.ts: resolveChatModel（统一消费 settings.chatModel || provider.model）
@@ -75,13 +78,14 @@ components/LocalAsrSettings.tsx: 本机 Qwen3/Whisper
 components/ReadingSettings.tsx: 阅读预览与字号/字体
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
-components/AudioEngine.tsx: App 根哨兵；prepareAudio 预缓冲；订阅 savedPath（播中锁源）
-components/YtEngine.tsx: App 根持久 iframe；registerYtHost；激活时 releaseAudio；失活 pauseVideo
-components/MiniPlayer.tsx: 非单集页音频迷你条
-components/PlayerBar.tsx: 绑页内 episode；switchTo 用 takeAudioEngine；视频双击/角标/F→theater
-components/SubtitleOverlay.tsx: 视频舞台双语叠字幕
+components/AudioEngine.tsx: App 根哨兵；prepareAudio；savedPath；认领时 resumeAudioIfWanted；有字幕时自动 alignCurrent
+components/YtEngine.tsx: App 根 iframe；cue/load 换片（switchingRef 挡旧片时钟）；失活 stop+mute；倍速同步 mediaClock（上限 2×）
+components/MiniPlayer.tsx: 非单集页音频迷你条（进度跟 rawTime ?? time）
+components/PlayerBar.tsx: 绑页内 episode；AudioSubtitles 短句 now/next；进度条跟 rawTime/seekRaw；switchTo；theater
+components/SubtitleOverlay.tsx: 视频叠字幕按块内进度只显当前短句（pieceAt + SUBTITLE_LEAD）
+components/AlignBar.tsx: 自动声纹/语音探针对齐进度与手动对齐（点句锚点 / ±1s / 恢复 / skipAds）
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
-components/TranscriptPane.tsx: GenCard/导出/学英语/行列表；「高光」子模式 + 行内 hl-head
+components/TranscriptPane.tsx: GenCard/导出/学英语/对齐（跨源或时长错位提示条）；panel-bar；按句订阅 active；高光
 components/HighlightViews.tsx: HighlightsPanel / SeekHighlights / useClipWarm
 components/VideoClipDialog.tsx: 剪视频工作室（左 WYSIWYG 预览 / 右正片·封面·文案；开窗 auto-prepare 一次、失败不空转重试；预热走 HighlightViews.useClipWarm）；App 挂 VideoClipDialogHost
 lib/webfonts.ts: 封面可选开源中文字体（ensureFont / familyOf）

@@ -2,22 +2,28 @@
 
 给人或 Agent 的发货手册。流程变了就改这份。
 
-MVP **不含** OTA / 界面热更新。macOS 外发必须 **Developer ID 签名 + 公证**，否则 Gatekeeper 会拦。
+MVP **不含** OTA / 界面热更新。
+
+**现状**：未付 Apple Developer Program（年费）。正式「Notarized Developer ID」外发不可用；日常用 **ad-hoc 包**（本机 / 熟人内测）。签名脚本已就绪，日后再开会员可直接走第二节。
 
 ## 渠道
 
 | 改动 | 渠道 | 命令 |
 |---|---|---|
-| 任意可运行改动，给本机 / 内测 | 本地 ad-hoc 包 | `MACOSX_DEPLOYMENT_TARGET=11.0 npm run tauri build -- --bundles app,dmg` |
-| 给别人装的正式包 | **macOS 签名发布** | `scripts/macos-sign-setup.sh` 一次 → `scripts/macos-release.sh` |
+| 本机 / 内测（**当前默认**） | ad-hoc `.app` / `.dmg` | `MACOSX_DEPLOYMENT_TARGET=11.0 npm run tauri build -- --bundles app,dmg` |
+| 公开分发（需年费会员） | Developer ID + 公证 | `scripts/macos-sign-setup.sh` → `scripts/macos-release.sh` |
 
-Windows / Linux / 自动更新以后再加；先把 macOS 公证做对。
+ad-hoc 包首次打开：系统设置 → 隐私与安全性 → 仍要打开；或右键「打开」。
 
-## 一次性：本机签名环境
+产物默认：`src-tauri/target/release/bundle/dmg/Subpodcast_<ver>_aarch64.dmg`。
+
+Windows / Linux / 自动更新以后再加。
+
+## 正式签名（可选 · 需会员）
 
 需要：
 
-1. [Apple Developer Program](https://developer.apple.com/programs/) 会员
+1. 已付费且 **Active** 的 [Apple Developer Program](https://developer.apple.com/programs/) 会员
 2. 证书 **Developer ID Application**（不是 Mac Development / Mac App Distribution）
 3. App Store Connect API Key（推荐）或 Apple ID + [App 专用密码](https://appleid.apple.com/account/manage)
 

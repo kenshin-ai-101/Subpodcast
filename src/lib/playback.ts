@@ -1,11 +1,12 @@
 /**
- * [INPUT]: store、api.setProgress；audioHost.recoverStuckPlay
- * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY — 进度心跳与按集起播意图
- * [POS]: armPlayerIntentListener 由 App mount 挂上；waiting 超时看门狗防「点了没反应」
+ * [INPUT]: store、api.setProgress；audioHost.recoverStuckPlay；timemap.toContent
+ * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY / activeIndex / SUBTITLE_LEAD — 进度心跳与按集起播意图
+ * [POS]: armPlayerIntentListener 由 App mount 挂上；waiting 超时看门狗；字幕高亮带 150ms 读前量；track 写入字幕时钟
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api, type Episode } from "./api";
 import { tNow } from "./i18n";
+import { currentMap, toContent } from "./timemap";
 import { useStore } from "../store";
 
 export const SAVE_EVERY = 10;
@@ -15,21 +16,41 @@ const STUCK_MS = 20_000;
 let lastSaved = 0;
 let stuckTimer: number | undefined;
 
-/** 播放中周期性写进度；换集时重置。 */
-export function track(ep: Episode, time: number, length?: number) {
+/**
+ * `raw` 是媒体元素时钟（YouTube 侧可为外推平滑值）；store.time 永远是字幕时间。
+ * 返回广告空隙终点（播放时钟），供 skipAds 跳过。
+ */
+export function track(ep: Episode, raw: number, length?: number): number | undefined {
   const s = useStore.getState();
   if (s.current?.id !== ep.id) return;
-  s.set({ time, ...(length && length > 0 ? { length } : {}) });
+  const { at: time, gapEnd } = toContent(currentMap(ep.id), raw);
+  // 同毫秒级抖动不写 store，减轻叠字订阅压力
+  if (
+    Math.abs(time - s.time) < 0.02 &&
+    Math.abs((s.rawTime ?? raw) - raw) < 0.02 &&
+    (gapEnd ?? null) === (s.gapEnd ?? null) &&
+    !(length && length > 0 && length !== s.length)
+  ) {
+    return gapEnd;
+  }
+  s.set({
+    time,
+    rawTime: raw,
+    gapEnd: gapEnd ?? null,
+    ...(length && length > 0 ? { length } : {}),
+  });
   if (Math.abs(time - lastSaved) > SAVE_EVERY) {
     lastSaved = time;
     void api.setProgress(ep.id, time);
   }
+  return gapEnd;
 }
 
 export function resetTrackSave() {
   lastSaved = 0;
 }
 
+/** `time` 须为字幕时间（pause 时先 toContent 再传入）。 */
 export function flushProgress(ep: Episode, time: number) {
   lastSaved = time;
   void api.setProgress(ep.id, time);
@@ -88,6 +109,9 @@ export function armPlayerIntentListener(): () => void {
     if (wantSeek != null) {
       useStore.setState({ seekWhenReady: null, ...(wantPlay ? { playWhenReady: null } : {}) });
       window.setTimeout(() => {
+        const st = useStore.getState();
+        // 迟到的 offer：已换引擎 / 换集则丢弃，避免双路起播
+        if (st.player !== p || st.current?.id !== p.episodeId) return;
         p.seek(wantSeek);
         if (wantPlay) p.play();
       }, 0);
@@ -96,7 +120,11 @@ export function armPlayerIntentListener(): () => void {
     if (wantPlay) {
       useStore.setState({ playWhenReady: null });
       // waiting 由引擎 PLAYING / playing 事件清除，此处勿抢先 false
-      window.setTimeout(() => p.play(), 0);
+      window.setTimeout(() => {
+        const st = useStore.getState();
+        if (st.player !== p || st.current?.id !== p.episodeId) return;
+        p.play();
+      }, 0);
     }
   });
 }
@@ -120,13 +148,18 @@ export function seekEpisode(ep: Episode, seconds: number, autoPlay = true) {
   if (autoPlay) waiting(true);
 }
 
+/** 字幕高亮略早于媒体时钟，阅读跟得上说话（与原站一致）。 */
+export const SUBTITLE_LEAD = 0.15;
+
 export function activeIndex(starts: number[], time: number) {
+  if (!starts.length) return -1;
+  const t = time + SUBTITLE_LEAD;
   let lo = 0;
   let hi = starts.length - 1;
-  let ans = 0;
+  let ans = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (starts[mid]! <= time) {
+    if (starts[mid]! <= t) {
       ans = mid;
       lo = mid + 1;
     } else hi = mid - 1;

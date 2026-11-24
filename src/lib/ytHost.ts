@@ -1,7 +1,7 @@
 /**
- * [INPUT]: YtEngine 注册的 pause 回调
+ * [INPUT]: YtEngine 注册的 hard-stop 回调
  * [OUTPUT]: registerYtHost / pauseYoutubeHost — 同步停掉 iframe 声道
- * [POS]: 与 audioHost 对称的交权点；load / takeAudioEngine 切音频前必须先 pauseYoutubeHost
+ * [POS]: 与 audioHost 对称的交权点；load / takeAudioEngine / prepareAudio 切音频前必须先 pauseYoutubeHost（stop+mute，挡迟到 autoplay）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -15,7 +15,10 @@ export function registerYtHost(pause: () => void): () => void {
   };
 }
 
-/** 立刻停 YouTube（不靠 React effect），避免与 HTMLAudio 叠声。 */
+/**
+ * 立刻硬停 YouTube（不靠 React effect）。
+ * 必须 stop+mute：pause 挡不住 in-flight 的 loadVideoById 起播，叠声根因之一。
+ */
 export function pauseYoutubeHost() {
   try {
     pauseFn?.();
