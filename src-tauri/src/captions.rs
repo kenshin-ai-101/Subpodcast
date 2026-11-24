@@ -500,6 +500,13 @@ pub fn resegment(segments: Vec<Segment>) -> Vec<Segment> {
     if let Some(c) = cur {
         out.push(c);
     }
+    // 消除 YouTube 滚动自动字幕的重叠 end（常见晚于下一句 start 2–5s），避免句内进度滞后
+    for i in 0..out.len().saturating_sub(1) {
+        let next_start = out[i + 1].start;
+        if out[i].end > next_start {
+            out[i].end = next_start.max(out[i].start);
+        }
+    }
     out
 }
 
@@ -625,5 +632,24 @@ mod tests {
         assert_eq!(items[0].as_deref(), Some("你好呀。"));
         assert_eq!(items[1].as_deref(), Some("你好吗？"));
         assert!(items[2].is_none());
+    }
+
+    #[test]
+    fn resegment_clamps_overlapping_end_times() {
+        let seg = |s: f64, e: f64, x: &str| Segment {
+            start: s,
+            end: e,
+            text: x.into(),
+        };
+        let input = vec![
+            seg(0.0, 6.5, "First full sentence here."),
+            seg(3.2, 9.8, "Second full sentence follows."),
+            seg(7.4, 12.0, "Third sentence ends."),
+        ];
+        let out = resegment(input);
+        assert_eq!(out.len(), 3);
+        assert!((out[0].end - 3.2).abs() < 1e-6);
+        assert!((out[1].end - 7.4).abs() < 1e-6);
+        assert!((out[2].end - 12.0).abs() < 1e-6);
     }
 }

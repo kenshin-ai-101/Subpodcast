@@ -216,7 +216,7 @@ export const api = {
     invoke<string[]>("translate_texts", { texts, target: target ?? null }),
   cloudTranscribe: (req: {
     episodeId: string;
-    audioUrl: string;
+    audioUrl?: string;
     provider: string;
     baseUrl: string;
     model: string;

@@ -14,6 +14,12 @@ import { followVolume } from "./volume";
 
 export const useTtsPreview = create<{ active: string | null }>(() => ({ active: null }));
 let playback: AbortController | undefined;
+let externalStopper: (() => void) | null = null;
+
+/** 允许字幕逐句朗读注册互斥停止回调，避免两路朗读重叠。 */
+export function registerReadStopper(fn: () => void) {
+  externalStopper = fn;
+}
 
 export function currentTtsService(settings: Settings): TtsService {
   return settings.ttsServices[settings.ttsEngine] ?? DEFAULTS.ttsServices.system;
@@ -45,7 +51,8 @@ export function chunks(text: string, max = 240): string[] {
   return result;
 }
 
-export function stopSpeaking() {
+/** 仅停止导读/精读/试听这一路朗读（供字幕逐句朗读启动时调用，不递归停止自身）。 */
+export function stopGeneralSpeaking() {
   const active = playback;
   playback = undefined;
   active?.abort();
@@ -53,10 +60,19 @@ export function stopSpeaking() {
   if (useStore.getState().speaking) useStore.getState().set({ speaking: false });
 }
 
+export function stopSpeaking() {
+  stopGeneralSpeaking();
+  externalStopper?.();
+}
+
 const novelty = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Junior|Kathy|Organ|Ralph|Superstar|Trinoids|Whisper|Wobble|Zarvox)$/i;
 
 function webVoices(): SpeechSynthesisVoice[] {
   return (window.speechSynthesis?.getVoices?.() ?? []).filter((v) => v.localService && !novelty.test(v.name));
+}
+
+export function hasWebSpeechVoices(): boolean {
+  return webVoices().length > 0;
 }
 
 export function listWebSystemVoices() {
@@ -108,11 +124,17 @@ function speakWeb(text: string, voice: SpeechSynthesisVoice, rate: number, signa
   });
 }
 
+export function speakWebLine(text: string, voiceId: string, rate: number, signal: AbortSignal): Promise<void> | null {
+  const voice = webVoice(text, voiceId);
+  if (!voice) return null;
+  return speakWeb(text, voice, rate, signal);
+}
+
 function playbackOnly(service: TtsService): boolean {
   return service.protocol === "deepseek" || service.protocol === "qwen";
 }
 
-function requestRate(service: TtsService, rate: number): number {
+export function requestRate(service: TtsService, rate: number): number {
   if (playbackOnly(service)) return 1;
   return service.protocol === "elevenlabs" ? Math.min(rate, 1.2) : rate;
 }

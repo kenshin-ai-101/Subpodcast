@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  AudioLines,
   ChevronDown,
   Crosshair,
   Download,
@@ -19,6 +20,8 @@ import {
   Play,
   Scissors,
   Sparkles,
+  Square,
+  Volume2,
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errText, type Episode, type Segment } from "../lib/api";
@@ -42,6 +45,7 @@ import {
 } from "../lib/jobs";
 import { activeIndex, seekEpisode } from "../lib/playback";
 import { activeCloudAsr, ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
+import { startSubtitleRead, stopSubtitleRead, useSubtitleRead } from "../lib/subtitleRead";
 import { alignCurrent, anchorHere } from "../lib/timemap";
 import { useStore } from "../store";
 import { AlignBar } from "./AlignBar";
@@ -49,6 +53,8 @@ import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
 import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
+import { RatePicker } from "./RatePicker";
+import { ReadAloudSettings } from "./ReadAloud";
 import { SubtitleExport } from "./SubtitleExport";
 import { openVideoClipDialog } from "./VideoClipDialog";
 
@@ -517,7 +523,7 @@ function NoTranscript({
   }
 
   const needsDownload = !cloud && !!model && !model.installed;
-  const canAsr = cloud ? !!ep.audioUrl : !!(ep.audioUrl || ep.videoId);
+  const canAsr = !!(ep.audioUrl || ep.videoId);
 
   return (
     <GenCard
@@ -538,7 +544,7 @@ function NoTranscript({
         type="button"
         className="btn primary gen-go"
         disabled={!model || !canAsr}
-        title={!canAsr ? (cloud ? t("这集没有音频地址，无法云端识别") : t("这集没有可识别的音频")) : undefined}
+        title={!canAsr ? t("这集没有可识别的音频") : undefined}
         onClick={() => void generate()}
       >
         {missingKey ? t("先填写 API Key") : t("生成字幕")}
@@ -741,7 +747,7 @@ function PanelMenu({
                 onAlign();
               }}
             >
-              <Crosshair size={14} /> {t("调整字幕")}
+              <AudioLines size={14} /> {t("字幕和声音对不上…")}
             </button>
           )}
         </div>
@@ -831,6 +837,10 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const canAlign = isCurrent && !!episode.audioUrl && (!episode.videoId || audioOnly);
   const [aligning, setAligning] = useState(false);
   const [dismissedMismatch, setDismissedMismatch] = useState<string | null>(null);
+  const [followPaused, setFollowPaused] = useState(false);
+  useEffect(() => {
+    setFollowPaused(false);
+  }, [episode.id]);
   useEffect(() => {
     if (!canAlign) setAligning(false);
   }, [canAlign]);
@@ -849,6 +859,48 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
     ((transcript?.source === "youtube" || transcript?.source === "youtube-auto") ||
       (mediaLength > 0 && lastSegEnd > 0 && Math.abs(mediaLength - lastSegEnd) > 10));
   const zhItems = translation?.items;
+  const zhReadyCount = useMemo(
+    () => zhItems?.filter((x) => Boolean(x?.trim())).length ?? 0,
+    [zhItems],
+  );
+  const readIndex = useSubtitleRead((s) => (s.episodeId === episode.id ? s.lineIndex : null));
+  const readingHere = readIndex != null;
+  const [readSetup, setReadSetup] = useState(false);
+  const readBox = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!readSetup) return;
+    const onDown = (e: PointerEvent) => {
+      if (!readBox.current?.contains(e.target as Node)) setReadSetup(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setReadSetup(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [readSetup]);
+
+  useEffect(() => {
+    return () => {
+      if (useSubtitleRead.getState().episodeId === episode.id) {
+        stopSubtitleRead();
+      }
+    };
+  }, [episode.id]);
+
+  const readFrom = useCallback(
+    (index: number) => {
+      void startSubtitleRead(episode.id, zhItems ?? [], index, (message) => {
+        useStore.getState().notify(message);
+        if (/Key|下载|下載|download/i.test(message)) setReadSetup(true);
+      });
+    },
+    [episode.id, zhItems],
+  );
 
   const hlStarts = useMemo(() => {
     const map = new Map<number, HighlightClip>();
@@ -930,9 +982,23 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   }, [learning]);
 
   useEffect(() => {
-    if (!isCurrent || active < 0 || showHighlights) return;
+    if (!isCurrent || active < 0 || showHighlights || aligning || followPaused || readingHere) return;
     rowVirtualizer.scrollToIndex(active, { align: "auto", behavior: "smooth" });
-  }, [active, isCurrent, showHighlights, rowVirtualizer]);
+  }, [active, isCurrent, showHighlights, aligning, followPaused, readingHere, rowVirtualizer]);
+
+  // 逐句朗读中文时自动将当前朗读句保持在视野内
+  useEffect(() => {
+    if (readIndex == null || showHighlights || followPaused) return;
+    rowVirtualizer.scrollToIndex(readIndex, { align: "center", behavior: "smooth" });
+  }, [readIndex, showHighlights, followPaused, rowVirtualizer]);
+
+  const followTarget = readingHere ? readIndex : active;
+  const jumpToActive = useCallback(() => {
+    setFollowPaused(false);
+    if (followTarget != null && followTarget >= 0) {
+      rowVirtualizer.scrollToIndex(followTarget, { align: "center", behavior: "smooth" });
+    }
+  }, [followTarget, rowVirtualizer]);
 
   const onWordClick = (e: React.MouseEvent) => {
     if (!marks || !learnCard) return;
@@ -988,6 +1054,43 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           )}
         </div>
         <div className="panel-bar-tools">
+          {foreign && zhReadyCount > 0 && (mode === "translation" || readingHere) && (
+            <div className="read-aloud zh-read" ref={readBox}>
+              {readingHere ? (
+                <button
+                  type="button"
+                  className="icon-btn on"
+                  title={t("停止朗读")}
+                  aria-label={t("停止朗读")}
+                  onClick={stopSubtitleRead}
+                >
+                  <Square size={13} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={t("朗读中文")}
+                  aria-label={t("朗读中文")}
+                  onClick={() => readFrom(Math.max(0, active))}
+                >
+                  <Volume2 size={15} />
+                </button>
+              )}
+              <RatePicker />
+              <button
+                type="button"
+                className="icon-btn sm"
+                aria-label={t("朗读设置")}
+                title={t("朗读设置")}
+                aria-expanded={readSetup}
+                onClick={() => setReadSetup(!readSetup)}
+              >
+                <ChevronDown size={13} />
+              </button>
+              {readSetup && <ReadAloudSettings onClose={() => setReadSetup(false)} />}
+            </div>
+          )}
           <button
             type="button"
             className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
@@ -1096,22 +1199,41 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         />
       ) : (
       <div
-        className={`lines${marks && learnCard ? " learning" : ""}`}
+        className={`lines${marks && learnCard && mode !== "translation" ? " learning" : ""}${aligning && canAlign ? " aligning" : ""}`}
         ref={listRef}
         onClickCapture={onWordClick}
+        onWheel={() => {
+          if ((isCurrent || readingHere) && !aligning) setFollowPaused(true);
+        }}
+        onTouchStart={() => {
+          if ((isCurrent || readingHere) && !aligning) setFollowPaused(true);
+        }}
       >
-        {english && <LearnTip />}
+        {english && mode !== "translation" && <LearnTip />}
         <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {rowVirtualizer.getVirtualItems().map((vRow) => {
             const i = vRow.index;
             const s = segs[i]!;
             const zh = translation?.items?.[i];
-            const showZh = foreign && zh && mode !== "original";
-            // 学英语时中文模式仍保留原文，方便点词
-            const showOrig = mode !== "translation" || !zh || !!marks;
+            const pending = foreign && !!translation?.running;
+            const showZh = foreign && mode !== "original";
+            // 外语节目切到「中文」模式时只显示中文，不显示英文原文（即使开启了学英语标词）
+            const showOrig = !foreign || mode !== "translation";
             const hl = hlStarts.get(i);
             const inHl = hlRange.has(i);
             const hlEnd = inHl && !hlRange.has(i + 1);
+            const isReading = i === readIndex;
+            const activateRow = () => {
+              if (aligning && canAlign) {
+                anchorHere(s.start);
+              } else if (readingHere || (foreign && mode === "translation" && zhReadyCount > 0)) {
+                setFollowPaused(false);
+                readFrom(i);
+              } else {
+                setFollowPaused(false);
+                seekEpisode(episode, s.start);
+              }
+            };
             return (
               <div
                 key={`${s.start}-${i}`}
@@ -1145,21 +1267,18 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
                   data-i={i}
                   role="button"
                   tabIndex={0}
-                  className={`line ${i === active ? "active" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
-                  onClick={() =>
-                    aligning && canAlign ? anchorHere(s.start) : seekEpisode(episode, s.start)
-                  }
+                  className={`line ${i === active ? "active" : ""}${isReading ? " zh-reading" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
+                  onClick={activateRow}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      if (aligning && canAlign) anchorHere(s.start);
-                      else seekEpisode(episode, s.start);
+                      activateRow();
                     }
                   }}
                 >
                   <div className="line-time">{clock(s.start)}</div>
                   <div className="line-text">
-                    {showZh && <div className="zh">{zh}</div>}
+                    {showZh && (zh ? <div className="zh">{zh}</div> : pending ? <span className="skeleton" /> : !showOrig ? <div className="zh muted">…</div> : null)}
                     {showOrig && (
                       <div className="orig">
                         {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
@@ -1173,6 +1292,12 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         </div>
         {card && <WordCard target={card} ep={episode} onClose={closeCard} />}
       </div>
+      )}
+      {(isCurrent || readingHere) && !showHighlights && !aligning && followPaused && followTarget != null && followTarget >= 0 && (
+        <button type="button" className="jump-active" onClick={jumpToActive}>
+          <Crosshair size={13} />
+          <span>{t("回到当前位置")}</span>
+        </button>
       )}
       {exporting && !foreign && (
         <SubtitleExport

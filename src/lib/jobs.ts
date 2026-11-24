@@ -12,6 +12,7 @@ import { tNow } from "./i18n";
 import { resolveChatModel } from "./modelResolve";
 import { loadDownloads } from "./offline";
 import { activeCloudAsr } from "./settings";
+import { loadAlign } from "./timemap";
 import { useStore } from "../store";
 
 export type OfficialState = "idle" | "searching" | "found" | "none" | "error";
@@ -442,6 +443,10 @@ export async function switchYoutubeTrack(ep: Episode, language: string, auto: bo
       official: { ...s.official, [ep.id]: "found" as OfficialState },
     };
   });
+  const st = useStore.getState();
+  if (st.current?.id === ep.id) {
+    void loadAlign(ep.id, !ep.videoId || st.audioOnly);
+  }
   autoTranslate(ep);
 }
 
@@ -454,8 +459,7 @@ export async function runCloudAsr(ep: Episode) {
 export async function generateTranscript(ep: Episode) {
   const settings = useStore.getState().settings;
   const local = settings.asrEngine === "local";
-  if (!local && !ep.audioUrl) throw new Error(tNow("这集没有音频地址，无法云端识别"));
-  if (local && !ep.audioUrl && !ep.videoId) throw new Error(tNow("这集没有可识别的音频"));
+  if (!ep.audioUrl && !ep.videoId) throw new Error(tNow("这集没有可识别的音频"));
 
   await ensureAsrListen();
   patch("asrRunning", ep.id, true);
@@ -480,10 +484,9 @@ export async function generateTranscript(ep: Episode) {
     } else {
       const cloud = activeCloudAsr(settings);
       if (!cloud) throw new Error(tNow("请先在设置 › 字幕里选择云端识别服务"));
-      patch("asrProgress", ep.id, { stage: "transcribe", progress: 0.2, message: tNow("上传并识别…") });
       t = await api.cloudTranscribe({
         episodeId: ep.id,
-        audioUrl: ep.audioUrl!,
+        audioUrl: ep.audioUrl ?? undefined,
         provider: cloud.needsKey ? `asr.${cloud.id}` : cloud.id,
         baseUrl: cloud.baseUrl,
         model: cloud.model,
@@ -494,8 +497,12 @@ export async function generateTranscript(ep: Episode) {
     patch("official", ep.id, "found");
     patch("translations", ep.id, { items: [], running: false });
     patch("asrProgress", ep.id, { stage: "done", progress: 1 });
-    // ASR 会把音轨写入 downloads/：刷新清单，AudioEngine 才能认领本地源（播中仍锁源）
+    // ASR 可能将播客音频写入 audio-cache/：刷新清单，并同步重置/载入当前集时间映射
     void loadDownloads();
+    const st = useStore.getState();
+    if (st.current?.id === ep.id) {
+      void loadAlign(ep.id, !ep.videoId || st.audioOnly);
+    }
     autoTranslate(ep);
   } catch (e) {
     const msg = errText(e);

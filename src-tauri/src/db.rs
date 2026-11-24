@@ -489,6 +489,11 @@ pub fn save_transcript(conn: &Connection, t: &Transcript) -> Result<()> {
          ON CONFLICT(episode_id) DO UPDATE SET source=excluded.source, language=excluded.language, segments=excluded.segments, created_at=excluded.created_at",
         params![t.episode_id, t.source, t.language, segs, now_ms()],
     )?;
+    // 换字幕时清掉旧字幕派生的译文、声纹、时间映射、导读等缓存；保留问答/笔记/高光/音轨选择
+    conn.execute(
+        "DELETE FROM blobs WHERE episode_id=?1 AND kind NOT IN ('chat','chat-archive','notes-full','ctx','deep-read','highlights','track-picked')",
+        [&t.episode_id],
+    )?;
     Ok(())
 }
 
@@ -672,4 +677,55 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
+    fn save_transcript_clears_stale_transcript_blobs_only() {
+        let path = std::env::temp_dir().join(format!(
+            "subpodcast-tr-blobs-{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO shows(id,kind,title,feed_url,updated_at) VALUES('s','podcast','T','http://x',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO episodes(id,show_id,guid,title,progress,deep,heard_at) VALUES('e1','s','g1','Ep 1',0,0,0)",
+            [],
+        )
+        .unwrap();
+        for (k, v) in [
+            ("zh", "[\"旧译\"]"),
+            ("zh-engine", "google"),
+            ("tmap", "{\"method\":\"manual\"}"),
+            ("audio-ref", "{\"bytes\":1}"),
+            ("summary", "old"),
+            ("asr-meta", "{}"),
+            ("chat", "[{\"role\":\"user\"}]"),
+            ("highlights", "{\"clips\":[]}"),
+            ("track-picked", "en:0"),
+        ] {
+            set_blob(&conn, "e1", k, v).unwrap();
+        }
+        save_transcript(
+            &conn,
+            &Transcript {
+                episode_id: "e1".into(),
+                source: "qwen3".into(),
+                language: "en".into(),
+                segments: vec![],
+            },
+        )
+        .unwrap();
+        for cleared in ["zh", "zh-engine", "tmap", "audio-ref", "summary", "asr-meta"] {
+            assert!(get_blob(&conn, "e1", cleared).unwrap().is_none(), "{cleared} should be cleared");
+        }
+        for kept in ["chat", "highlights", "track-picked"] {
+            assert!(get_blob(&conn, "e1", kept).unwrap().is_some(), "{kept} should be kept");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 }

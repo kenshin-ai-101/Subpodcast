@@ -22,12 +22,13 @@ import {
 import type { Episode, Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { useT } from "../lib/i18n";
-import { useJobs } from "../lib/jobs";
+import { looksChinese, useJobs } from "../lib/jobs";
 import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
 import { pieceIndex, pieces } from "../lib/pieces";
 import { activeIndex, flushProgress, playSoon, SUBTITLE_LEAD } from "../lib/playback";
+import { useSubtitleRead } from "../lib/subtitleRead";
 import { alignCurrent, loadAlign } from "../lib/timemap";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
 import { kickYoutube } from "../lib/ytKick";
@@ -43,16 +44,19 @@ function AudioSubtitles({
   episodeId,
   segs,
   items,
+  foreign,
   mode,
   progressFallback,
 }: {
   episodeId: string;
   segs: Segment[];
   items?: (string | null | undefined)[];
+  foreign: boolean;
   mode: string;
   progressFallback: number;
 }) {
   const t = useT();
+  const readIndex = useSubtitleRead((s) => (s.episodeId === episodeId ? s.lineIndex : null));
   const gapLeft = useStore((s) =>
     s.current?.id === episodeId && s.gapEnd && s.rawTime != null
       ? Math.ceil(s.gapEnd - s.rawTime)
@@ -62,6 +66,7 @@ function AudioSubtitles({
   const pos = useStore(
     useShallow((s) => {
       if (!segs.length) return { i: -1, k: 0 };
+      if (readIndex != null) return { i: readIndex, k: 0 };
       const clock = s.current?.id === episodeId ? s.time : progressFallback;
       const i = activeIndex(starts, clock);
       if (i < 0) return { i: -1, k: 0 };
@@ -75,7 +80,7 @@ function AudioSubtitles({
     }),
   );
 
-  if (gapLeft > 0) {
+  if (gapLeft > 0 && readIndex == null) {
     return (
       <div className="asub asub-gap" aria-live="off">
         <p>{t("这一段只在你的音频里，多半是广告，{n} 秒后回到正文", { n: gapLeft })}</p>
@@ -103,43 +108,56 @@ function AudioSubtitles({
     : 0;
   const nextSeg = segs[i + 1];
   const nextZh = items?.[i + 1];
-  const nowLine = {
-    orig: origPs[k]!,
-    zh: zhPs.length
-      ? zhPs.length === origPs.length
-        ? zhPs[k]
-        : zhPs[kz]
-      : undefined,
-  };
-  const nextLine =
-    k + 1 < origPs.length
-      ? {
-          orig: origPs[k + 1]!,
+  const nowLine =
+    readIndex != null
+      ? { orig: seg.text, zh: zh ?? undefined }
+      : {
+          orig: origPs[k]!,
           zh: zhPs.length
             ? zhPs.length === origPs.length
-              ? zhPs[k + 1]
-              : kz + 1 < zhPs.length
-                ? zhPs[kz + 1]
-                : undefined
+              ? zhPs[k]
+              : zhPs[kz]
             : undefined,
-        }
-      : nextSeg
+        };
+  const nextLine =
+    readIndex != null
+      ? nextSeg
+        ? { orig: nextSeg.text, zh: nextZh ?? undefined }
+        : null
+      : k + 1 < origPs.length
         ? {
-            orig: pieces(nextSeg.text, isCjk(nextSeg.text))[0]!,
-            zh: nextZh ? pieces(nextZh, true)[0] : undefined,
+            orig: origPs[k + 1]!,
+            zh: zhPs.length
+              ? zhPs.length === origPs.length
+                ? zhPs[k + 1]
+                : kz + 1 < zhPs.length
+                  ? zhPs[kz + 1]
+                  : undefined
+              : undefined,
           }
-        : null;
+        : nextSeg
+          ? {
+              orig: pieces(nextSeg.text, isCjk(nextSeg.text))[0]!,
+              zh: nextZh ? pieces(nextZh, true)[0] : undefined,
+            }
+          : null;
 
+  // 外语节目切到「中文」模式时只显示中文，绝不显示英文原文
+  const showOrig = !foreign || mode !== "translation";
   const line = (
     l: { orig: string; zh?: string | null },
     role: "now" | "next",
     key: string,
-  ) => (
-    <div key={key} className={`asub-line ${role}`} aria-hidden={role === "next"}>
-      {l.zh && mode !== "original" && <p className="sub-zh">{l.zh}</p>}
-      {(mode !== "translation" || !l.zh) && <p className="sub-orig">{l.orig}</p>}
-    </div>
-  );
+  ) => {
+    const showZh = Boolean(l.zh && mode !== "original");
+    if (!showZh && !showOrig) return null;
+    return (
+      <div key={key} className={`asub-line ${role}`} aria-hidden={role === "next"}>
+        {showZh && <p className="sub-zh">{l.zh}</p>}
+        {showOrig && <p className="sub-orig">{l.orig}</p>}
+      </div>
+    );
+  };
 
   return (
     <div className="asub" aria-live="off">
@@ -220,11 +238,16 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   );
   const live = current?.id === episode.id;
   const [source, setSource] = useState<Episode>(episode);
+  const [drag, setDrag] = useState<number | null>(null);
   const transcript = useJobs((s) => s.transcripts[episode.id]);
   const items = useJobs((s) => s.translations[episode.id]?.items);
   const mode = useStore((s) => s.settings.subtitleMode);
   const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
+
+  useEffect(() => {
+    setDrag(null);
+  }, [episode.id, live]);
 
   // 离开视频舞台时收起 theater（切仅音频 / 离页卸载）
   useEffect(() => {
@@ -266,11 +289,19 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const pageAudioOnly = live ? audioOnly : initialAudioOnly(source);
   const showVideo = canVideo && !pageAudioOnly;
   const shownSubTime = live ? time : source.progress || 0;
-  // 进度条与时钟跟随播放器自身时钟（有 TimeMap 时与字幕时间区分，避免拖动进度条二次映射）
-  const shownBarTime = live ? (rawTime ?? time) : source.progress || 0;
+  // 进度条与时钟跟随播放器自身时钟（有 TimeMap 时与字幕时间区分）；拖拽中先走本地 drag，松手再 commit
+  const shownBarTime = drag ?? (live ? (rawTime ?? time) : source.progress || 0);
   const shownLength = live ? length || source.duration || 0 : source.duration || 0;
   const shownPlaying = live && playing;
   const busy = live && !!loadingSince;
+
+  const commitDrag = (val: number | null) => {
+    if (val == null) return;
+    setDrag(null);
+    const p = useStore.getState().player;
+    if (p?.seekRaw) p.seekRaw(val);
+    else p?.seek(val);
+  };
 
   const takeOver = () => {
     const s = useStore.getState();
@@ -324,6 +355,13 @@ export function PlayerBar({ episode }: { episode: Episode }) {
 
   const fill = `${shownLength ? Math.min(100, (shownBarTime / shownLength) * 100) : 0}%`;
   const segs = transcript?.segments ?? [];
+  const foreign = useMemo(
+    () =>
+      transcript
+        ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
+        : false,
+    [transcript, segs],
+  );
 
   return (
     <>
@@ -412,6 +450,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
                 episodeId={source.id}
                 segs={segs}
                 items={items}
+                foreign={foreign}
                 mode={mode}
                 progressFallback={source.progress || 0}
               />
@@ -472,12 +511,25 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             value={Math.min(shownBarTime, shownLength || shownBarTime)}
             style={{ "--fill": fill } as React.CSSProperties}
             disabled={!live}
-            onChange={(e) => {
-              const p = useStore.getState().player;
-              const val = Number(e.target.value);
-              if (p?.seekRaw) p.seekRaw(val);
-              else p?.seek(val);
+            onChange={(e) => setDrag(Number(e.target.value))}
+            onPointerUp={() => commitDrag(drag)}
+            onPointerCancel={() => setDrag(null)}
+            onTouchEnd={() => commitDrag(drag)}
+            onKeyUp={(e) => {
+              if (
+                e.key === "ArrowLeft" ||
+                e.key === "ArrowRight" ||
+                e.key === "ArrowUp" ||
+                e.key === "ArrowDown" ||
+                e.key === "Home" ||
+                e.key === "End" ||
+                e.key === "PageUp" ||
+                e.key === "PageDown"
+              ) {
+                commitDrag(drag);
+              }
             }}
+            onBlur={() => commitDrag(drag)}
           />
         </div>
         <span className="time">{clock(shownLength)}</span>

@@ -1196,95 +1196,456 @@ async fn translate_texts(
 #[serde(rename_all = "camelCase")]
 struct CloudAsrReq {
     episode_id: String,
-    audio_url: String,
+    #[serde(default)]
+    audio_url: Option<String>,
     provider: String,
     base_url: String,
     model: String,
     language: Option<String>,
 }
 
-/// 云端 Whisper 兼容接口（OpenAI /audio/transcriptions）。
+/// 统一 ASR 音频选源（本机与云端共用）：
+/// - 双形态单集（有 video_id）优先抓 YouTube 音轨，保证视频播放与字幕严格同源；失败且有 audio_url 时再回退播客音频。
+/// - 纯播客单集（无 video_id）优先复用 downloads/ → audio-cache/ → 断点 work/，否则下载到 audio-cache/（不污染 downloads/）。
+/// 返回 `(音频路径, 是否播客直链音频)`；仅播客直链音频需要生成声纹与 TimeMap::same。
+async fn prepare_asr_audio(
+    app: &AppHandle,
+    state: &AppState,
+    ep: &Episode,
+    fallback_url: Option<&str>,
+    work: &std::path::Path,
+    cancel: Arc<AtomicBool>,
+) -> Res<(PathBuf, bool)> {
+    let emit_dl = |progress: f64, message: &str| {
+        let _ = app.emit(
+            "asr",
+            serde_json::json!({
+                "episodeId": ep.id,
+                "stage": "download",
+                "progress": progress,
+                "message": message,
+            }),
+        );
+    };
+    let audio_url = ep
+        .audio_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .or_else(|| fallback_url.filter(|u| !u.is_empty()));
+    let video_id = ep.video_id.as_deref().filter(|v| !v.is_empty());
+
+    emit_dl(0.0, "准备音频…");
+    if let Some(vid) = video_id {
+        // 纯 YouTube 单集若用户已离线下载，直接复用 downloads/
+        if audio_url.is_none() {
+            if let Some(saved) = offline::find(&state.data, &ep.id) {
+                let p = PathBuf::from(saved.path);
+                if p.is_file() {
+                    emit_dl(1.0, "使用已下载的音频");
+                    return Ok((p, false));
+                }
+            }
+        }
+        if crate::ytdlp::find_ytdlp(&state.data).is_none() {
+            emit_dl(0.0, "正在准备 YouTube 下载工具…");
+        } else {
+            emit_dl(0.0, "正在从 YouTube 获取音轨…");
+        }
+        let app_yt = app.clone();
+        let id_yt = ep.id.clone();
+        match asr::youtube_audio_with_progress(
+            &state.data,
+            vid,
+            work,
+            cancel.clone(),
+            move |p| {
+                let _ = app_yt.emit(
+                    "asr",
+                    serde_json::json!({
+                        "episodeId": id_yt,
+                        "stage": "download",
+                        "progress": p,
+                        "message": "正在从 YouTube 获取音轨…",
+                    }),
+                );
+            },
+        )
+        .await
+        {
+            Ok(got) => return Ok((got, false)),
+            Err(yt_err) => {
+                if cancel.load(Ordering::Relaxed) || audio_url.is_none() {
+                    return Err(e(yt_err));
+                }
+            }
+        }
+    }
+
+    if let Some(cached) = asr::find_cached_audio(&state.data, &ep.id) {
+        emit_dl(1.0, "使用已下载的音频");
+        return Ok((cached, true));
+    }
+
+    let Some(url) = audio_url else {
+        return Err("这集没有音频地址".into());
+    };
+    emit_dl(0.0, "正在下载音频…");
+    let ext = asr::audio_ext(&shared::canonical_audio_url(url)).to_string();
+    let dest_cache = offline::cache_path(&state.data, &ep.id, url);
+    let part = dest_cache.with_extension("part");
+    let _ = tokio::fs::create_dir_all(offline::cache_dir(&state.data)).await;
+    let res = asr::download_audio_url(url, &part, &cancel, |p| {
+        emit_dl(p, "正在下载音频…");
+    })
+    .await;
+    if let Err(err) = res {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(e(err));
+    }
+    match offline::commit_cached(&state.data, &ep.id, &part, &ext) {
+        Ok(kept) => Ok((PathBuf::from(kept.path), true)),
+        Err(_) => {
+            let fallback = work.join(format!("audio.{ext}"));
+            let _ = tokio::fs::rename(&part, &fallback).await;
+            Ok((fallback, true))
+        }
+    }
+}
+
+/// 识别单个 16kHz 音频分片（云端 OpenAI 兼容接口）；自动适配 Whisper verbose_json 与纯文本模型。
+async fn transcribe_cloud_chunk(
+    url: &str,
+    key: Option<&str>,
+    model: &str,
+    language: Option<&str>,
+    wav_bytes: Vec<u8>,
+    offset_sec: f64,
+    chunk_dur_sec: f64,
+    use_verbose_json: bool,
+    omit_language: bool,
+) -> anyhow::Result<(Option<String>, Vec<model::Segment>)> {
+    let part = reqwest::multipart::Part::bytes(wav_bytes)
+        .file_name("chunk.wav")
+        .mime_str("audio/wav")?;
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", model.to_string())
+        .part("file", part);
+    if use_verbose_json {
+        form = form.text("response_format", "verbose_json");
+    }
+    if !omit_language {
+        if let Some(lang) = language.filter(|s| !s.is_empty() && *s != "auto") {
+            form = form.text("language", lang.to_string());
+        }
+    }
+    let mut rb = net::client()
+        .post(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .multipart(form);
+    if let Some(k) = key.filter(|s| !s.is_empty()) {
+        rb = rb.bearer_auth(k);
+    }
+    let resp = rb.send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("识别失败 HTTP {status}: {body}");
+    }
+    let v: serde_json::Value = resp.json().await?;
+    let lang_out = v["language"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let mut segs = Vec::new();
+    let chunk_end = offset_sec + chunk_dur_sec;
+    for s in v["segments"].as_array().into_iter().flatten() {
+        let text = s["text"].as_str().unwrap_or("").trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let st = (offset_sec + s["start"].as_f64().unwrap_or(0.0)).max(offset_sec);
+        let en = (offset_sec + s["end"].as_f64().unwrap_or(chunk_dur_sec))
+            .max(st)
+            .min(chunk_end + 0.5);
+        segs.push(model::Segment {
+            start: st,
+            end: en,
+            text,
+        });
+    }
+    if segs.is_empty() {
+        if let Some(text) = v["text"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+            segs = captions::split_timed(text, offset_sec, chunk_end);
+        }
+    }
+    Ok((lang_out, segs))
+}
+
+/// 云端 Whisper 兼容接口（16kHz 单声道分片并发上传，支持播客与 YouTube、取消、进度、声纹对齐）。
 #[tauri::command]
-async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<Transcript> {
+async fn cloud_transcribe(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: CloudAsrReq,
+) -> Res<Transcript> {
     let ep = {
         let conn = state.db.lock().map_err(e)?;
         db::get_episode(&conn, &req.episode_id)
             .map_err(e)?
             .ok_or_else(|| "单集不存在".to_string())?
     };
+    let share_keys = shared::keys(&ep);
     if let Some(t) = take_shared(&state, &ep).await {
+        let _ = app.emit(
+            "asr",
+            serde_json::json!({
+                "episodeId": req.episode_id,
+                "stage": "done",
+                "progress": 1.0,
+            }),
+        );
         return Ok(t);
     }
     let base_url = resolve_saved_base_url(&state, "cloudAsr", &req.provider, &req.base_url)?;
     let key = secrets::get_key(&req.provider).map_err(e)?;
-    let bytes = net::get_bytes(&req.audio_url).await.map_err(e)?;
-    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name("audio.mp3")
-        .mime_str("audio/mpeg")
-        .map_err(e)?;
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", req.model.clone())
-        .text("response_format", "verbose_json")
-        .part("file", part);
-    if let Some(lang) = req.language.filter(|s| s != "auto") {
-        form = form.text("language", lang);
-    }
-    let mut req_builder = net::client().post(&url).multipart(form);
-    if let Some(k) = key.filter(|s| !s.is_empty()) {
-        req_builder = req_builder.bearer_auth(k);
-    } else if !req.provider.starts_with("asr.local") && req.provider != "local-server" {
+    if key.as_deref().unwrap_or("").is_empty()
+        && !req.provider.starts_with("asr.local")
+        && req.provider != "local-server"
+    {
         return Err("云端识别需要 API Key".into());
     }
-    let resp = req_builder.send().await.map_err(e)?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let t = resp.text().await.unwrap_or_default();
-        return Err(format!("识别失败 HTTP {status}: {t}"));
-    }
-    let v: serde_json::Value = resp.json().await.map_err(e)?;
-    let mut segments = Vec::new();
-    for s in v["segments"].as_array().into_iter().flatten() {
-        let text = s["text"].as_str().unwrap_or("").trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
-        segments.push(model::Segment {
-            start: s["start"].as_f64().unwrap_or(0.0),
-            end: s["end"].as_f64().unwrap_or(0.0),
-            text,
-        });
-    }
-    if segments.is_empty() {
-        if let Some(text) = v["text"].as_str().filter(|t| !t.trim().is_empty()) {
-            segments.push(model::Segment {
-                start: 0.0,
-                end: 0.0,
-                text: text.trim().to_string(),
-            });
-        }
-    }
-    let segments = captions::resegment(captions::clean(segments));
-    if segments.is_empty() {
-        return Err("没有识别出文字".into());
-    }
-    let t = Transcript {
-        episode_id: ep.id.clone(),
-        source: "cloud".into(),
-        language: v["language"].as_str().unwrap_or("auto").into(),
-        segments,
+    let _guard = begin_job(&state, &req.episode_id);
+    let cancel = _guard.cancel_flag();
+    let work = state
+        .data
+        .join("work")
+        .join(format!("{}-{}", ep.id, Uuid::new_v4()));
+    let _ = tokio::fs::create_dir_all(&work).await;
+    let emit_asr = |stage: &str, progress: f64, message: Option<&str>| {
+        let _ = app.emit(
+            "asr",
+            serde_json::json!({
+                "episodeId": ep.id,
+                "stage": stage,
+                "progress": progress,
+                "message": message,
+            }),
+        );
     };
-    let share_keys = shared::keys(&ep);
-    {
-        let conn = state.db.lock().map_err(e)?;
-        db::save_transcript(&conn, &t).map_err(e)?;
-        let meta = serde_json::json!({ "source": "cloud", "model": req.model });
-        let _ = db::set_blob(&conn, &ep.id, "asr-meta", &meta.to_string());
-    }
-    if !share_keys.is_empty() {
-        let (on, install) = {
+
+    let run = async {
+        let (audio, is_podcast_audio) = prepare_asr_audio(
+            &app,
+            &state,
+            &ep,
+            req.audio_url.as_deref(),
+            &work,
+            cancel.clone(),
+        )
+        .await?;
+
+        emit_asr("transcribe", 0.02, Some("正在解码音频…"));
+        let (src, cancel_dec) = (audio.clone(), cancel.clone());
+        let (tx, rx) = std::sync::mpsc::channel::<f64>();
+        let decode_job = tokio::task::spawn_blocking(move || {
+            asr::decode_16k_mono_progressive(src.as_path(), cancel_dec, Some(tx))
+        });
+        let app_prog = app.clone();
+        let ep_prog = ep.id.clone();
+        let pump = tokio::task::spawn_blocking(move || {
+            while let Ok(p) = rx.recv() {
+                let _ = app_prog.emit(
+                    "asr",
+                    serde_json::json!({
+                        "episodeId": ep_prog,
+                        "stage": "transcribe",
+                        "progress": 0.02 + p * 0.14,
+                        "message": "正在解码音频…",
+                    }),
+                );
+            }
+        });
+        let samples = decode_job.await.map_err(e)?.map_err(e)?;
+        let _ = pump.await;
+        if samples.is_empty() {
+            return Err("音频解码为空".into());
+        }
+
+        let endpoint = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
+        let lower_url = endpoint.to_lowercase();
+        let lower_model = req.model.to_lowercase();
+        let is_siliconflow = lower_url.contains("siliconflow");
+        let is_bigmodel = lower_url.contains("bigmodel.cn");
+        let is_local = req.provider.starts_with("asr.local") || req.provider == "local-server";
+        // 仅 Whisper 类模型支持 verbose_json；gpt-4o-transcribe / 硅基流动 / GLM 走默认 JSON + 20s 分片摊分时间
+        let use_verbose_json = !is_siliconflow && !is_bigmodel && lower_model.contains("whisper");
+        let omit_language = is_siliconflow;
+        // Whisper verbose_json 用 120s 分片兼顾上下文与速度（约 3.8MB WAV）；纯文本接口用 25s 分片保证时间粒度细腻
+        let chunk_secs: usize = if use_verbose_json { 120 } else { 25 };
+        let chunk_samples = chunk_secs * 16_000;
+        let total_chunks = samples.len().div_ceil(chunk_samples);
+        let concurrency = if is_local { 1 } else { 4 };
+        let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let done_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let samples = Arc::new(samples);
+
+        emit_asr("transcribe", 0.16, Some("上传并识别…"));
+        let mut handles = Vec::with_capacity(total_chunks);
+        for idx in 0..total_chunks {
+            let sem = sem.clone();
+            let cancel_c = cancel.clone();
+            let samples_c = samples.clone();
+            let endpoint_c = endpoint.clone();
+            let key_c = key.clone();
+            let model_c = req.model.clone();
+            let lang_c = req.language.clone();
+            let done_c = done_count.clone();
+            let app_c = app.clone();
+            let ep_id_c = ep.id.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("任务已取消"))?;
+                if cancel_c.load(Ordering::Relaxed) {
+                    anyhow::bail!("已取消");
+                }
+                let start_sample = idx * chunk_samples;
+                let end_sample = (start_sample + chunk_samples).min(samples_c.len());
+                let slice = &samples_c[start_sample..end_sample];
+                let offset_sec = start_sample as f64 / 16_000.0;
+                let dur_sec = slice.len() as f64 / 16_000.0;
+                // 纯静音分片直接跳过，省费用也避免 Whisper 静音幻觉
+                let energy = slice
+                    .iter()
+                    .step_by(16)
+                    .map(|x| x.abs())
+                    .fold(0.0f32, f32::max);
+                let res = if energy < 0.002 {
+                    Ok((None, Vec::new()))
+                } else {
+                    let wav = asr::encode_wav_bytes(slice);
+                    transcribe_cloud_chunk(
+                        &endpoint_c,
+                        key_c.as_deref(),
+                        &model_c,
+                        lang_c.as_deref(),
+                        wav,
+                        offset_sec,
+                        dur_sec,
+                        use_verbose_json,
+                        omit_language,
+                    )
+                    .await
+                };
+                let finished = done_c.fetch_add(1, Ordering::Relaxed) + 1;
+                let pct = 0.16 + 0.82 * (finished as f64 / total_chunks.max(1) as f64);
+                let _ = app_c.emit(
+                    "asr",
+                    serde_json::json!({
+                        "episodeId": ep_id_c,
+                        "stage": "transcribe",
+                        "progress": pct.min(0.98),
+                        "message": "上传并识别…",
+                    }),
+                );
+                res.map(|x| (idx, x))
+            }));
+        }
+
+        let mut chunk_results = Vec::with_capacity(total_chunks);
+        for h in handles {
+            let pair = h.await.map_err(e)?.map_err(e)?;
+            chunk_results.push(pair);
+        }
+        chunk_results.sort_by_key(|(idx, _)| *idx);
+
+        let mut detected_lang: Option<String> = None;
+        let mut all_segs = Vec::new();
+        for (_, (lang_opt, segs)) in chunk_results {
+            if detected_lang.is_none() {
+                detected_lang = lang_opt;
+            }
+            all_segs.extend(segs);
+        }
+
+        let segments = captions::resegment(captions::clean(all_segs));
+        if segments.is_empty() {
+            return Err("没有识别出文字（可能是静音或纯音乐）".into());
+        }
+        let sample_text: String = segments.iter().take(5).map(|s| s.text.as_str()).collect();
+        let language = detected_lang
+            .or_else(|| req.language.clone().filter(|s| s != "auto"))
+            .unwrap_or_else(|| {
+                if sample_text
+                    .chars()
+                    .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+                {
+                    "zh".into()
+                } else {
+                    "auto".into()
+                }
+            });
+        let t = Transcript {
+            episode_id: ep.id.clone(),
+            source: "cloud".into(),
+            language,
+            segments,
+        };
+        let file_bytes = std::fs::metadata(&audio).map(|m| m.len()).unwrap_or(0);
+        let audio_ref = if is_podcast_audio && file_bytes > 0 {
+            let audio_for_fp = audio.clone();
+            tokio::task::spawn_blocking(move || align::fingerprint_audio(&audio_for_fp))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .map(|(secs, fp)| align::AudioRef {
+                    bytes: file_bytes,
+                    etag: String::new(),
+                    secs,
+                    fp: Some(align::encode_fp(&fp)),
+                    shared_id: None,
+                    has_fp: true,
+                })
+        } else {
+            None
+        };
+        {
             let conn = state.db.lock().map_err(e)?;
-            (share_on(&conn) && !is_private_episode(&conn, &ep), install_id(&conn))
+            db::save_transcript(&conn, &t).map_err(e)?;
+            let meta = serde_json::json!({ "source": "cloud", "model": req.model });
+            let _ = db::set_blob(&conn, &ep.id, "asr-meta", &meta.to_string());
+            if let Some(ref aref) = audio_ref {
+                let _ = db::set_blob(
+                    &conn,
+                    &ep.id,
+                    "audio-ref",
+                    &serde_json::to_string(aref).unwrap_or_default(),
+                );
+                let _ = db::set_blob(
+                    &conn,
+                    &ep.id,
+                    "tmap",
+                    &serde_json::to_string(&align::TimeMap::same(file_bytes)).unwrap_or_default(),
+                );
+            }
+        }
+        emit_asr("done", 1.0, None);
+        Ok((t, audio_ref))
+    };
+
+    let result = run.await;
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    drop(_guard);
+    if let (Ok((ref t, ref audio_ref)), false) = (&result, share_keys.is_empty()) {
+        let (on, install) = match state.db.lock() {
+            Ok(conn) => (
+                share_on(&conn) && !is_private_episode(&conn, &ep),
+                install_id(&conn),
+            ),
+            Err(_) => (false, String::new()),
         };
         if on {
             let last_end = t.segments.last().map(|s| s.end).unwrap_or(0.0);
@@ -1297,7 +1658,7 @@ async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<T
                 language: t.language.clone(),
                 install,
                 translation: None,
-                audio: None,
+                audio: audio_ref.clone(),
             };
             let segs = t.segments.clone();
             tokio::spawn(async move {
@@ -1305,7 +1666,18 @@ async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<T
             });
         }
     }
-    Ok(t)
+    if let Err(ref err) = result {
+        let _ = app.emit(
+            "asr",
+            serde_json::json!({
+                "episodeId": req.episode_id,
+                "stage": "error",
+                "progress": 0.0,
+                "message": err,
+            }),
+        );
+    }
+    result.map(|(t, _)| t)
 }
 
 #[derive(Deserialize)]
@@ -1818,18 +2190,23 @@ async fn align_audio(
         return reply_none("same");
     };
 
-    if let Some(m) = saved_map {
-        let fits = m.play_bytes == local_bytes || (m.method == "same" && local.is_none());
-        if fits && m.method != "same" && !(force && m.method != "manual") {
-            return Ok(AlignedResp {
-                status: "aligned",
-                map: Some(m),
-                path: local.map(|l| l.path),
-                local_bytes,
-            });
-        }
-        if fits && m.method == "same" && !force {
-            return reply_none("same");
+    if !force {
+        if let Some(m) = saved_map {
+            let fits = m.play_bytes == local_bytes || (m.method == "same" && local.is_none());
+            if fits && m.method == "same" {
+                return reply_none("same");
+            }
+            if fits && m.method == "manual" && m.pieces.is_empty() {
+                return reply_none("unknown");
+            }
+            if fits && m.method != "same" {
+                return Ok(AlignedResp {
+                    status: "aligned",
+                    map: Some(m),
+                    path: local.map(|l| l.path),
+                    local_bytes,
+                });
+            }
         }
     }
 
@@ -2219,83 +2596,10 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
     };
 
     let run = async {
-        // 选源：缓存/离线 → 播客直链 → YouTube。共享库已在 take_shared 跳过整段。
-        emit_asr("download", 0.0, Some("准备音频…"));
-        let audio = if let Some(cached) = asr::find_cached_audio(&state.data, &ep.id) {
-            emit_asr("download", 1.0, Some("使用已下载的音频"));
-            cached
-        } else if let Some(url) = ep.audio_url.as_deref().filter(|u| !u.is_empty()) {
-            emit_asr("download", 0.0, Some("正在下载音频…"));
-            let dest = work.join(format!(
-                "audio.{}",
-                asr::audio_ext(&shared::canonical_audio_url(url))
-            ));
-            asr::download_audio_url(url, &dest, &cancel, |p| {
-                emit_asr("download", p, Some("正在下载音频…"));
-            })
-            .await
-            .map_err(e)?;
-            // 落入 downloads/，下次 ASR / 离线听都不用再拉几百 MB
-            let ext = dest
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("m4a");
-            let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
-            let part = offline::dir(&state.data).join(format!("{}.{ext}.part", ep.id));
-            let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
-            if tokio::fs::copy(&dest, &part).await.is_ok()
-                && tokio::fs::rename(&part, &kept).await.is_ok()
-            {
-                kept
-            } else {
-                let _ = tokio::fs::remove_file(&part).await;
-                dest
-            }
-        } else if let Some(vid) = ep.video_id.as_deref().filter(|v| !v.is_empty()) {
-            if crate::ytdlp::find_ytdlp(&state.data).is_none() {
-                emit_asr("download", 0.0, Some("正在准备 YouTube 下载工具…"));
-            } else {
-                emit_asr("download", 0.0, Some("正在从 YouTube 获取音轨…"));
-            }
-            let app_yt = app.clone();
-            let id_yt = ep.id.clone();
-            let got = asr::youtube_audio_with_progress(
-                &state.data,
-                vid,
-                &work,
-                cancel.clone(),
-                move |p| {
-                    let _ = app_yt.emit(
-                        "asr",
-                        serde_json::json!({
-                            "episodeId": id_yt,
-                            "stage": "download",
-                            "progress": p,
-                            "message": "正在从 YouTube 获取音轨…",
-                        }),
-                    );
-                },
-            )
-            .await
-            .map_err(e)?;
-            let ext = got
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("m4a");
-            let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
-            let part = offline::dir(&state.data).join(format!("{}.{ext}.part", ep.id));
-            let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
-            if tokio::fs::copy(&got, &part).await.is_ok()
-                && tokio::fs::rename(&part, &kept).await.is_ok()
-            {
-                kept
-            } else {
-                let _ = tokio::fs::remove_file(&part).await;
-                got
-            }
-        } else {
-            return Err("这集没有音频地址".into());
-        };
+        // 统一选源：双形态优先 YouTube（视频同源），纯播客优先本地缓存并落入 audio-cache/（不污染 downloads/）
+        let _ = tokio::fs::create_dir_all(&work).await;
+        let (audio, is_podcast_audio) =
+            prepare_asr_audio(&app, &state, &ep, None, &work, cancel.clone()).await?;
 
         let (language_out, segments) = if resolved.engine == "qwen3" {
             let bin = match asr::find_crispasr(&state.data) {
@@ -2399,9 +2703,9 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
             language: language_out,
             segments,
         };
-        let audio_for_fp = audio.clone();
         let file_bytes = std::fs::metadata(&audio).map(|m| m.len()).unwrap_or(0);
-        let audio_ref = if file_bytes > 0 {
+        let audio_ref = if is_podcast_audio && file_bytes > 0 {
+            let audio_for_fp = audio.clone();
             tokio::task::spawn_blocking(move || align::fingerprint_audio(&audio_for_fp))
                 .await
                 .ok()

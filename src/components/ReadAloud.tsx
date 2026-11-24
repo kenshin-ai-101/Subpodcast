@@ -13,7 +13,7 @@ import { localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { TTS_SERVICES } from "../lib/settings";
 import { currentTtsService, speak, stopSpeaking } from "../lib/tts";
 import { useStore } from "../store";
-import { RatePicker } from "./RatePicker";
+import { RateControl, RatePicker } from "./RatePicker";
 import { LOCAL_TTS_MODELS, PreviewButton, useSystemVoices } from "./TtsSettings";
 
 export function ReadAloud({ text, title }: { text: () => string; title?: string }) {
@@ -57,7 +57,7 @@ export function ReadAloud({ text, title }: { text: () => string; title?: string 
   );
 }
 
-function ReadAloudSettings({ onClose }: { onClose: () => void }) {
+export function ReadAloudSettings({ onClose }: { onClose: () => void }) {
   const t = useT();
   const { service, save, set } = useStore(useShallow((s) => ({
     service: currentTtsService(s.settings), save: s.saveSettings, set: s.set,
@@ -113,6 +113,10 @@ function ReadAloudSettings({ onClose }: { onClose: () => void }) {
           </select>
         </label>
       )}
+      <label className="tts-field">
+        {t("朗读语速")}
+        <RateControl />
+      </label>
       <div className="row-actions">
         <PreviewButton service={service} disabled={missing} />
         <button type="button" className="link-btn small" onClick={() => {

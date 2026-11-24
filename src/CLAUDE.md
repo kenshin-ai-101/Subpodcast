@@ -37,6 +37,7 @@ lib/asrModels.ts: 本机模型列表/下载/删除进度
 lib/ai.ts: 问答/导读提示词与文稿打包
 lib/guides.ts: 导读任务态；共享查找/上传；blob summary + summary-from
 lib/tts.ts: 统一朗读、试听、切块预取；本机 Web Speech / 磁盘合成音频播控
+lib/subtitleRead.ts: 外语字幕「中文」模式逐句中文朗读（预取下一句、实时语速同步、与原音频播放互斥）
 lib/localTts.ts: Melo / Kokoro 状态、下载进度、取消与删除
 lib/chats.ts: 问答会话/历史持久化 + 流式 ask
 lib/llmGate.ts: 串行化 llm-delta
@@ -81,11 +82,11 @@ components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio；savedPath；认领时 resumeAudioIfWanted；有字幕时自动 alignCurrent
 components/YtEngine.tsx: App 根 iframe；cue/load 换片（switchingRef 挡旧片时钟）；失活 stop+mute；倍速同步 mediaClock（上限 2×）
 components/MiniPlayer.tsx: 非单集页音频迷你条（进度跟 rawTime ?? time）
-components/PlayerBar.tsx: 绑页内 episode；AudioSubtitles 短句 now/next；进度条跟 rawTime/seekRaw；switchTo；theater
+components/PlayerBar.tsx: 绑页内 episode；AudioSubtitles 短句 now/next；进度条拖拽本地缓冲 + rawTime/seekRaw；switchTo；theater
 components/SubtitleOverlay.tsx: 视频叠字幕按块内进度只显当前短句（pieceAt + SUBTITLE_LEAD）
 components/AlignBar.tsx: 自动声纹/语音探针对齐进度与手动对齐（点句锚点 / ±1s / 恢复 / skipAds）
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
-components/TranscriptPane.tsx: GenCard/导出/学英语/对齐（跨源或时长错位提示条）；panel-bar；按句订阅 active；高光
+components/TranscriptPane.tsx: GenCard/导出/学英语/对齐（跨源或时长错位提示条 + 手动滚动暂停跟随与回到当前位置）；panel-bar；按句订阅 active；高光
 components/HighlightViews.tsx: HighlightsPanel / SeekHighlights / useClipWarm
 components/VideoClipDialog.tsx: 剪视频工作室（左 WYSIWYG 预览 / 右正片·封面·文案；开窗 auto-prepare 一次、失败不空转重试；预热走 HighlightViews.useClipWarm）；App 挂 VideoClipDialogHost
 lib/webfonts.ts: 封面可选开源中文字体（ensureFont / familyOf）

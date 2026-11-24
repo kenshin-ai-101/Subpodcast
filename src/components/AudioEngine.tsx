@@ -44,12 +44,12 @@ export function AudioEngine() {
     wasActive.current = true;
   }, [active, current?.id, current?.audioUrl, savedPath]);
 
-  // 有字幕且走音频引擎时自动检测并对齐（同字节直接跳过；有参考声纹但音频不同则自动声纹对齐）
+  // 有字幕且走音频引擎时自动检测并对齐（同字节直接跳过；新下载/缓存落盘后也会重新核对）
   useEffect(() => {
     if (active && current && hasSubtitles) {
       void alignCurrent(false);
     }
-  }, [active, current?.id, hasSubtitles]);
+  }, [active, current?.id, hasSubtitles, savedPath]);
 
   return null;
 }

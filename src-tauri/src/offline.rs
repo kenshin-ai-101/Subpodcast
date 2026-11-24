@@ -80,7 +80,15 @@ pub fn list_cached(data: &Path) -> Vec<Saved> {
 }
 
 pub fn find_cached(data: &Path, episode_id: &str) -> Option<Saved> {
-    list_cached(data).into_iter().find(|s| s.episode_id == episode_id)
+    let found = list_cached(data)
+        .into_iter()
+        .find(|s| s.episode_id == episode_id)?;
+    // 命中时刷新 mtime，使 audio-cache/ 严格按最近使用（LRU）淘汰
+    let _ = std::fs::File::options()
+        .write(true)
+        .open(&found.path)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    Some(found)
 }
 
 /// 将对齐下载完成的 .part 原子移入 audio-cache/，并按 LRU 控制总占用。
@@ -134,7 +142,7 @@ pub fn clear(data: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 下载单集音频到 downloads/{id}.{ext}。
+/// 下载单集音频到 downloads/{id}.{ext}；若 audio-cache/ 已有同集缓存则直接转正，避免重复下载并锁定同一份剪辑。
 pub async fn download(
     data: &Path,
     ep: &Episode,
@@ -143,6 +151,35 @@ pub async fn download(
 ) -> Result<Saved> {
     let d = dir(data);
     tokio::fs::create_dir_all(&d).await?;
+    // 优先转正 audio-cache/ 已有缓存（仅缓存播客直链文件，与 enclosure 路线一致）
+    if ep.audio_url.as_deref().is_some_and(|u| !u.is_empty()) {
+        if let Some(cached) = find_cached(data, &ep.id) {
+            let src = PathBuf::from(&cached.path);
+            let ext = src
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("mp3")
+                .to_string();
+            for old in list(data) {
+                if old.episode_id == ep.id {
+                    let _ = tokio::fs::remove_file(&old.path).await;
+                }
+            }
+            let dest = d.join(format!("{}.{ext}", ep.id));
+            let part = d.join(format!("{}.{ext}.part", ep.id));
+            if tokio::fs::copy(&src, &part).await.is_ok()
+                && tokio::fs::rename(&part, &dest).await.is_ok()
+            {
+                let _ = tokio::fs::remove_file(&src).await;
+                progress(Some(1.0));
+                if let Some(s) = saved_file(&dest) {
+                    return Ok(s);
+                }
+            } else {
+                let _ = tokio::fs::remove_file(&part).await;
+            }
+        }
+    }
     let work = d.join(format!(".tmp-{}", ep.id));
     let _ = tokio::fs::remove_dir_all(&work).await;
     tokio::fs::create_dir_all(&work).await?;
@@ -163,6 +200,11 @@ pub async fn download(
                 .and_then(|x| x.to_str())
                 .unwrap_or("m4a")
                 .to_string();
+            for old in list(data) {
+                if old.episode_id == ep.id {
+                    let _ = tokio::fs::remove_file(&old.path).await;
+                }
+            }
             let dest = d.join(format!("{}.{ext}", ep.id));
             tokio::fs::rename(&src, &dest)
                 .await
@@ -199,6 +241,28 @@ mod tests {
         remove(&data, "a").unwrap();
         assert!(find(&data, "a").is_none());
         clear(&data).unwrap();
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn audio_cache_is_isolated_from_downloads() {
+        let data = std::env::temp_dir().join(format!(
+            "subpodcast-cache-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(cache_dir(&data)).unwrap();
+        let part = cache_dir(&data).join("ep1.part");
+        std::fs::write(&part, b"abcdef").unwrap();
+        let saved = commit_cached(&data, "ep1", &part, "mp3").unwrap();
+        assert_eq!(saved.episode_id, "ep1");
+        assert_eq!(saved.bytes, 6);
+        assert!(find(&data, "ep1").is_none());
+        assert!(find_cached(&data, "ep1").is_some());
+        clear_cached(&data).unwrap();
+        assert!(find_cached(&data, "ep1").is_none());
         let _ = std::fs::remove_dir_all(&data);
     }
 }

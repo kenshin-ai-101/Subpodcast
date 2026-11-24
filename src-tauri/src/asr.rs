@@ -502,9 +502,15 @@ pub async fn download_audio_url(
     .await
 }
 
-/// 复用本集已下载过的音频：offline downloads/ 或未清理的 work/{id}-*/audio.*。
+/// 复用本集已下载过的播客音频：offline downloads/ → audio-cache/ → 未清理的 work/{id}-*/audio.*。
 pub fn find_cached_audio(data: &Path, episode_id: &str) -> Option<PathBuf> {
     if let Some(s) = crate::offline::find(data, episode_id) {
+        let p = PathBuf::from(s.path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(s) = crate::offline::find_cached(data, episode_id) {
         let p = PathBuf::from(s.path);
         if p.is_file() {
             return Some(p);
@@ -686,7 +692,7 @@ pub async fn fetch_episode_audio(
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(work)?;
     if let Some(url) = audio_url.filter(|u| !u.is_empty()) {
-        let dest = work.join(format!("audio.{}", audio_ext(url)));
+        let dest = work.join(format!("audio.{}", audio_ext(&crate::shared::canonical_audio_url(url))));
         download_audio_url(url, &dest, &cancel, &mut progress).await?;
         return Ok(dest);
     }
@@ -697,6 +703,28 @@ pub async fn fetch_episode_audio(
     let found = youtube_audio(data, vid, work, cancel).await?;
     progress(1.0);
     Ok(found)
+}
+
+/// 把 16kHz 单声道 f32 样本编码为内存 WAV 字节（供云端分段上传）。
+pub fn encode_wav_bytes(samples: &[f32]) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&16000u32.to_le_bytes());
+    out.extend_from_slice(&32000u32.to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    out
 }
 
 pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
