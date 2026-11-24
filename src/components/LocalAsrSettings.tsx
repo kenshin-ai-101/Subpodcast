@@ -10,9 +10,11 @@ import { Check, Trash2, X } from "lucide-react";
 import { errText } from "../lib/api";
 import { useAsrModels } from "../lib/asrModels";
 import { ask } from "../lib/confirm";
+import { useT } from "../lib/i18n";
 import { useStore } from "../store";
 
 export function LocalAsrPicker() {
+  const t = useT();
   const { settings, saveSettings, notify } = useStore(
     useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, notify: s.notify })),
   );
@@ -41,10 +43,10 @@ export function LocalAsrPicker() {
 
   return (
     <div className="provider-form">
-      <p className="muted small">音频留在本机。会自动复用 SubCast / HF 缓存里已有的同名模型，不必重复下载。</p>
+      <p className="muted small">{t("音频留在本机。会自动复用 SubCast / HF 缓存里已有的同名模型，不必重复下载。")}</p>
       {error && <p className="muted small">{error}</p>}
       {loading && !models.length ? (
-        <p className="muted small">读取模型列表…</p>
+        <p className="muted small">{t("读取模型列表…")}</p>
       ) : (
         <div className="asr-model-list">
           {shown.map((m) => {
@@ -69,16 +71,16 @@ export function LocalAsrPicker() {
                     <>
                       <span className="muted small">{Math.round((dl ?? 0) * 100)}%</span>
                       <button type="button" className="btn ghost sm" onClick={() => void cancelDownload(m.id)}>
-                        取消
+                        {t("取消")}
                       </button>
                     </>
                   ) : m.installed && m.from ? (
                     <>
-                      <span className="from-tag small">来自 {m.from}</span>
+                      <span className="from-tag small">{t("来自 {from}", { from: m.from })}</span>
                       <button
                         type="button"
                         className="icon-btn sm"
-                        title="不再使用（原文件保留）"
+                        title={t("不再使用（原文件保留）")}
                         onClick={() => void remove(m.id).catch((e) => notify(errText(e)))}
                       >
                         <X size={14} />
@@ -87,14 +89,14 @@ export function LocalAsrPicker() {
                   ) : m.installed ? (
                     <>
                       <span className="ok-text small">
-                        <Check size={13} /> 已下载
+                        <Check size={13} /> {t("已下载")}
                       </span>
                       <button
                         type="button"
                         className="icon-btn sm"
-                        title="删除模型"
+                        title={t("删除模型")}
                         onClick={() =>
-                          void ask(`删除「${m.name}」？以后生成字幕需要重新下载。`).then((ok) => {
+                          void ask(t("删除「{name}」？以后生成字幕需要重新下载。", { name: m.name })).then((ok) => {
                             if (ok) void remove(m.id).catch((e) => notify(errText(e)));
                           })
                         }
@@ -108,7 +110,7 @@ export function LocalAsrPicker() {
                       className="btn sm"
                       onClick={() => void download(m.id).catch((e) => notify(errText(e)))}
                     >
-                      下载
+                      {t("下载")}
                     </button>
                   )}
                 </div>
@@ -125,11 +127,11 @@ export function LocalAsrPicker() {
       <div className="row-actions" style={{ marginTop: 8, gap: 8, display: "flex", flexWrap: "wrap" }}>
         {!more && rest.length > 0 && (
           <button type="button" className="btn ghost sm" onClick={() => setMore(true)}>
-            其他模型（Whisper）
+            {t("其他模型（Whisper）")}
           </button>
         )}
         <button type="button" className="btn ghost sm" disabled={loading} onClick={() => void rescan()}>
-          重新查找本机模型
+          {t("重新查找本机模型")}
         </button>
       </div>
     </div>

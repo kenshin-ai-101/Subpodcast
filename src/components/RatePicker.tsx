@@ -7,13 +7,15 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
+import { useT } from "../lib/i18n";
 import { TTS_RATES } from "../lib/settings";
 import { useStore } from "../store";
 
 export function RateControl({ onPick }: { onPick?: () => void }) {
+  const t = useT();
   const { rate, save } = useStore(useShallow((s) => ({ rate: s.settings.ttsRate, save: s.saveSettings })));
   return (
-    <div className="tts-rate" role="group" aria-label="朗读语速">
+    <div className="tts-rate" role="group" aria-label={t("朗读语速")}>
       {TTS_RATES.map((value) => (
         <button type="button" key={value} aria-pressed={rate === value} onClick={() => {
           void save({ ttsRate: value });
@@ -27,6 +29,7 @@ export function RateControl({ onPick }: { onPick?: () => void }) {
 }
 
 export function RatePicker() {
+  const t = useT();
   const rate = useStore((s) => s.settings.ttsRate);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -46,7 +49,7 @@ export function RatePicker() {
 
   return (
     <div className="tts-rate-picker" ref={root}>
-      <button type="button" className="btn sm" title="朗读语速" aria-label={`朗读语速 ${rate} 倍`} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button type="button" className="btn sm" title={t("朗读语速")} aria-label={t("朗读语速 {rate} 倍", { rate })} aria-expanded={open} onClick={() => setOpen(!open)}>
         {rate}× <ChevronDown size={12} />
       </button>
       {open && <div className="tts-rate-pop"><RateControl onPick={() => setOpen(false)} /></div>}

@@ -326,30 +326,39 @@ pub async fn download_file(
     let mut stream = res.bytes_stream();
     let mut received = 0u64;
     let mut last = std::time::Instant::now();
-    while let Some(chunk) = stream.next().await {
-        if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(anyhow!("已取消"));
+    let dl: Result<()> = async {
+        while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(anyhow!("已取消"));
+            }
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+            received += chunk.len() as u64;
+            if last.elapsed().as_millis() > 200 {
+                // 无 Content-Length 时用渐进估值，避免界面一直停在 0%
+                let report_total = total.or_else(|| Some((received * 5 / 4).max(received + 1)));
+                progress(received, report_total);
+                last = std::time::Instant::now();
+            }
         }
-        let chunk = chunk?;
-        file.write_all(&chunk).await?;
-        received += chunk.len() as u64;
-        if last.elapsed().as_millis() > 200 {
-            // 无 Content-Length 时用渐进估值，避免界面一直停在 0%
-            let report_total = total.or_else(|| Some((received * 5 / 4).max(received + 1)));
-            progress(received, report_total);
-            last = std::time::Instant::now();
+        file.flush().await?;
+        if let Some(t) = total {
+            if received < t {
+                return Err(anyhow!("下载不完整"));
+            }
         }
+        Ok(())
     }
-    file.flush().await?;
+    .await;
     drop(file);
-    if let Some(t) = total {
-        if received < t {
-            return Err(anyhow!("下载不完整"));
-        }
+    if let Err(err) = dl {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(err);
     }
-    tokio::fs::rename(&part, dest).await?;
+    if let Err(err) = tokio::fs::rename(&part, dest).await {
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(err.into());
+    }
     progress(received, total);
     Ok(())
 }
@@ -635,12 +644,12 @@ async fn youtube_audio_with(
                 last_line = line;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
-                if let Some(status) = child.try_wait()? {
-                    if !status.success() {
-                        return Err(anyhow!(
-                            "下载 YouTube 音频失败：{}",
-                            last_line.chars().take(200).collect::<String>()
-                        ));
+                if let Some(_status) = child.try_wait()? {
+                    // 进程已退出但 stderr 管道可能还有最后几行 ERROR，继续 drain 到 EOF
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if !line.trim().is_empty() {
+                            last_line = line;
+                        }
                     }
                     break;
                 }

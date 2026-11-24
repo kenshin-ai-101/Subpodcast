@@ -6,6 +6,7 @@
  */
 import { create } from "zustand";
 import { api, type Episode } from "./api";
+import { tNow } from "./i18n";
 import { useStore } from "../store";
 import { playSoon } from "./playback";
 
@@ -37,7 +38,7 @@ export async function playNext() {
     const [next, ...rest] = queue;
     useQueue.setState({ queue: rest });
     if (!next) return;
-    useStore.getState().notify(`接着播放：${next.title.slice(0, 40)}`);
+    useStore.getState().notify(tNow("接着播放：{title}", { title: next.title.slice(0, 40) }));
     start(next);
     return;
   }
@@ -49,7 +50,7 @@ export async function playNext() {
     const i = playable.findIndex((e) => e.id === current.id);
     const next = i >= 0 ? playable[i + 1] : undefined;
     if (!next) return;
-    useStore.getState().notify(`接着播放：${next.title.slice(0, 40)}`);
+    useStore.getState().notify(tNow("接着播放：{title}", { title: next.title.slice(0, 40) }));
     start(next);
   } catch {
     /* 安静失败 */

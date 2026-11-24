@@ -8,6 +8,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { api, errText, type ListenRow } from "../lib/api";
+import { monthName } from "../lib/format";
+import { resolveLocale, tNow, useT } from "../lib/i18n";
 import { PICKS, showName } from "../lib/picks";
 import type { Settings } from "../lib/settings";
 import { useStore } from "../store";
@@ -20,15 +22,17 @@ const cjk = (s: string) => /[一-鿿]/.test(s);
 
 function span(seconds: number): string {
   const m = Math.round(seconds / 60);
-  if (seconds < 60) return `${Math.round(seconds)} 秒`;
-  if (m < 60) return `${m} 分钟`;
+  if (seconds < 60) return tNow("{n} 秒", { n: Math.round(seconds) });
+  if (m < 60) return tNow("{m} 分钟", { m });
   const h = Math.floor(m / 60);
   const r = m % 60;
-  return r ? `${h} 小时 ${r} 分` : `${h} 小时`;
+  return r ? tNow("{h} 小时 {m} 分", { h, m: r }) : tNow("{h} 小时", { h });
 }
 
 const dayLabel = (day: string) => {
   const d = new Date(`${day}T00:00:00`);
+  const loc = resolveLocale(useStore.getState().settings.uiLang);
+  if (loc === "en") return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 };
 
@@ -41,17 +45,17 @@ const RANGES: [Range, string, number][] = [
 ];
 
 const EQUIV = [
-  { secs: 13 * 3600, one: "一次北京直飞纽约", many: (n: number) => `${n} 次北京直飞纽约`, basis: "按单程约 13 小时" },
-  { secs: 4.5 * 3600, one: "一趟京沪高铁", many: (n: number) => `${n} 趟京沪高铁`, basis: "按单程约 4.5 小时" },
-  { secs: 2 * 3600, one: "一部电影", many: (n: number) => `${n} 部电影`, basis: "按每部约 2 小时" },
-  { secs: 4 * 60, one: "一首歌", many: (n: number) => `${n} 首歌`, basis: "按每首约 4 分钟" },
+  { secs: 13 * 3600, one: "一次北京直飞纽约", manyKey: "{n} 次北京直飞纽约", basis: "按单程约 13 小时" },
+  { secs: 4.5 * 3600, one: "一趟京沪高铁", manyKey: "{n} 趟京沪高铁", basis: "按单程约 4.5 小时" },
+  { secs: 2 * 3600, one: "一部电影", manyKey: "{n} 部电影", basis: "按每部约 2 小时" },
+  { secs: 4 * 60, one: "一首歌", manyKey: "{n} 首歌", basis: "按每首约 4 分钟" },
 ];
 
 function equivalent(total: number) {
   const e = EQUIV.find((x) => total >= x.secs) ?? EQUIV[EQUIV.length - 1]!;
   const n = Math.round((total / e.secs) * 10) / 10;
-  const text = n < 1.15 ? e.one : e.many(n >= 10 ? Math.round(n) : n);
-  return { text, basis: e.basis };
+  const text = n < 1.15 ? tNow(e.one) : tNow(e.manyKey, { n: n >= 10 ? Math.round(n) : n });
+  return { text, basis: tNow(e.basis) };
 }
 
 const PERSONAS = [
@@ -87,13 +91,14 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
 }
 
 function Clock({ hours, peak }: { hours: number[]; peak: number }) {
+  const t = useT();
   const max = Math.max(1, ...hours);
   const c = 110;
   const r0 = 46;
   const len = 54;
   const inPeak = (h: number) => (h - peak + 24) % 24 < 3;
   return (
-    <svg className="clock" viewBox="0 0 220 220" role="img" aria-label="收听时钟">
+    <svg className="clock" viewBox="0 0 220 220" role="img" aria-label={t("收听时钟")}>
       <circle cx={c} cy={c} r={r0 - 6} className="clock-face" />
       {hours.map((v, h) => {
         const a = (h / 24) * Math.PI * 2 - Math.PI / 2 + Math.PI / 24;
@@ -107,7 +112,7 @@ function Clock({ hours, peak }: { hours: number[]; peak: number }) {
             y2={c + Math.sin(a) * (r0 + l)}
             className={`clock-bar ${v ? "" : "zero"} ${inPeak(h) && v ? "peak" : ""}`}
           >
-            <title>{`${h}:00 · ${v ? span(v) : "没有收听"}`}</title>
+            <title>{`${h}:00 · ${v ? span(v) : t("没有收听")}`}</title>
           </line>
         );
       })}
@@ -124,13 +129,14 @@ function Clock({ hours, peak }: { hours: number[]; peak: number }) {
 }
 
 function Topics({ topics }: { topics: Map<string, number> }) {
+  const t = useT();
   const list = [...topics.entries()].sort((a, b) => b[1] - a[1]);
   const total = list.reduce((n, [, v]) => n + v, 0) || 1;
   return (
     <div className="topic-map">
       {list.map(([k, v], i) => (
-        <div key={k} className={`topic-tile t${Math.min(i, 5)}`} style={{ flexGrow: v }} title={`${k} · ${span(v)}`}>
-          <span className="topic-name">{k}</span>
+        <div key={k} className={`topic-tile t${Math.min(i, 5)}`} style={{ flexGrow: v }} title={`${t(k)} · ${span(v)}`}>
+          <span className="topic-name">{t(k)}</span>
           <span className="topic-pct num">{Math.round((v / total) * 100)}%</span>
         </div>
       ))}
@@ -139,8 +145,9 @@ function Topics({ topics }: { topics: Map<string, number> }) {
 }
 
 function Ears({ weeks }: { weeks: { label: string; total: number; plain: number }[] }) {
+  const t = useT();
   const has = weeks.filter((w) => w.total > 300);
-  if (has.length < 2) return <p className="muted small">多听几周，这里会画出你不靠字幕的时间怎么变化。</p>;
+  if (has.length < 2) return <p className="muted small">{t("多听几周，这里会画出你不靠字幕的时间怎么变化。")}</p>;
   const share = (w: { total: number; plain: number }) => (w.total ? w.plain / w.total : 0);
   const first = share(has[0]!);
   const last = share(has[has.length - 1]!);
@@ -151,7 +158,7 @@ function Ears({ weeks }: { weeks: { label: string; total: number; plain: number 
           <div
             key={i}
             className="ears-col"
-            title={`${w.label} · ${w.total ? `${Math.round(share(w) * 100)}%` : "没有收听"}`}
+            title={`${w.label} · ${w.total ? `${Math.round(share(w) * 100)}%` : t("没有收听")}`}
           >
             <span className="ears-bar" style={{ height: `${Math.max(w.total ? 4 : 0, share(w) * 100)}%` }} />
             <span className="ears-x">{i % 3 === 0 ? w.label : ""}</span>
@@ -160,14 +167,18 @@ function Ears({ weeks }: { weeks: { label: string; total: number; plain: number 
       </div>
       <p className="muted small ears-note">
         {last > first + 0.05
-          ? `不开中文字幕听的比例，从 ${Math.round(first * 100)}% 升到了 ${Math.round(last * 100)}%。耳朵在悄悄变好。`
-          : "柱子是每周不开中文字幕听外语节目的比例。字幕是拐杖，也是梯子。"}
+          ? t("不开中文字幕听的比例，从 {from}% 升到了 {to}%。耳朵在悄悄变好。", {
+              from: Math.round(first * 100),
+              to: Math.round(last * 100),
+            })
+          : t("柱子是每周不开中文字幕听外语节目的比例。字幕是拐杖，也是梯子。")}
       </p>
     </>
   );
 }
 
 function Heatmap({ byDay }: { byDay: Map<string, number> }) {
+  const t = useT();
   const today = new Date();
   const start = new Date(today.getTime() - 364 * DAY);
   start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
@@ -182,7 +193,7 @@ function Heatmap({ byDay }: { byDay: Map<string, number> }) {
   cells.forEach((c, i) => {
     if (i % 7 === 0) {
       const d = new Date(`${c.day}T00:00:00`);
-      if (d.getDate() <= 7) months.push({ col: i / 7, label: `${d.getMonth() + 1}月` });
+      if (d.getDate() <= 7) months.push({ col: i / 7, label: monthName(d.getMonth() + 1) });
     }
   });
   return (
@@ -199,22 +210,23 @@ function Heatmap({ byDay }: { byDay: Map<string, number> }) {
           <span
             key={c.day}
             className={`hm l${level(c.secs)} ${c.future ? "future" : ""}`}
-            title={c.future ? "" : `${c.day} · ${c.secs ? span(c.secs) : "没有收听"}`}
+            title={c.future ? "" : `${c.day} · ${c.secs ? span(c.secs) : t("没有收听")}`}
           />
         ))}
       </div>
       <div className="heatmap-legend muted small">
-        少
+        {t("少")}
         {[0, 1, 2, 3, 4].map((l) => (
           <span key={l} className={`hm l${l}`} />
         ))}
-        多
+        {t("多")}
       </div>
     </div>
   );
 }
 
 function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range; rangeName: string }) {
+  const t = useT();
   const settings = useStore((s) => s.settings);
   const provider = chatProvider(settings);
   const [text, setText] = useState<string | null>(null);
@@ -255,6 +267,13 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
     setError("");
     try {
       const model = settings.chatModel || provider.model;
+      const loc = resolveLocale(settings.uiLang);
+      const portraitPrompt =
+        loc === "en"
+          ? `${brief()}\n\nWrite a concise English listening portrait based on this data: Line 1: a bold 2–4 word persona title; Line 2: 3 interest tags separated by " · "; then an 80–120 word portrait; final line starting with "Next: " giving one recommendation. Rely only on the data.`
+          : loc === "zh-TW"
+            ? `${brief()}\n\n請根據收聽資料寫一段繁體中文收聽畫像：第一行 4–8 字稱號（加粗）；第二行 3 個興趣標籤用「·」分隔；然後 80–140 字畫像；最後一行以「下一步：」開頭給建議。只依據資料，不編造。`
+            : `${brief()}\n\n请根据收听数据写一段中文收听画像：第一行 4–8 字称号（加粗）；第二行 3 个兴趣标签用「·」分隔；然后 80–140 字画像；最后一行以「下一步：」开头给建议。只依据数据，不编造。`;
       const out = await api.llmChat({
         provider: provider.id,
         baseUrl: provider.baseUrl,
@@ -263,11 +282,11 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
         messages: [
           {
             role: "user",
-            content: `${brief()}\n\n请根据收听数据写一段中文收听画像：第一行 4–8 字称号（加粗）；第二行 3 个兴趣标签用「·」分隔；然后 80–140 字画像；最后一行以「下一步：」开头给建议。只依据数据，不编造。`,
+            content: portraitPrompt,
           },
         ],
       });
-      if (!out.trim()) throw new Error("模型没有返回内容");
+      if (!out.trim()) throw new Error(t("模型没有返回内容"));
       setText(out);
       await api.setBlob("stats", `portrait-${range}`, out);
     } catch (e) {
@@ -281,17 +300,17 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
     <section className="stats-card portrait">
       <div className="stats-card-h">
         <h2>
-          <Sparkles size={14} className="accent" /> AI 收听画像
+          <Sparkles size={14} className="accent" /> {t("AI 收听画像")}
         </h2>
         {text && !busy && (
           <button type="button" className="link-btn small" onClick={() => void run()}>
-            <RefreshCw size={12} /> 重新生成
+            <RefreshCw size={12} /> {t("重新生成")}
           </button>
         )}
       </div>
       {busy ? (
         <p className="muted small">
-          <Loader2 size={13} className="spin" /> 正在读你的收听…
+          <Loader2 size={13} className="spin" /> {t("正在读你的收听…")}
         </p>
       ) : text ? (
         <div className="portrait-text">
@@ -299,22 +318,24 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
         </div>
       ) : ready === false ? (
         <p className="muted small">
-          在设置里配好模型后，可以让 AI 读一读你的收听，写一段只属于你的画像。{" "}
+          {t("在设置里配好模型后，可以让 AI 读一读你的收听，写一段只属于你的画像。")}{" "}
           <button
             type="button"
             className="link-btn small"
             onClick={() => useStore.getState().set({ settingsOpen: true, settingsSection: "ai" })}
           >
-            去设置
+            {t("去设置")}
           </button>
         </p>
       ) : (
         <div className="portrait-cta">
           <p className="muted small">
-            会把节目名、单集标题和收听时段发给{provider ? ` ${provider.name}` : "你选的模型"}，只在点按钮时发送。
+            {t("会把节目名、单集标题和收听时段发给 {name}，只在点按钮时发送。", {
+              name: provider ? t(provider.name) : t("你选的模型"),
+            })}
           </p>
           <button type="button" className="btn primary sm" onClick={() => void run()} disabled={!ready}>
-            生成我的收听画像
+            {t("生成我的收听画像")}
           </button>
         </div>
       )}
@@ -324,6 +345,7 @@ function Portrait({ rows, range, rangeName }: { rows: ListenRow[]; range: Range;
 }
 
 export function StatsView() {
+  const t = useT();
   const { go, shows: subscribed } = useStore(useShallow((s) => ({ go: s.go, shows: s.shows })));
   const [rows, setRows] = useState<ListenRow[] | null>(null);
   const [range, setRange] = useState<Range>("month");
@@ -441,9 +463,9 @@ export function StatsView() {
       .map((d) => [d, inRange.filter((r) => r.day === d).reduce((n, r) => n + r.seconds, 0)] as const)
       .sort((a, b) => b[1] - a[1])[0];
     if (longest && longest[1] >= 1200) {
-      facts.push({ big: span(longest[1]), line: `${dayLabel(longest[0])}是你听得最久的一天。` });
+      facts.push({ big: span(longest[1]), line: t("{day}是你听得最久的一天。", { day: dayLabel(longest[0]) }) });
     }
-    if (best >= 3) facts.push({ big: `${best} 天`, line: `你最长连续 ${best} 天每天都听了至少 5 分钟。` });
+    if (best >= 3) facts.push({ big: t("{n} 天", { n: best }), line: t("你最长连续 {n} 天每天都听了至少 5 分钟。", { n: best }) });
 
     return {
       total,
@@ -466,22 +488,22 @@ export function StatsView() {
       byDay,
       inRange,
     };
-  }, [rows, range, subscribed]);
+  }, [rows, range, subscribed, t]);
 
   if (!rows || !s) return <div className="page stats" />;
   if (!rows.length) {
     return (
       <div className="page stats">
-        <h1 className="page-title">收听统计</h1>
-        <p className="muted">还没有收听记录。从这一版开始，听过的每一分钟都会记在这里，只存在你的电脑上。</p>
+        <h1 className="page-title">{t("收听统计")}</h1>
+        <p className="muted">{t("还没有收听记录。从这一版开始，听过的每一分钟都会记在这里，只存在你的电脑上。")}</p>
         <button type="button" className="btn primary" onClick={() => go({ kind: "home" })}>
-          去听一集
+          {t("去听一集")}
         </button>
       </div>
     );
   }
 
-  const rangeName = RANGES.find((r) => r[0] === range)![1];
+  const rangeName = t(RANGES.find((r) => r[0] === range)![1]);
   const eq = equivalent(s.total);
   const words = Math.round((s.foreign / 60) * 150);
   const persona = personaOf(s.peak);
@@ -491,7 +513,7 @@ export function StatsView() {
   return (
     <div className="page stats">
       <div className="stats-head">
-        <h1 className="page-title">收听统计</h1>
+        <h1 className="page-title">{t("收听统计")}</h1>
         <div className="seg-control" role="radiogroup">
           {RANGES.map(([k, label]) => (
             <button
@@ -502,36 +524,36 @@ export function StatsView() {
               className={range === k ? "on" : ""}
               onClick={() => setRange(k)}
             >
-              {label}
+              {t(label)}
             </button>
           ))}
         </div>
       </div>
 
       {s.total < 60 ? (
-        <p className="stats-lede">{rangeName}还没有收听。挑一集，从这里开始。</p>
+        <p className="stats-lede">{t("{range}还没有收听。挑一集，从这里开始。", { range: rangeName })}</p>
       ) : (
         <section className="stats-lede-card">
           <p className="stats-lede">
-            {rangeName}，你听了 <b>{span(s.total)}</b>，相当于 <b title={eq.basis}>{eq.text}</b>。
+            {t("{range}，你听了", { range: rangeName })} <b>{span(s.total)}</b>，{t("相当于")} <b title={eq.basis}>{eq.text}</b>。
           </p>
           {words >= 1000 && (
-            <p className="stats-lede-sub" title="按对谈每分钟约 150 个英文单词估算">
-              你的耳朵大约接住了 {words.toLocaleString()} 个外语单词。
+            <p className="stats-lede-sub" title={t("按对谈每分钟约 150 个英文单词估算")}>
+              {t("你的耳朵大约接住了 {n} 个外语单词。", { n: words.toLocaleString() })}
             </p>
           )}
           <div className="stat-tiles">
-            <Tile label="听过的单集" value={`${s.heard} 集`} sub={s.finished ? `听完 ${s.finished} 集` : undefined} />
+            <Tile label={t("听过的单集")} value={t("{n} 集", { n: s.heard })} sub={s.finished ? t("听完 {n} 集", { n: s.finished }) : undefined} />
             <Tile
-              label="借助字幕"
+              label={t("借助字幕")}
               value={`${Math.round((s.translated / Math.max(1, s.total)) * 100)}%`}
-              sub="开着中文或双语字幕"
+              sub={t("开着中文或双语字幕")}
             />
-            <Tile label="连续收听" value={`${s.streak} 天`} sub={s.best > s.streak ? `最长 ${s.best} 天` : "每天至少 5 分钟"} />
+            <Tile label={t("连续收听")} value={t("{n} 天", { n: s.streak })} sub={s.best > s.streak ? t("最长 {n} 天", { n: s.best }) : t("每天至少 5 分钟")} />
             <Tile
-              label="外语时间"
+              label={t("外语时间")}
               value={span(s.foreign)}
-              sub={`占 ${Math.round((s.foreign / Math.max(1, s.total)) * 100)}%`}
+              sub={t("占 {pct}%", { pct: Math.round((s.foreign / Math.max(1, s.total)) * 100) })}
             />
           </div>
         </section>
@@ -542,7 +564,7 @@ export function StatsView() {
           <div className="stats-grid">
             <section className="stats-card">
               <div className="stats-card-h">
-                <h2>你把时间给了谁</h2>
+                <h2>{t("你把时间给了谁")}</h2>
               </div>
               <ol className="top-shows">
                 {s.top.map((x, i) => (
@@ -558,12 +580,12 @@ export function StatsView() {
                     <span className="top-name">
                       <span className="top-title">
                         <span className="clamp1">{x.single ? x.title : showName(x.title)}</span>
-                        {x.single && <em className="top-badge plain">单集</em>}
+                        {x.single && <em className="top-badge plain">{t("单集")}</em>}
                       </span>
                       <span className="top-bar">
                         <span style={{ width: `${(x.seconds / (s.top[0]?.seconds || 1)) * 100}%` }} />
                       </span>
-                      <span className="top-meta muted small">{x.episodes.size} 集</span>
+                      <span className="top-meta muted small">{t("{n} 集", { n: x.episodes.size })}</span>
                     </span>
                     <span className="top-time small num">{span(x.seconds)}</span>
                   </li>
@@ -572,22 +594,22 @@ export function StatsView() {
             </section>
             <section className="stats-card clock-card">
               <div className="stats-card-h">
-                <h2>你的收听生物钟</h2>
+                <h2>{t("你的收听生物钟")}</h2>
               </div>
               <Clock hours={s.hours} peak={s.peak} />
               <p className="persona">
-                <b>{persona.name}</b>
+                <b>{t(persona.name)}</b>
               </p>
               <p className="muted small persona-line">
-                {persona.line} 最常在 {s.peak}:00–{(s.peak + 3) % 24}:00 之间听。
+                {t(persona.line)} {t("最常在 {from}:00–{to}:00 之间听。", { from: s.peak, to: (s.peak + 3) % 24 })}
               </p>
               {perWeekday > 0 && perWeekend > 0 && (
                 <p className="muted small persona-line">
                   {perWeekend > perWeekday * 1.15
-                    ? `周末平均每天比工作日多听 ${Math.round((perWeekend / perWeekday - 1) * 100)}%。`
+                    ? t("周末平均每天比工作日多听 {pct}%。", { pct: Math.round((perWeekend / perWeekday - 1) * 100) })
                     : perWeekday > perWeekend * 1.15
-                      ? `工作日平均每天比周末多听 ${Math.round((perWeekday / perWeekend - 1) * 100)}%。`
-                      : "工作日和周末听得差不多多。"}
+                      ? t("工作日平均每天比周末多听 {pct}%。", { pct: Math.round((perWeekday / perWeekend - 1) * 100) })
+                      : t("工作日和周末听得差不多多。")}
                 </p>
               )}
             </section>
@@ -607,15 +629,15 @@ export function StatsView() {
           <div className="stats-grid">
             <section className="stats-card">
               <div className="stats-card-h">
-                <h2>话题版图</h2>
-                <span className="muted small">按节目归类</span>
+                <h2>{t("话题版图")}</h2>
+                <span className="muted small">{t("按节目归类")}</span>
               </div>
               <Topics topics={s.topics} />
             </section>
             <section className="stats-card">
               <div className="stats-card-h">
-                <h2>耳朵的成长</h2>
-                <span className="muted small">近 12 周</span>
+                <h2>{t("耳朵的成长")}</h2>
+                <span className="muted small">{t("近 12 周")}</span>
               </div>
               <Ears weeks={s.weeks} />
             </section>
@@ -627,12 +649,12 @@ export function StatsView() {
 
       <section className="stats-card">
         <div className="stats-card-h">
-          <h2>一年的样子</h2>
-          <span className="muted small">每一格是一天</span>
+          <h2>{t("一年的样子")}</h2>
+          <span className="muted small">{t("每一格是一天")}</span>
         </div>
         <Heatmap byDay={s.byDay} />
       </section>
-      <p className="muted small stats-foot">只统计真正在播放的时间，拖动进度条不算。数据只保存在这台电脑上。</p>
+      <p className="muted small stats-foot">{t("只统计真正在播放的时间，拖动进度条不算。数据只保存在这台电脑上。")}</p>
     </div>
   );
 }

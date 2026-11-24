@@ -19,6 +19,7 @@ import {
 import { api, errText, type Episode, type Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { writeClipboardText } from "../lib/clipboard";
+import { useT } from "../lib/i18n";
 import {
   buildPlatformPost,
   clearHighlightsError,
@@ -73,6 +74,7 @@ export function HighlightsPanel({
   zh?: (string | null | undefined)[];
   onJumpToTranscript: (index: number, time: number) => void;
 }) {
+  const t = useT();
   const bundle = useHighlights((s) => s.bundles[ep.id]);
   const loading = useHighlights((s) => !!s.loading[ep.id]);
   const progress = useHighlights((s) => s.progress[ep.id]);
@@ -137,7 +139,7 @@ export function HighlightsPanel({
           clipStart: c.start,
         }),
       );
-      notify("传播文案已复制");
+      notify(t("传播文案已复制"));
     } catch (e) {
       notify(errText(e));
     } finally {
@@ -176,11 +178,11 @@ export function HighlightsPanel({
       <div className="hl-empty">
         <div className="hl-card-intro">
           <Sparkles size={20} className="hl-spark" />
-          <p className="es-title">正在从整期文稿挑选高光片段</p>
+          <p className="es-title">{t("正在从整期文稿挑选高光片段")}</p>
           <p className="muted small">
             {done >= total
-              ? "正在整理结果…"
-              : `分窗扫描 ${done}/${total}（约 1–3 分钟；慢思考模型会更久）`}
+              ? t("正在整理结果…")
+              : t("分窗扫描 {done}/{total}（约 1–3 分钟；慢思考模型会更久）", { done, total })}
           </p>
           <div className="hl-progress">
             <div className="bar">
@@ -191,7 +193,7 @@ export function HighlightsPanel({
           <div className="hl-wait-row">
             <Loader2 size={14} className="spin" />
             <button type="button" className="btn ghost sm" onClick={() => stopHighlights(ep.id)}>
-              <Square size={12} fill="currentColor" /> 停止
+              <Square size={12} fill="currentColor" /> {t("停止")}
             </button>
           </div>
         </div>
@@ -204,15 +206,15 @@ export function HighlightsPanel({
       <div className="hl-empty">
         <div className="hl-card-intro">
           <Sparkles size={20} className="hl-spark" />
-          <p className="es-title">自动挑选高光金句片段</p>
+          <p className="es-title">{t("自动挑选高光金句片段")}</p>
           <p className="muted small">
-            从整期中抽取 30–120 秒独立成篇的高传播段落，支持一键剪出带双语字幕的视频切片。
+            {t("从整期中抽取 30–120 秒独立成篇的高传播段落，支持一键剪出带双语字幕的视频切片。")}
           </p>
           <div className="hl-intent-box">
             <input
               value={intent}
               onChange={(e) => setIntent(e.target.value)}
-              placeholder="可选：想重点找哪类话题，例如「创业踩坑」"
+              placeholder={t("可选：想重点找哪类话题，例如「创业踩坑」")}
               onKeyDown={(e) => {
                 if (e.key === "Enter") startRun();
               }}
@@ -222,10 +224,10 @@ export function HighlightsPanel({
                 <button
                   key={s}
                   type="button"
-                  className={`hl-chip ${intent === s ? "on" : ""}`}
-                  onClick={() => setIntent(s)}
+                  className={`hl-chip ${intent === t(s) || intent === s ? "on" : ""}`}
+                  onClick={() => setIntent(t(s))}
                 >
-                  {s}
+                  {t(s)}
                 </button>
               ))}
             </div>
@@ -238,7 +240,7 @@ export function HighlightsPanel({
                 className="btn"
                 onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}
               >
-                去设置
+                {t("去设置")}
               </button>
             )}
             <button
@@ -247,7 +249,7 @@ export function HighlightsPanel({
               disabled={!segments.length}
               onClick={() => startRun()}
             >
-              <Sparkles size={14} /> 提取高光片段
+              <Sparkles size={14} /> {t("提取高光片段")}
             </button>
           </div>
         </div>
@@ -259,7 +261,7 @@ export function HighlightsPanel({
     <div className="hl-panel">
       <div className="hl-toolbar">
         <span className="muted small">
-          共 {clips.length} 段高光{bundle.intent ? ` · ${bundle.intent}` : ""}
+          {t("共 {n} 段高光", { n: clips.length })}{bundle.intent ? ` · ${bundle.intent}` : ""}
         </span>
         <span className="spacer" />
         {ep.videoId && clips.length > 1 && !picking && (
@@ -268,9 +270,9 @@ export function HighlightsPanel({
               type="button"
               className="link-btn"
               onClick={bestOf}
-              title="把评分最高的几段按时间顺序剪成一条"
+              title={t("把评分最高的几段按时间顺序剪成一条")}
             >
-              <Sparkles size={12} /> 精华合集
+              <Sparkles size={12} /> {t("精华合集")}
             </button>
             <button
               type="button"
@@ -280,7 +282,7 @@ export function HighlightsPanel({
                 setPicked([]);
               }}
             >
-              <Layers size={12} /> 自选拼接
+              <Layers size={12} /> {t("自选拼接")}
             </button>
           </>
         )}
@@ -289,10 +291,10 @@ export function HighlightsPanel({
           className="link-btn"
           onClick={() => setSortBy(sortBy === "score" ? "time" : "score")}
         >
-          {sortBy === "score" ? "按时间顺序" : "按传播度"}
+          {sortBy === "score" ? t("按时间顺序") : t("按传播度")}
         </button>
         <button type="button" className="link-btn" onClick={() => setReasking(!reasking)}>
-          <RefreshCw size={12} /> 换方向重选
+          <RefreshCw size={12} /> {t("换方向重选")}
         </button>
       </div>
 
@@ -301,13 +303,13 @@ export function HighlightsPanel({
           <input
             value={intent}
             onChange={(e) => setIntent(e.target.value)}
-            placeholder="输入想找的话题方向（留空则全面挑选）"
+            placeholder={t("输入想找的话题方向（留空则全面挑选）")}
             onKeyDown={(e) => {
               if (e.key === "Enter") startRun();
             }}
           />
           <button type="button" className="btn primary sm" onClick={() => startRun()}>
-            重新提取
+            {t("重新提取")}
           </button>
         </div>
       )}
@@ -316,8 +318,8 @@ export function HighlightsPanel({
         <div className="hl-pickbar">
           <span className="small">
             {picked.length
-              ? `已选 ${picked.length} 段，会按时间顺序拼成一条`
-              : "勾选要拼在一起的片段"}
+              ? t("已选 {n} 段，会按时间顺序拼成一条", { n: picked.length })
+              : t("勾选要拼在一起的片段")}
           </span>
           <span className="spacer" />
           <button
@@ -328,7 +330,7 @@ export function HighlightsPanel({
               setPicked([]);
             }}
           >
-            取消
+            {t("取消")}
           </button>
           <button
             type="button"
@@ -336,7 +338,7 @@ export function HighlightsPanel({
             disabled={picked.length < 2}
             onClick={() => openMontage(picked)}
           >
-            <Scissors size={12} /> 拼成视频
+            <Scissors size={12} /> {t("拼成视频")}
           </button>
         </div>
       )}
@@ -360,7 +362,7 @@ export function HighlightsPanel({
                     {picked.includes(c.id) && <Check size={12} strokeWidth={3} />}
                   </span>
                 )}
-                <span className="hl-score" title="传播潜力评分">
+                <span className="hl-score" title={t("传播潜力评分")}>
                   ✦ {c.score}
                 </span>
                 <span className="num small muted">
@@ -371,7 +373,7 @@ export function HighlightsPanel({
                 <button
                   type="button"
                   className="hl-title-btn"
-                  title="在字幕里找到这一段"
+                  title={t("在字幕里找到这一段")}
                   onClick={(e) => {
                     if (picking) return;
                     e.stopPropagation();
@@ -402,16 +404,16 @@ export function HighlightsPanel({
                     className="btn ghost sm"
                     onClick={() => previewEpisodeRange(ep, c.start, c.end)}
                   >
-                    <Play size={12} fill="currentColor" /> 试看
+                    <Play size={12} fill="currentColor" /> {t("试看")}
                   </button>
                   {ep.videoId && (
                     <button
                       type="button"
                       className={`btn sm ${c.exportPath ? "ghost" : "primary"}`}
                       onClick={() => openVideoClipDialog({ ep, segments, zh, clip: c })}
-                      title={c.exportPath ? "已导出：打开工作室可在文件夹中查看，或重新剪辑" : "剪成带字幕的短视频"}
+                      title={c.exportPath ? t("已导出：打开工作室可在文件夹中查看，或重新剪辑") : t("剪成带字幕的短视频")}
                     >
-                      <Scissors size={12} /> {c.exportPath ? "已导出" : "剪成视频"}
+                      <Scissors size={12} /> {c.exportPath ? t("已导出") : t("剪成视频")}
                     </button>
                   )}
                   <button
@@ -419,10 +421,10 @@ export function HighlightsPanel({
                     className="btn ghost sm"
                     disabled={copying === c.id}
                     onClick={() => void copyShare(c)}
-                    title="复制 AI 写的发布文案"
+                    title={t("复制 AI 写的发布文案")}
                   >
                     {copying === c.id ? <Loader2 size={12} className="spin" /> : <Copy size={12} />}{" "}
-                    复制文案
+                    {t("复制文案")}
                   </button>
                 </div>
               )}

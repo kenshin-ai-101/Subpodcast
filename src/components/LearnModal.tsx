@@ -7,6 +7,7 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useT } from "../lib/i18n";
 
 export function LearnModal({
   title,
@@ -25,6 +26,7 @@ export function LearnModal({
   /** 钉在滚动区外的底栏（取消 / 加入等），避免被列表或右栏裁切。 */
   foot?: ReactNode;
 }) {
+  const t = useT();
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -43,7 +45,7 @@ export function LearnModal({
       >
         <div className="modal-head">
           {head ?? <h3>{title}</h3>}
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t("关闭")}>
             <X size={18} />
           </button>
         </div>

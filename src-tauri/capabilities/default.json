@@ -67,6 +67,7 @@
     "allow-preview-show",
     "allow-cached-show",
     "dialog:allow-save",
+    "dialog:allow-open",
     "allow-learn-clip",
     "allow-export-anki",
     "allow-save-text",

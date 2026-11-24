@@ -88,12 +88,19 @@ fn field_csum(first: &str) -> i64 {
     i64::from(u32::from_be_bytes([h[0], h[1], h[2], h[3]]))
 }
 
-/// 写出 .apkg，返回带音频的笔记数。
-pub fn write(out: &Path, deck: &str, model: &str, notes: &[Note]) -> Result<usize> {
+/// 写出 .apkg，返回带音频的笔记数。只允许打包 `allowed_clips_dir` 目录下的音频片段。
+pub fn write(
+    out: &Path,
+    deck: &str,
+    model: &str,
+    notes: &[Note],
+    allowed_clips_dir: &Path,
+) -> Result<usize> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as i64;
     let now = now_ms / 1000;
+    let allowed_root = std::fs::canonicalize(allowed_clips_dir).ok();
     let work = std::env::temp_dir().join(format!("subpodcast-anki-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&work)?;
     let built = (|| -> Result<usize> {
@@ -172,14 +179,19 @@ pub fn write(out: &Path, deck: &str, model: &str, notes: &[Note]) -> Result<usiz
                 .as_deref()
                 .map(PathBuf::from)
                 .filter(|p| p.is_file())
+                .and_then(|p| {
+                    let root = allowed_root.as_ref()?;
+                    let canon = std::fs::canonicalize(&p).ok()?;
+                    canon.starts_with(root).then_some(canon)
+                })
             {
                 let base = clip
                     .file_name()
                     .and_then(|f| f.to_str())
                     .unwrap_or("clip.wav");
-                let name = format!("subpodcast-{base}");
-                audio = format!("[sound:{name}]");
                 let key = files.len().to_string();
+                let name = format!("subpodcast-{key}-{base}");
+                audio = format!("[sound:{name}]");
                 media.insert(key.clone(), json!(name));
                 files.push((key, clip));
             }
@@ -278,23 +290,27 @@ mod tests {
             clip,
         };
         let out = dir.join("t.apkg");
+        let outside = std::env::temp_dir().join(format!("subpodcast-outside-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&outside, b"secret").unwrap();
         let n = write(
             &out,
             "声译 生词本",
             "声译 单词",
             &[
                 mk("savanna", Some(clip.to_string_lossy().into())),
-                mk("gist", None),
+                mk("gist", Some(outside.to_string_lossy().into())),
             ],
+            &dir,
         )
         .unwrap();
         assert_eq!(n, 1);
         let mut z = zip::ZipArchive::new(std::fs::File::open(&out).unwrap()).unwrap();
         let mut media = String::new();
         std::io::Read::read_to_string(&mut z.by_name("media").unwrap(), &mut media).unwrap();
-        assert_eq!(media, r#"{"0":"subpodcast-abc.wav"}"#);
+        assert_eq!(media, r#"{"0":"subpodcast-0-abc.wav"}"#);
         assert!(z.by_name("0").is_ok() && z.by_name("collection.anki2").is_ok());
         assert_eq!(plain_text("in the <b>x</b> &amp; y"), "in the x & y");
+        let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

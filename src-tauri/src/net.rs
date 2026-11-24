@@ -50,19 +50,23 @@ pub fn set_proxy(proxy: Option<String>) -> Result<()> {
         let t = s.trim().to_string();
         (!t.is_empty()).then_some(t)
     });
-    *proxy_cell().write().unwrap() = trimmed.clone();
-    // 有设置 → 只用设置代理；留空 → 直连（非 VPN 常态）。系统代理仅在请求失败时按需启用。
+    // 先校验并构造客户端，成功后才原子更新全局状态，避免非法代理污染 PROXY。
     let client = if let Some(ref p) = trimmed {
         build(Some(p), false)?
     } else {
         build(None, true)?
     };
-    *client_cell().write().unwrap() = client;
+    *proxy_cell().write().unwrap_or_else(|e| e.into_inner()) = trimmed;
+    *client_cell().write().unwrap_or_else(|e| e.into_inner()) = client;
     Ok(())
 }
 
 pub fn proxy() -> String {
-    proxy_cell().read().unwrap().clone().unwrap_or_default()
+    proxy_cell()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
 }
 
 /// 子进程（yt-dlp）用的代理：设置里的优先，否则读环境变量 / macOS 系统代理。
@@ -130,7 +134,7 @@ fn macos_system_proxy() -> Option<String> {
 }
 
 pub fn client() -> Client {
-    client_cell().read().unwrap().clone()
+    client_cell().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 fn http_err(url: &str, status: reqwest::StatusCode) -> anyhow::Error {
@@ -138,6 +142,19 @@ fn http_err(url: &str, status: reqwest::StatusCode) -> anyhow::Error {
         anyhow!("小宇宙源拒绝了请求（HTTP 403）。请检查网络/代理后重试")
     } else {
         anyhow!("源返回 HTTP {status}")
+    }
+}
+
+fn is_http_status_err(err: &anyhow::Error) -> bool {
+    let s = format!("{err:#}");
+    s.starts_with("源返回 HTTP ") || s.contains("拒绝了请求（HTTP ")
+}
+
+fn format_err(url: &str, err: anyhow::Error) -> anyhow::Error {
+    if is_http_status_err(&err) {
+        err
+    } else {
+        friendly_net_err(url, err)
     }
 }
 
@@ -189,7 +206,7 @@ pub async fn get_text(url: &str) -> Result<String> {
                         return Ok(t);
                     }
                 }
-                Err(friendly_net_err(url, e))
+                Err(format_err(url, e))
             }
         };
     }
@@ -200,7 +217,7 @@ pub async fn get_text(url: &str) -> Result<String> {
         Ok(t) => Ok(t),
         Err(e) => {
             if !is_connect_like(&e) {
-                return Err(friendly_net_err(url, e));
+                return Err(format_err(url, e));
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
             if let Ok(t) = send_text(&direct, url).await {
@@ -214,7 +231,7 @@ pub async fn get_text(url: &str) -> Result<String> {
                     }
                 }
             }
-            Err(friendly_net_err(url, e))
+            Err(format_err(url, e))
         }
     }
 }
@@ -222,7 +239,7 @@ pub async fn get_text(url: &str) -> Result<String> {
 /// 用指定代理拉文本（不改全局 client）。
 pub async fn get_text_via_proxy(url: &str, proxy: &str) -> Result<String> {
     let c = build(Some(proxy), false)?;
-    send_text(&c, url).await.map_err(|e| friendly_net_err(url, e))
+    send_text(&c, url).await.map_err(|e| format_err(url, e))
 }
 
 pub async fn get_bytes(url: &str) -> Result<Vec<u8>> {
@@ -237,7 +254,7 @@ pub async fn get_bytes(url: &str) -> Result<Vec<u8>> {
     if !proxy().is_empty() {
         return once(&client(), url)
             .await
-            .map_err(|e| friendly_net_err(url, e));
+            .map_err(|e| format_err(url, e));
     }
 
     match once(&client(), url).await {
@@ -251,9 +268,9 @@ pub async fn get_bytes(url: &str) -> Result<Vec<u8>> {
                     }
                 }
             }
-            Err(friendly_net_err(url, e))
+            Err(format_err(url, e))
         }
-        Err(e) => Err(friendly_net_err(url, e)),
+        Err(e) => Err(format_err(url, e)),
     }
 }
 
@@ -265,6 +282,14 @@ mod tests {
             "error sending request for url (https://podcast.latepost.com/rss)"
         );
         assert!(super::is_connect_like(&e));
+    }
+
+    #[test]
+    fn http_status_err_not_masked_as_vpn() {
+        let e = super::http_err("https://example.com/feed.xml", reqwest::StatusCode::FORBIDDEN);
+        let out = super::format_err("https://example.com/feed.xml", e).to_string();
+        assert!(out.contains("403"), "got: {out}");
+        assert!(!out.contains("VPN"), "got: {out}");
     }
 
     #[test]

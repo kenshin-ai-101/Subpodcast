@@ -8,7 +8,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { useStore } from "../store";
 import { api, errText } from "./api";
+import { tNow } from "./i18n";
 import { DEFAULTS, type Settings, type TtsService } from "./settings";
+import { followVolume } from "./volume";
 
 export const useTtsPreview = create<{ active: string | null }>(() => ({ active: null }));
 let playback: AbortController | undefined;
@@ -89,19 +91,19 @@ function speakWeb(text: string, voice: SpeechSynthesisVoice, rate: number, signa
       synth.cancel();
     };
     const timeout = window.setTimeout(() => {
-      finish(new Error("等待系统朗读超时"));
+      finish(new Error(tNow("等待系统朗读超时")));
       synth.cancel();
     }, Math.max(45_000, text.length * 700 / rate));
     utterance.voice = voice;
     utterance.lang = voice.lang;
     utterance.rate = rate;
     utterance.onend = () => finish();
-    utterance.onerror = () => finish(new Error("系统音色无法播放"));
+    utterance.onerror = () => finish(new Error(tNow("系统音色无法播放")));
     signal.addEventListener("abort", cancel, { once: true });
     try {
       synth.speak(utterance);
     } catch {
-      finish(new Error("系统音色无法播放"));
+      finish(new Error(tNow("系统音色无法播放")));
     }
   });
 }
@@ -125,6 +127,7 @@ export function synthesize(text: string, service: TtsService, rate: number) {
 
 async function playFile(path: string, usedRate: number, signal: AbortSignal): Promise<void> {
   const audio = new Audio(convertFileSrc(path));
+  const unsubVol = followVolume(audio);
   const speed = (rate: number) => { audio.playbackRate = Math.min(2, Math.max(0.5, rate / usedRate)); };
   speed(useStore.getState().settings.ttsRate);
   const unsubscribe = useStore.subscribe((state, old) => {
@@ -141,10 +144,11 @@ async function playFile(path: string, usedRate: number, signal: AbortSignal): Pr
       const stop = () => finish();
       signal.addEventListener("abort", stop, { once: true });
       audio.onended = () => finish();
-      audio.onerror = () => finish(new Error("朗读音频播放失败"));
-      void audio.play().catch(() => finish(new Error("朗读音频播放失败")));
+      audio.onerror = () => finish(new Error(tNow("朗读音频播放失败")));
+      void audio.play().catch(() => finish(new Error(tNow("朗读音频播放失败"))));
     });
   } finally {
+    unsubVol();
     unsubscribe();
     audio.pause();
     audio.removeAttribute("src");

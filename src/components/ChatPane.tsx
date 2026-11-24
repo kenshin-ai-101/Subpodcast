@@ -19,7 +19,9 @@ import {
   type ArchivedChat,
 } from "../lib/chats";
 import { createManualClip, rangeFromClock } from "../lib/highlights";
+import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
+import { seekEpisode } from "../lib/playback";
 import { quickPrompts } from "../lib/settings";
 import { useStore } from "../store";
 import { ChatPrefsDialog, ModelPicker, PromptMenu, useFixedUpMenu } from "./ChatTools";
@@ -29,9 +31,10 @@ import { openVideoClipDialog } from "./VideoClipDialog";
 const NO_MESSAGES: ChatMessage[] = [];
 
 export function ChatPane({ episode }: { episode: Episode }) {
+  const t = useT();
   const transcript = useJobs((s) => s.transcripts[episode.id]);
-  const { settings, player, set } = useStore(
-    useShallow((s) => ({ settings: s.settings, player: s.player, set: s.set })),
+  const { settings, set } = useStore(
+    useShallow((s) => ({ settings: s.settings, set: s.set })),
   );
   const messages = useChats((s) => s[episode.id]?.messages ?? NO_MESSAGES);
   const streaming = useChats((s) => s[episode.id]?.streaming ?? null);
@@ -109,10 +112,10 @@ export function ChatPane({ episode }: { episode: Episode }) {
   };
 
   const empty = !messages.length && !busy;
-  const seek = (sec: number) => player?.seek(sec);
+  const seek = (sec: number) => seekEpisode(episode, sec);
   const clipRange = (start: number, end?: number) => {
     if (!episode.videoId || !transcript?.segments.length) {
-      useStore.getState().notify(episode.videoId ? "需要先有字幕才能剪视频" : "只有 YouTube 单集才能剪视频");
+      useStore.getState().notify(episode.videoId ? t("需要先有字幕才能剪视频") : t("只有 YouTube 单集才能剪视频"));
       return;
     }
     const zh = useJobs.getState().translations[episode.id]?.items;
@@ -126,34 +129,34 @@ export function ChatPane({ episode }: { episode: Episode }) {
       <div className="chat-scroll">
         {empty && (
           <div className="chat-intro">
-            <p className="lead">问这期节目</p>
-            <p className="muted small">基于整集字幕回答，引用可跳转</p>
-            {blocked && <p className="muted small">字幕准备好后就可以提问。</p>}
+            <p className="lead">{t("问这期节目")}</p>
+            <p className="muted small">{t("基于整集字幕回答，引用可跳转")}</p>
+            {blocked && <p className="muted small">{t("字幕准备好后就可以提问。")}</p>}
             <div className="prompt-list">
               {shown.map((p) => (
                 <button
                   key={p.id}
                   type="button"
                   className="prompt-row"
-                  title={p.body}
+                  title={t(p.body)}
                   disabled={blocked || busy}
-                  onClick={() => send(p.body)}
+                  onClick={() => send(t(p.body))}
                 >
-                  <span className="pr-title">{p.title}</span>
-                  <span className="pr-sub">{p.body}</span>
+                  <span className="pr-title">{t(p.title)}</span>
+                  <span className="pr-sub">{t(p.body)}</span>
                 </button>
               ))}
             </div>
             <div className="prompt-foot">
               {prompts.length > 4 && (
                 <button type="button" className="link-btn" onClick={() => setAllPrompts(!allPrompts)}>
-                  {allPrompts ? "收起" : `更多 ${prompts.length - 4} 个`}
+                  {allPrompts ? t("收起") : t("更多 {n} 个", { n: prompts.length - 4 })}
                   <ChevronDown size={12} className={allPrompts ? "flip" : ""} />
                 </button>
               )}
               <span className="spacer" />
               <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}>
-                <Settings2 size={13} /> 自定义提示词
+                <Settings2 size={13} /> {t("自定义提示词")}
               </button>
             </div>
           </div>
@@ -165,7 +168,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
               {!busy && (
                 <div className="msg-actions">
                   <button type="button" className="link-btn" onClick={() => removePair(i)}>
-                    删除
+                    {t("删除")}
                   </button>
                 </div>
               )}
@@ -180,11 +183,11 @@ export function ChatPane({ episode }: { episode: Episode }) {
                   {m.model && <span className="muted small">{m.model}</span>}
                   {i === messages.length - 1 && !blocked && (
                     <button type="button" className="link-btn" onClick={retry}>
-                      重试
+                      {t("重试")}
                     </button>
                   )}
                   <button type="button" className="link-btn" onClick={() => removePair(i)}>
-                    删除
+                    {t("删除")}
                   </button>
                 </div>
               )}
@@ -197,7 +200,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
               <Markdown text={streaming} onSeek={seek} onClip={clipRange} />
             ) : (
               <p className="muted">
-                <Loader2 size={14} className="spin" /> 正在阅读文字稿…
+                <Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}
               </p>
             )}
           </div>
@@ -206,7 +209,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
           <div className="setup-note">
             <span>{setupError}</span>
             <button type="button" className="btn primary sm" onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}>
-              去设置
+              {t("去设置")}
             </button>
           </div>
         )}
@@ -223,7 +226,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
           ref={box}
           value={input}
           rows={1}
-          placeholder={blocked ? "字幕准备好后可以提问" : "问点什么，Enter 发送，Shift+Enter 换行"}
+          placeholder={blocked ? t("字幕准备好后可以提问") : t("问点什么，Enter 发送，Shift+Enter 换行")}
           disabled={blocked && !busy}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -243,21 +246,21 @@ export function ChatPane({ episode }: { episode: Episode }) {
               type="button"
               className="btn ghost sm"
               disabled={!archive.length && !messages.length}
-              title="对话历史"
+              title={t("对话历史")}
               aria-expanded={histOpen}
               onClick={() => setHistOpen(!histOpen)}
             >
-              历史
+              {t("历史")}
             </button>
             {histOpen && histStyle && (
               <>
                 <div className="mp-backdrop" onClick={() => setHistOpen(false)} />
                 <div className="mp-menu hist-menu mp-fixed" style={histStyle}>
-                  {!archive.length && <p className="muted small">还没有历史对话</p>}
+                  {!archive.length && <p className="muted small">{t("还没有历史对话")}</p>}
                   {archive.map((a) => (
                     <button key={a.id} type="button" onClick={() => restore(a.id)}>
                       <span className="mp-name">{new Date(a.at).toLocaleString()}</span>
-                      <span className="mp-model">{a.messages.find((m) => m.role === "user")?.content.slice(0, 40) ?? "空对话"}</span>
+                      <span className="mp-model">{a.messages.find((m) => m.role === "user")?.content.slice(0, 40) ?? t("空对话")}</span>
                     </button>
                   ))}
                 </div>
@@ -265,23 +268,23 @@ export function ChatPane({ episode }: { episode: Episode }) {
             )}
           </div>
           {messages.length > 0 && !busy && (
-            <button type="button" className="btn ghost sm" title="开始新对话" onClick={newChat}>
-              <SquarePen size={14} /> 新对话
+            <button type="button" className="btn ghost sm" title={t("开始新对话")} onClick={newChat}>
+              <SquarePen size={14} /> {t("新对话")}
             </button>
           )}
           {busy ? (
-            <button type="button" className="send" title="停止" onClick={() => stopChat(episode.id)}>
+            <button type="button" className="send" title={t("停止")} onClick={() => stopChat(episode.id)}>
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
-            <button type="submit" className="send" title="发送" disabled={!input.trim() || blocked}>
+            <button type="submit" className="send" title={t("发送")} disabled={!input.trim() || blocked}>
               <ArrowUp size={16} />
             </button>
           )}
         </div>
       </form>
       <p className="model-note">
-        {provider ? `回答由 AI 生成 · ${provider.name}` : "回答由 AI 生成，可能有误"}
+        {provider ? t("回答由 AI 生成 · {name}", { name: t(provider.name) }) : t("回答由 AI 生成，可能有误")}
       </p>
       {prefsOpen && <ChatPrefsDialog onClose={() => setPrefsOpen(false)} />}
     </div>

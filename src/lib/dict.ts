@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { create } from "zustand";
+import { tNow } from "./i18n";
 import type { LearnLevel } from "./settings";
 
 /** [音标, 释义, tag bits, 词频 rank（0 = 未知）] */
@@ -60,7 +61,7 @@ const LABELS: [number, string][] = [
 
 /** 词所属最易考级标签，无则空串。 */
 export function tagLabel(tags: number): string {
-  for (const [b, label] of LABELS) if (tags & b) return label;
+  for (const [b, label] of LABELS) if (tags & b) return tNow(label);
   return "";
 }
 

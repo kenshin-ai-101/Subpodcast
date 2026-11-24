@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Check, Loader2, Plus, Youtube } from "lucide-react";
 import { api, errText } from "../lib/api";
+import { useT } from "../lib/i18n";
 import { PICKS, TOPICS, isSubscribed, pickName, pickSub, type Pick, type Topic } from "../lib/picks";
 import { HOME_SHOW_FEED } from "../lib/showLinks";
 import { useStore } from "../store";
@@ -24,6 +25,7 @@ function PickCard({
   onOpen: () => void;
   action: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <div
       className={`pick-tile ${subscribed ? "done" : ""}`}
@@ -41,28 +43,29 @@ function PickCard({
         <img src={p.cover} alt="" loading="lazy" />
         {p.video && (
           <span className="tile-badge">
-            <Youtube size={11} /> 视频
+            <Youtube size={11} /> {t("视频")}
           </span>
         )}
         <div className="tile-action">{action}</div>
       </div>
       <p className="tile-name clamp1">{pickName(p)}</p>
       <p className="tile-sub clamp1">{pickSub(p)}</p>
-      <p className="pick-intro">{p.intro}</p>
+      <p className="pick-intro">{t(p.intro)}</p>
     </div>
   );
 }
 
 function TopicChips({ topics, setTopics }: { topics: Topic[]; setTopics: (t: Topic[]) => void }) {
+  const t = useT();
   const toggle = (x: Topic) => setTopics(topics.includes(x) ? topics.filter((y) => y !== x) : [...topics, x]);
   return (
     <div className="chips left">
       <button type="button" className={`chip ${topics.length === 0 ? "on" : ""}`} onClick={() => setTopics([])}>
-        全部
+        {t("全部")}
       </button>
       {TOPICS.map((x) => (
         <button key={x} type="button" className={`chip ${topics.includes(x) ? "on" : ""}`} onClick={() => toggle(x)}>
-          {x}
+          {t(x)}
         </button>
       ))}
     </div>
@@ -72,6 +75,7 @@ function TopicChips({ topics, setTopics }: { topics: Topic[]; setTopics: (t: Top
 const visible = (topics: Topic[]) => PICKS.filter((p) => !topics.length || p.topics.some((x) => topics.includes(x)));
 
 export function DiscoverView() {
+  const t = useT();
   const { shows, reloadShows, notify, go, saveSettings } = useStore(
     useShallow((s) => ({
       shows: s.shows,
@@ -96,7 +100,7 @@ export function DiscoverView() {
     try {
       await api.addSubscription(input);
       await reloadShows();
-      notify(`已订阅「${title}」`);
+      notify(t("已订阅「{title}」", { title }));
     } catch (e) {
       notify(errText(e));
     } finally {
@@ -106,14 +110,14 @@ export function DiscoverView() {
 
   const subBtn = (input: string, title: string, done: boolean) =>
     done ? (
-      <span className="tile-done" title="已订阅">
+      <span className="tile-done" title={t("已订阅")}>
         <Check size={16} />
       </span>
     ) : (
       <button
         type="button"
         className="tile-add"
-        title="订阅"
+        title={t("订阅")}
         onClick={(e) => {
           e.stopPropagation();
           void add(input, title);
@@ -126,13 +130,13 @@ export function DiscoverView() {
 
   return (
     <div className="page">
-      <h1 className="page-title">发现</h1>
-      <p className="muted page-sub">精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。</p>
+      <h1 className="page-title">{t("发现")}</h1>
+      <p className="muted page-sub">{t("精选海外与中文好节目，订阅后字幕和中文翻译开箱即用。想找别的节目，用上方搜索框。")}</p>
       {showBanner && home && !topics.length && (
         <HomeShowBanner
           onHide={() => {
             void saveSettings({ homeBannerHidden: true });
-            notify("好的，不再显示。可以在设置 › 通用里重新打开");
+            notify(t("好的，不再显示。可以在设置 › 通用里重新打开"));
           }}
           subscribed={subscribed(home)}
           busy={adding === home.input}

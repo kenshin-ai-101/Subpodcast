@@ -17,6 +17,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ChevronDown, Settings2, Sparkles } from "lucide-react";
 import { shortModel } from "../lib/ai";
 import { api } from "../lib/api";
+import { useT } from "../lib/i18n";
 import { BUILTIN_PROMPTS, PROMPT_HINTS, quickPrompts, type QuickPrompt } from "../lib/settings";
 import { useStore } from "../store";
 
@@ -57,6 +58,7 @@ export function useFixedUpMenu(
 }
 
 export function ModelPicker({ disabled }: { disabled?: boolean }) {
+  const t = useT();
   const { settings, saveSettings } = useStore(
     useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })),
   );
@@ -89,10 +91,10 @@ export function ModelPicker({ disabled }: { disabled?: boolean }) {
         className="btn ghost sm"
         disabled={disabled}
         onClick={() => setOpen(!open)}
-        title="切换问答模型"
+        title={t("切换问答模型")}
         aria-expanded={open}
       >
-        {provider ? shortModel(provider.model) : "选模型"}
+        {provider ? shortModel(provider.model) : t("选模型")}
         <ChevronDown size={12} />
       </button>
       {open && menuStyle && (
@@ -109,11 +111,11 @@ export function ModelPicker({ disabled }: { disabled?: boolean }) {
                   setOpen(false);
                 }}
               >
-                <span className="mp-name">{p.name}</span>
+                <span className="mp-name">{t(p.name)}</span>
                 <span className="mp-model">{shortModel(p.model)}</span>
               </button>
             ))}
-            {!options.length && <p className="muted small">先在设置 › AI 填好 Key</p>}
+            {!options.length && <p className="muted small">{t("先在设置 › AI 填好 Key")}</p>}
           </div>
         </>
       )}
@@ -130,6 +132,7 @@ export function PromptMenu({
   onManage: () => void;
   disabled?: boolean;
 }) {
+  const t = useT();
   const settings = useStore((s) => s.settings);
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -155,7 +158,7 @@ export function PromptMenu({
         type="button"
         className="btn ghost sm"
         disabled={disabled}
-        title="快捷提示词"
+        title={t("快捷提示词")}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
@@ -166,19 +169,19 @@ export function PromptMenu({
         <>
           <div className="mp-backdrop" onClick={() => setOpen(false)} />
           <div className="mp-menu prompt-pop mp-fixed" role="menu" style={menuStyle}>
-            {!items.length && <p className="muted small">还没有快捷提示词</p>}
+            {!items.length && <p className="muted small">{t("还没有快捷提示词")}</p>}
             {items.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 role="menuitem"
-                title={p.body}
+                title={t(p.body)}
                 onClick={() => {
-                  onPick(p.body);
+                  onPick(t(p.body));
                   setOpen(false);
                 }}
               >
-                <span className="mp-name">{p.title}</span>
+                <span className="mp-name">{t(p.title)}</span>
               </button>
             ))}
             <button
@@ -189,7 +192,7 @@ export function PromptMenu({
                 onManage();
               }}
             >
-              <Settings2 size={13} /> 管理提示词
+              <Settings2 size={13} /> {t("管理提示词")}
             </button>
           </div>
         </>
@@ -199,6 +202,7 @@ export function PromptMenu({
 }
 
 export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const { settings, saveSettings } = useStore(
     useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })),
   );
@@ -209,22 +213,22 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
     <div className="modal-back" onClick={onClose}>
       <div className="modal chat-prefs" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>问答设置</h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭">
+          <h3>{t("问答设置")}</h3>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t("关闭")}>
             ×
           </button>
         </div>
         <div className="modal-body">
           <div className="cp-block">
             <div className="cp-row">
-              <strong>全局指令</strong>
+              <strong>{t("全局指令")}</strong>
               <label className="check">
                 <input
                   type="checkbox"
                   checked={settings.chatPromptOn}
                   onChange={(e) => void saveSettings({ chatPromptOn: e.target.checked })}
                 />
-                启用
+                {t("启用")}
               </label>
             </div>
             <textarea
@@ -233,7 +237,7 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
               maxLength={4000}
               disabled={!settings.chatPromptOn}
               value={settings.chatPrompt}
-              placeholder="例如：先给结论，再展开；多用列表"
+              placeholder={t("例如：先给结论，再展开；多用列表")}
               onChange={(e) => void saveSettings({ chatPrompt: e.target.value })}
             />
             <div className="cp-hints">
@@ -245,23 +249,24 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
                   disabled={!settings.chatPromptOn}
                   onClick={() => {
                     const cur = settings.chatPrompt.trim();
+                    const text = t(h);
                     void saveSettings({
-                      chatPrompt: cur ? `${cur}\n${h}` : h,
+                      chatPrompt: cur ? `${cur}\n${text}` : text,
                       chatPromptOn: true,
                     });
                   }}
                 >
-                  {h}
+                  {t(h)}
                 </button>
               ))}
             </div>
           </div>
           <div className="cp-block">
             <div className="cp-row">
-              <strong>快捷提示词</strong>
+              <strong>{t("快捷提示词")}</strong>
               {settings.quickPrompts && (
                 <button type="button" className="btn sm ghost" onClick={() => void saveSettings({ quickPrompts: null })}>
-                  恢复内置
+                  {t("恢复内置")}
                 </button>
               )}
             </div>
@@ -281,7 +286,7 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
                     </label>
                     <input
                       className="cp-title"
-                      value={p.title}
+                      value={t(p.title)}
                       onChange={(e) => {
                         const next = list.map((x, j) => (j === i ? { ...x, title: e.target.value } : x));
                         save(next);
@@ -293,13 +298,13 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
                       disabled={list.length <= 1}
                       onClick={() => save(list.filter((_, j) => j !== i))}
                     >
-                      删除
+                      {t("删除")}
                     </button>
                   </div>
                   <textarea
                     className="cp-body"
                     rows={2}
-                    value={p.body}
+                    value={t(p.body)}
                     onChange={(e) => {
                       const next = list.map((x, j) => (j === i ? { ...x, body: e.target.value } : x));
                       save(next);
@@ -316,16 +321,16 @@ export function ChatPrefsDialog({ onClose }: { onClose: () => void }) {
                   ...list,
                   {
                     id: `custom-${Date.now()}`,
-                    title: "新提示词",
-                    body: "在这里写下你想问的问题…",
+                    title: t("新提示词"),
+                    body: t("在这里写下你想问的问题…"),
                     enabled: true,
                   },
                 ])
               }
             >
-              新建提示词
+              {t("新建提示词")}
             </button>
-            <p className="muted small">内置共 {BUILTIN_PROMPTS.length} 条；自定义后可随时恢复。</p>
+            <p className="muted small">{t("内置共 {n} 条；自定义后可随时恢复。", { n: BUILTIN_PROMPTS.length })}</p>
           </div>
         </div>
       </div>

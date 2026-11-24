@@ -5,11 +5,13 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { tNow } from "./i18n";
+
 let owner: "guide" | "chat" | null = null;
 
 export function acquireLlm(label: "guide" | "chat"): void {
   if (owner) {
-    throw new Error(owner === "guide" ? "导读正在生成，请稍后再试" : "问答正在回答，请稍后再试");
+    throw new Error(owner === "guide" ? tNow("导读正在生成，请稍后再试") : tNow("问答正在回答，请稍后再试"));
   }
   owner = label;
 }

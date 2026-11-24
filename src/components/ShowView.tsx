@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useShallow } from "zustand/react/shallow";
 import {
   BookOpen,
@@ -19,6 +20,7 @@ import {
 import { api, errText, type Episode, type Show } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { groupLabel, plainText } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { alreadySubscribedDeep, deepPickFor } from "../lib/deepPicks";
 import { playAll } from "../lib/queue";
 import { useStore } from "../store";
@@ -50,6 +52,7 @@ function isPlayable(ep: Episode): boolean {
 }
 
 export function ShowView({ showId }: { showId: string }) {
+  const t = useT();
   const { shows, openEpisode, notify, reloadShows, go, set } = useStore(
     useShallow((s) => ({
       shows: s.shows,
@@ -141,7 +144,7 @@ export function ShowView({ showId }: { showId: string }) {
   const list = hits ?? shown;
   const playable = (shown ?? []).filter(isPlayable);
 
-  if (!show) return <div className="page muted">节目不存在</div>;
+  if (!show) return <div className="page muted">{t("节目不存在")}</div>;
 
   const refresh = async () => {
     setBusy(true);
@@ -152,8 +155,8 @@ export function ShowView({ showId }: { showId: string }) {
       await reloadShows();
       notify(
         n > 0
-          ? `更新了 ${n} 期，当前共 ${list.length} 期`
-          : `已是最新，当前共 ${list.length} 期`,
+          ? t("更新了 {n} 期，当前共 {total} 期", { n, total: list.length })
+          : t("已是最新，当前共 {total} 期", { total: list.length }),
       );
     } catch (e) {
       notify(errText(e));
@@ -164,7 +167,7 @@ export function ShowView({ showId }: { showId: string }) {
 
   const remove = async () => {
     setMenu(false);
-    const ok = await ask(`取消订阅「${show.title}」？已生成的字幕和收听进度会保留。`);
+    const ok = await ask(t("取消订阅「{title}」？已生成的字幕和收听进度会保留。", { title: show.title }));
     if (!ok) return;
     await api.removeShow(showId);
     await reloadShows();
@@ -173,8 +176,8 @@ export function ShowView({ showId }: { showId: string }) {
 
   const meta =
     show.author && show.author !== show.title
-      ? `${kindLabel(show)} · ${show.author}`
-      : kindLabel(show);
+      ? `${t(kindLabel(show))} · ${show.author}`
+      : t(kindLabel(show));
   const deepPick =
     show.kind !== "qiaomu" ? deepPickFor(show.title) : undefined;
   const deepReady =
@@ -186,7 +189,7 @@ export function ShowView({ showId }: { showId: string }) {
     try {
       const s = await api.addSubscription(deepReady.input);
       await reloadShows();
-      notify(`已订阅精读版「${s.title}」`);
+      notify(t("已订阅精读版「{title}」", { title: s.title }));
       go({ kind: "show", id: s.id });
     } catch (e) {
       notify(errText(e));
@@ -212,7 +215,7 @@ export function ShowView({ showId }: { showId: string }) {
               <p className={`show-desc ${expanded ? "" : "clamp3"}`}>{desc}</p>
               <div className="row-actions tight">
                 <button type="button" className="link-btn" onClick={() => setExpanded(!expanded)}>
-                  {expanded ? "收起" : "展开"}
+                  {expanded ? t("收起") : t("展开")}
                   <ChevronDown size={12} className={expanded ? "flip" : ""} />
                 </button>
               </div>
@@ -221,16 +224,16 @@ export function ShowView({ showId }: { showId: string }) {
           <div className="row-actions">
             <button type="button" className="btn sm" onClick={() => void refresh()} disabled={busy}>
               {busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
-              检查更新
+              {t("检查更新")}
             </button>
             {playable.length > 1 && (
               <button
                 type="button"
                 className="btn sm"
-                title={`按列表顺序连着播放没听完的 ${playable.length} 集`}
+                title={t("按列表顺序连着播放没听完的 {n} 集", { n: playable.length })}
                 onClick={() => playAll(playable)}
               >
-                <ListVideo size={14} /> 播放全部
+                <ListVideo size={14} /> {t("播放全部")}
               </button>
             )}
             <div className="menu-wrap">
@@ -241,12 +244,12 @@ export function ShowView({ showId }: { showId: string }) {
                 aria-haspopup="menu"
                 aria-expanded={menu}
               >
-                <MoreHorizontal size={14} /> 更多
+                <MoreHorizontal size={14} /> {t("更多")}
               </button>
               {menu && (
                 <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
                   <button type="button" role="menuitem" className="danger" onClick={() => void remove()}>
-                    取消订阅
+                    {t("取消订阅")}
                   </button>
                 </div>
               )}
@@ -259,22 +262,22 @@ export function ShowView({ showId }: { showId: string }) {
         <button type="button" className="deep-hint" onClick={() => void subscribeDeep()} disabled={busy}>
           <BookOpen size={16} />
           <div>
-            <p className="deep-hint-t">这档节目有乔木精读版</p>
-            <p className="muted small">中文标题、每期精读长文和原文文稿，点击订阅</p>
+            <p className="deep-hint-t">{t("这档节目有乔木精读版")}</p>
+            <p className="muted small">{t("中文标题、每期精读长文和原文文稿，点击订阅")}</p>
           </div>
         </button>
       )}
 
       <div className="list-head">
-        <h2 className="section-title flush">{hits ? "搜索结果" : "全部单集"}</h2>
+        <h2 className="section-title flush">{hits ? t("搜索结果") : t("全部单集")}</h2>
         <label className={`show-search ${query ? "on" : ""}`}>
           <Search size={14} />
           <input
             ref={searchBox}
             value={query}
             spellCheck={false}
-            placeholder="搜索本节目（⌘F）"
-            aria-label="搜索本节目的单集与简介"
+            placeholder={t("搜索本节目（⌘F）")}
+            aria-label={t("搜索本节目的单集与简介")}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -291,7 +294,7 @@ export function ShowView({ showId }: { showId: string }) {
                 setQuery("");
                 searchBox.current?.focus();
               }}
-              aria-label="清除搜索"
+              aria-label={t("清除搜索")}
             >
               <X size={13} />
             </button>
@@ -301,9 +304,9 @@ export function ShowView({ showId }: { showId: string }) {
           <div className="seg-control">
             {(
               [
-                ["all", "全部", counts.all],
-                ["unplayed", "未听", counts.unplayed],
-                ["subs", "有字幕", counts.subs],
+                ["all", t("全部"), counts.all],
+                ["unplayed", t("未听"), counts.unplayed],
+                ["subs", t("有字幕"), counts.subs],
               ] as [Filter, string, number][]
             ).map(([k, label, n]) => (
               <button
@@ -323,7 +326,7 @@ export function ShowView({ showId }: { showId: string }) {
       {hits ? (
         hits.length ? (
           <>
-            <p className="muted small search-count">找到 {hits.length} 集</p>
+            <p className="muted small search-count">{t("找到 {n} 集", { n: hits.length })}</p>
             <EpFeed>
               {hits.map((ep) => (
                 <EpisodeRow key={ep.id} ep={ep} onOpen={() => openEpisode(ep)} />
@@ -332,8 +335,8 @@ export function ShowView({ showId }: { showId: string }) {
           </>
         ) : (
           <div className="panel-empty soft">
-            <p className="lead">没有找到「{query.trim()}」</p>
-            <p className="muted">搜索范围是本节目的标题与简介</p>
+            <p className="lead">{t("没有找到「{q}」", { q: query.trim() })}</p>
+            <p className="muted">{t("搜索范围是本节目的标题与简介")}</p>
           </div>
         )
       ) : (
@@ -353,34 +356,67 @@ function EpisodeList({
   episodes: Episode[] | null;
   onOpen: (ep: Episode) => void;
 }) {
-  if (episodes == null) return <p className="muted">加载中…</p>;
+  const t = useT();
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const flat = useMemo(() => {
+    if (!episodes?.length) return [];
+    const out: ({ kind: "head"; label: string } | { kind: "ep"; ep: Episode })[] = [];
+    let lastLabel = "";
+    for (const ep of episodes) {
+      const label = groupLabel(ep.published);
+      if (label !== lastLabel) {
+        out.push({ kind: "head", label });
+        lastLabel = label;
+      }
+      out.push({ kind: "ep", ep });
+    }
+    return out;
+  }, [episodes, t]);
+
+  const virtualizer = useVirtualizer({
+    count: flat.length,
+    getScrollElement: () => wrapRef.current?.closest<HTMLElement>(".page") ?? null,
+    estimateSize: (i) => (flat[i]?.kind === "head" ? 36 : 96),
+    overscan: 6,
+  });
+
+  if (episodes == null) return <p className="muted">{t("加载中…")}</p>;
   if (!episodes.length) {
     return (
       <div className="panel-empty soft">
-        <p className="lead">这里还没有内容</p>
-        <p className="muted">新的内容到了，会出现在这里</p>
+        <p className="lead">{t("这里还没有内容")}</p>
+        <p className="muted">{t("新的内容到了，会出现在这里")}</p>
       </div>
     );
   }
 
-  const groups: { label: string; items: Episode[] }[] = [];
-  for (const ep of episodes) {
-    const label = groupLabel(ep.published);
-    const last = groups[groups.length - 1];
-    if (last?.label === label) last.items.push(ep);
-    else groups.push({ label, items: [ep] });
-  }
-
   return (
     <EpFeed>
-      {groups.map((g) => (
-        <section key={g.label} className="ep-group">
-          <h3 className="ep-group-h">{g.label}</h3>
-          {g.items.map((ep) => (
-            <EpisodeRow key={ep.id} ep={ep} onOpen={() => onOpen(ep)} />
-          ))}
-        </section>
-      ))}
+      <div ref={wrapRef} style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((vRow) => {
+          const item = flat[vRow.index]!;
+          return (
+            <div
+              key={item.kind === "head" ? `h:${item.label}` : item.ep.id}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vRow.start}px)`,
+              }}
+            >
+              {item.kind === "head" ? (
+                <h3 className="ep-group-h">{item.label}</h3>
+              ) : (
+                <EpisodeRow ep={item.ep} onOpen={() => onOpen(item.ep)} />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </EpFeed>
   );
 }

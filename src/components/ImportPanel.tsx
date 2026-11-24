@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FileUp, Loader2, Youtube } from "lucide-react";
 import { api, errText } from "../lib/api";
 import { sameFeed } from "../lib/feeds";
+import { useT } from "../lib/i18n";
 import { useStore } from "../store";
 import { BrowserAccess, browserName } from "./BrowserAccess";
 
@@ -106,6 +107,7 @@ const BROWSERS: [Browser, string][] = IS_MAC
 const needsBrowserAccess = (msg: string) => msg.includes("需要你允许");
 
 export function ImportPanel({ onDone }: { onDone?: () => void }) {
+  const t = useT();
   const shows = useStore((s) => s.shows);
   const [items, setItems] = useState<ImportItem[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -126,7 +128,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
   const offer = (list: ImportItem[]) => {
     setItems(list);
     setPicked(new Set(list.filter((x) => !has(x.input)).map((x) => x.input)));
-    if (!list.length) setError("文件里没有找到订阅");
+    if (!list.length) setError(t("文件里没有找到订阅"));
   };
 
   const fromBrowser = async () => {
@@ -181,7 +183,11 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
     await useStore.getState().reloadShows();
     useStore
       .getState()
-      .notify(failed ? `已导入 ${done - failed} 个，${failed} 个没有成功` : `已导入 ${done} 个订阅`);
+      .notify(
+        failed
+          ? t("已导入 {ok} 个，{failed} 个没有成功", { ok: done - failed, failed })
+          : t("已导入 {n} 个订阅", { n: done }),
+      );
     setProgress(null);
     setItems(null);
     onDone?.();
@@ -198,7 +204,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
       <div className="import">
         <div className="import-list-head">
           <p className="small">
-            找到 {items.length} 个，其中 {fresh.length} 个还没订阅
+            {t("找到 {total} 个，其中 {fresh} 个还没订阅", { total: items.length, fresh: fresh.length })}
           </p>
           <button
             className="link-btn small"
@@ -206,7 +212,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
               setPicked(picked.size === fresh.length ? new Set() : new Set(fresh.map((x) => x.input)))
             }
           >
-            {picked.size === fresh.length ? "全不选" : "全选"}
+            {picked.size === fresh.length ? t("全不选") : t("全选")}
           </button>
         </div>
         <div className="import-list">
@@ -229,7 +235,7 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
                 <span className="clamp1">{x.title}</span>
                 {done && (
                   <span className="sub-done">
-                    <Check size={12} /> 已订阅
+                    <Check size={12} /> {t("已订阅")}
                   </span>
                 )}
               </label>
@@ -239,15 +245,15 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
         <div className="modal-foot">
           {progress && (
             <span className="small muted">
-              <Loader2 size={13} className="spin" /> 正在订阅 {progress.done} / {progress.total}
+              <Loader2 size={13} className="spin" /> {t("正在订阅 {done} / {total}", { done: progress.done, total: progress.total })}
             </span>
           )}
           <div className="spacer" />
           <button className="btn ghost" onClick={() => setItems(null)} disabled={progress != null}>
-            返回
+            {t("返回")}
           </button>
           <button className="btn primary" onClick={() => void go()} disabled={!picked.size || progress != null}>
-            订阅 {picked.size} 个
+            {t("订阅 {n} 个", { n: picked.size })}
           </button>
         </div>
       </div>
@@ -262,12 +268,12 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
             <Youtube size={18} />
           </span>
           <div>
-            <p className="import-title">YouTube 订阅</p>
-            <p className="muted small">读取你在浏览器里登录的 YouTube，一次导入所有订阅的频道。</p>
+            <p className="import-title">{t("YouTube 订阅")}</p>
+            <p className="muted small">{t("读取你在浏览器里登录的 YouTube，一次导入所有订阅的频道。")}</p>
           </div>
         </div>
         <div className="import-row-actions">
-          <select value={browser} onChange={(e) => setBrowser(e.target.value as Browser)} aria-label="浏览器">
+          <select value={browser} onChange={(e) => setBrowser(e.target.value as Browser)} aria-label={t("浏览器")}>
             {BROWSERS.map(([k, label]) => (
               <option key={k} value={k}>
                 {label}
@@ -277,20 +283,20 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
           <button className="btn primary sm" onClick={() => void fromBrowser()} disabled={busy != null}>
             {busy === browser ? (
               <>
-                <Loader2 size={13} className="spin" /> 正在读取…
+                <Loader2 size={13} className="spin" /> {t("正在读取…")}
               </>
             ) : (
-              "从浏览器导入"
+              t("从浏览器导入")
             )}
           </button>
         </div>
         <p className="muted small import-note">
           {browser === "safari"
-            ? "Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许声译。"
+            ? t("Safari 需要先在 系统设置 › 隐私与安全性 › 完全磁盘访问权限 里允许声译。")
             : IS_MAC
-              ? `系统会问是否允许声译读取 ${browserName(browser)} 的数据，选「允许」。`
+              ? t("系统会问是否允许声译读取 {browser} 的数据，选「允许」。", { browser: browserName(browser) })
               : ""}
-          登录信息只在本机读取，读完就删除，不会上传。
+          {t("登录信息只在本机读取，读完就删除，不会上传。")}
         </p>
         {denied && <BrowserAccess browser={browser} onRetry={() => void fromBrowser()} />}
       </div>
@@ -300,15 +306,15 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
             <FileUp size={18} />
           </span>
           <div>
-            <p className="import-title">小宇宙和其他播客 App</p>
+            <p className="import-title">{t("小宇宙和其他播客 App")}</p>
             <p className="muted small">
-              导入订阅文件：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的导出。
+              {t("导入订阅文件：OPML（小宇宙、Pocket Casts、Overcast 等），或 Google Takeout、NewPipe、FreeTube 的导出。")}
             </p>
           </div>
         </div>
         <div className="import-row-actions">
           <button className="btn sm" onClick={() => fileInput.current?.click()} disabled={busy != null}>
-            {busy === "file" ? <Loader2 size={13} className="spin" /> : null} 选择文件
+            {busy === "file" ? <Loader2 size={13} className="spin" /> : null} {t("选择文件")}
           </button>
           <input
             ref={fileInput}
@@ -323,11 +329,11 @@ export function ImportPanel({ onDone }: { onDone?: () => void }) {
           />
         </div>
         <details className="import-how small">
-          <summary>小宇宙怎么导出？</summary>
+          <summary>{t("小宇宙怎么导出？")}</summary>
           <ol>
-            <li>打开小宇宙 App，进入「我的」→「订阅」</li>
-            <li>点右上角的分享按钮，选「导出 OPML」</li>
-            <li>把文件存到电脑上，在这里选择它</li>
+            <li>{t("打开小宇宙 App，进入「我的」→「订阅」")}</li>
+            <li>{t("点右上角的分享按钮，选「导出 OPML」")}</li>
+            <li>{t("把文件存到电脑上，在这里选择它")}</li>
           </ol>
         </details>
       </div>

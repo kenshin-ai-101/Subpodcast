@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 src/CLAUDE.md
  */
 import { api, type Segment } from "./api";
+import { resolveChatModel } from "./modelResolve";
 import { llmReady } from "./jobs";
 import { useStore } from "../store";
 import type { SubContent } from "./videoClipCanvas";
@@ -168,7 +169,7 @@ export async function aiLineBreaks(
   const raw = await api.llmChat({
     provider: provider.id,
     baseUrl: provider.baseUrl,
-    model: provider.model,
+    model: resolveChatModel(settings, provider),
     protocol: provider.protocol,
     messages: [
       { role: "system", content: system },

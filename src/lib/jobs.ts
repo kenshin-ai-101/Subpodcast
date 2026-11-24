@@ -8,6 +8,8 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { api, errText, type Episode, type Segment, type Transcript } from "./api";
 import { useAsrModels } from "./asrModels";
+import { tNow } from "./i18n";
+import { resolveChatModel } from "./modelResolve";
 import { activeCloudAsr } from "./settings";
 import { useStore } from "../store";
 
@@ -308,9 +310,11 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
     );
   };
   const merge = (got: Map<number, string>) => {
-    items = [...useJobs.getState().translations[ep.id].items];
+    const cur = useJobs.getState().translations[ep.id];
+    if (!cur || signal.aborted) return;
+    items = [...cur.items];
     for (const [i, text] of got) items[i] = text;
-    patch("translations", ep.id, { ...useJobs.getState().translations[ep.id], items });
+    patch("translations", ep.id, { ...cur, items });
     save();
   };
   const next = (): Batch | undefined => {
@@ -348,6 +352,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
           texts,
           target: "zh-CN",
           engine: "llm",
+          quality: settings.translateQuality,
           provider: provider?.id,
           baseUrl: provider?.baseUrl,
           model: provider?.model,
@@ -400,6 +405,7 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
 
   controllers.delete(ep.id);
   const final = useJobs.getState().translations[ep.id];
+  if (!final) return;
   await api.setBlob(ep.id, "zh", JSON.stringify(final.items));
   patch("translations", ep.id, {
     ...final,
@@ -447,13 +453,13 @@ export async function runCloudAsr(ep: Episode) {
 export async function generateTranscript(ep: Episode) {
   const settings = useStore.getState().settings;
   const local = settings.asrEngine === "local";
-  if (!local && !ep.audioUrl) throw new Error("这集没有音频地址，无法云端识别");
-  if (local && !ep.audioUrl && !ep.videoId) throw new Error("这集没有可识别的音频");
+  if (!local && !ep.audioUrl) throw new Error(tNow("这集没有音频地址，无法云端识别"));
+  if (local && !ep.audioUrl && !ep.videoId) throw new Error(tNow("这集没有可识别的音频"));
 
   await ensureAsrListen();
   patch("asrRunning", ep.id, true);
   patch("asrError", ep.id, undefined);
-  patch("asrProgress", ep.id, { stage: "prepare", progress: 0, message: "准备中…" });
+  patch("asrProgress", ep.id, { stage: "prepare", progress: 0, message: tNow("准备中…") });
 
   try {
     let t: Transcript;
@@ -466,14 +472,14 @@ export async function generateTranscript(ep: Episode) {
         info = useAsrModels.getState().models.find((m) => m.id === modelId);
       }
       if (!info?.installed) {
-        patch("asrProgress", ep.id, { stage: "download", progress: 0, message: "下载本机模型…" });
+        patch("asrProgress", ep.id, { stage: "download", progress: 0, message: tNow("下载本机模型…") });
         await useAsrModels.getState().download(modelId);
       }
       t = await api.localTranscribe({ episodeId: ep.id, model: modelId, language: "auto" });
     } else {
       const cloud = activeCloudAsr(settings);
-      if (!cloud) throw new Error("请先在设置 › 字幕里选择云端识别服务");
-      patch("asrProgress", ep.id, { stage: "transcribe", progress: 0.2, message: "上传并识别…" });
+      if (!cloud) throw new Error(tNow("请先在设置 › 字幕里选择云端识别服务"));
+      patch("asrProgress", ep.id, { stage: "transcribe", progress: 0.2, message: tNow("上传并识别…") });
       t = await api.cloudTranscribe({
         episodeId: ep.id,
         audioUrl: ep.audioUrl!,
@@ -510,5 +516,6 @@ export async function llmReady(use: "chat" | "translate" = "chat"): Promise<bool
     use === "translate"
       ? (settings.providers[settings.translateProvider] ?? settings.providers[settings.chatProvider])
       : settings.providers[settings.chatProvider];
-  return Boolean(p?.model && p.baseUrl !== "" && (!p.needsKey || (await api.hasApiKey(p.id))));
+  const model = use === "chat" ? resolveChatModel(settings, p) : (p?.model ?? "");
+  return Boolean(model && p && p.baseUrl !== "" && (!p.needsKey || (await api.hasApiKey(p.id))));
 }

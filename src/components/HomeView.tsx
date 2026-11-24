@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Check, ChevronRight, Loader2, Play, Plus } from "lucide-react";
 import { api, errText, type Episode, type Show } from "../lib/api";
 import { date, duration } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { useLibrary } from "../lib/library";
 import { isSubscribed, pickName, showName, type Pick } from "../lib/picks";
 import { playAll } from "../lib/queue";
@@ -16,6 +17,7 @@ import { recommend, type Recommendation } from "../lib/recommend";
 import { useStore } from "../store";
 
 function ContinueHero({ ep }: { ep: Episode }) {
+  const t = useT();
   const pct = ep.duration ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const left = ep.duration ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
   const resume = () => {
@@ -44,14 +46,14 @@ function ContinueHero({ ep }: { ep: Episode }) {
       </div>
       <div className="hero-meta">
         <p className="meta-line">
-          继续收听{ep.showTitle ? ` · ${showName(ep.showTitle)}` : ""}
+          {t("继续收听")}{ep.showTitle ? ` · ${showName(ep.showTitle)}` : ""}
         </p>
         <p className="hero-title">{ep.title}</p>
         <div className="hero-foot">
           <span className="btn primary hero-play">
-            <Play size={15} fill="currentColor" /> 继续播放
+            <Play size={15} fill="currentColor" /> {t("继续播放")}
           </span>
-          {left > 0 && <span className="hero-left">还剩 {left} 分钟</span>}
+          {left > 0 && <span className="hero-left">{t("还剩 {n} 分钟", { n: left })}</span>}
         </div>
       </div>
     </div>
@@ -59,6 +61,7 @@ function ContinueHero({ ep }: { ep: Episode }) {
 }
 
 function EpisodeCard({ ep }: { ep: Episode }) {
+  const t = useT();
   const openEpisode = useStore((s) => s.openEpisode);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const left = ep.duration && pct > 0 ? Math.max(1, Math.round((ep.duration - ep.progress) / 60)) : 0;
@@ -87,14 +90,14 @@ function EpisodeCard({ ep }: { ep: Episode }) {
             <span style={{ width: `${pct}%` }} />
           </span>
         )}
-        {subsReady && <span className="thumb-subs">有字幕</span>}
-        <button type="button" className="card-play" title="播放" onClick={play}>
+        {subsReady && <span className="thumb-subs">{t("有字幕")}</span>}
+        <button type="button" className="card-play" title={t("播放")} onClick={play}>
           <Play size={16} fill="currentColor" />
         </button>
       </div>
       <p className="ep-kicker">
         {ep.showTitle && <span className="show-name">{showName(ep.showTitle)}</span>}
-        <span>{left ? `剩 ${left} 分钟` : date(ep.published)}</span>
+        <span>{left ? t("剩 {n} 分钟", { n: left }) : date(ep.published)}</span>
       </p>
       <p className="card-title">{ep.title}</p>
     </div>
@@ -102,6 +105,7 @@ function EpisodeCard({ ep }: { ep: Episode }) {
 }
 
 function ShowTile({ show }: { show: Show }) {
+  useT();
   const go = useStore((s) => s.go);
   return (
     <div
@@ -130,6 +134,7 @@ function RecRow({
   adding: boolean;
   done: boolean;
 }) {
+  const t = useT();
   const go = useStore((s) => s.go);
   return (
     <div
@@ -143,7 +148,7 @@ function RecRow({
       <div className="rec-text">
         <p className="rec-name clamp1">{pickName(r.pick)}</p>
         <p className="muted small clamp1">
-          {r.because ? `因为你在听「${showName(r.because)}」` : r.pick.intro}
+          {r.because ? t("因为你在听「{show}」", { show: showName(r.because) }) : t(r.pick.intro)}
         </p>
       </div>
       {done ? (
@@ -154,7 +159,7 @@ function RecRow({
         <button
           type="button"
           className="icon-btn sm rec-add"
-          title="订阅"
+          title={t("订阅")}
           disabled={adding}
           onClick={(e) => {
             e.stopPropagation();
@@ -169,6 +174,7 @@ function RecRow({
 }
 
 export function HomeView() {
+  const t = useT();
   const { shows, go, reloadShows, notify, set } = useStore(
     useShallow((s) => ({
       shows: s.shows,
@@ -219,7 +225,7 @@ export function HomeView() {
     try {
       await api.addSubscription(input);
       await reloadShows();
-      notify(`已订阅「${pickName(pick)}」`);
+      notify(t("已订阅「{title}」", { title: pickName(pick) }));
     } catch (e) {
       notify(errText(e));
     } finally {
@@ -231,13 +237,13 @@ export function HomeView() {
     return (
       <div className="page">
         <div className="empty-home">
-          <h2>声译</h2>
-          <p>订阅海外播客与 YouTube，对照双语字幕听，还能直接问这一集。</p>
+          <h2>{t("声译")}</h2>
+          <p>{t("订阅海外播客与 YouTube，对照双语字幕听，还能直接问这一集。")}</p>
           <button type="button" className="btn primary" onClick={() => go({ kind: "discover" })}>
-            去发现节目
+            {t("去发现节目")}
           </button>
           <button type="button" className="btn" onClick={() => set({ addOpen: true })}>
-            粘贴链接订阅
+            {t("粘贴链接订阅")}
           </button>
         </div>
       </div>
@@ -250,9 +256,9 @@ export function HomeView() {
       {(upNext.length > 0 || hero) && (
         <section>
           <div className="module-head">
-            <h2 className="module-title">接下来听</h2>
+            <h2 className="module-title">{t("接下来听")}</h2>
             <button type="button" className="link-btn" onClick={() => go({ kind: "recent" })}>
-              全部{favorites.length ? ` · 收藏 ${favorites.length}` : ""} <ChevronRight size={13} />
+              {t("全部")}{favorites.length ? ` · ${t("收藏 {n}", { n: favorites.length })}` : ""} <ChevronRight size={13} />
             </button>
           </div>
           {upNext.length > 0 && (
@@ -268,16 +274,16 @@ export function HomeView() {
         <div>
           <section>
             <div className="module-head">
-              <h2 className="module-title">最新单集</h2>
+              <h2 className="module-title">{t("最新单集")}</h2>
             </div>
             {!eps ? (
-              <p className="muted">加载中…</p>
+              <p className="muted">{t("加载中…")}</p>
             ) : (
               <>
                 <div className="card-grid">{gridEps.map((e) => (e ? <EpisodeCard key={e.id} ep={e} /> : null))}</div>
                 {!all && fresh.length > limit && (
                   <button type="button" className="btn sm" style={{ marginTop: 12 }} onClick={() => setAll(true)}>
-                    显示更多
+                    {t("显示更多")}
                   </button>
                 )}
               </>
@@ -288,9 +294,9 @@ export function HomeView() {
           {recs.length > 0 && (
             <section>
               <div className="module-head">
-                <h2 className="module-title">为你推荐</h2>
+                <h2 className="module-title">{t("为你推荐")}</h2>
                 <button type="button" className="link-btn" onClick={() => go({ kind: "discover" })}>
-                  更多
+                  {t("更多")}
                 </button>
               </div>
               <div className="rec-list">
@@ -308,9 +314,9 @@ export function HomeView() {
           )}
           <section>
             <div className="module-head">
-              <h2 className="module-title">订阅节目</h2>
+              <h2 className="module-title">{t("订阅节目")}</h2>
               <button type="button" className="link-btn" onClick={() => set({ addOpen: true })}>
-                <Plus size={13} /> 添加
+                <Plus size={13} /> {t("添加")}
               </button>
             </div>
             <div className="show-grid">
@@ -371,6 +377,7 @@ export function EpisodeRow({
   showShow?: boolean;
   onOpen: () => void;
 }) {
+  const t = useT();
   const playing = useStore((s) => s.current?.id === ep.id);
   const pct = ep.duration && ep.progress > 5 ? Math.min(100, (ep.progress / ep.duration) * 100) : 0;
   const done = pct >= 97;
@@ -430,10 +437,10 @@ export function EpisodeRow({
         <p className="ep-title2">{ep.title}</p>
         {(ep.hasTranscript || ep.videoId || left > 0 || done) && (
           <p className="ep-tags">
-            {ep.hasTranscript && <span className="tag has-cc">字幕</span>}
-            {ep.videoId && <span className="tag">视频</span>}
-            {left > 0 && <span className="tag progress">剩 {left} 分钟</span>}
-            {done && <span className="tag">已听完</span>}
+            {ep.hasTranscript && <span className="tag has-cc">{t("字幕")}</span>}
+            {ep.videoId && <span className="tag">{t("视频")}</span>}
+            {left > 0 && <span className="tag progress">{t("剩 {n} 分钟", { n: left })}</span>}
+            {done && <span className="tag">{t("已听完")}</span>}
           </p>
         )}
       </div>

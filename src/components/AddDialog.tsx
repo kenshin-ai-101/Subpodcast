@@ -9,10 +9,12 @@ import { useShallow } from "zustand/react/shallow";
 import { Import, Link2, Loader2, Plus, Search, X } from "lucide-react";
 import { api, errText, type Show } from "../lib/api";
 import { looksLikeLink } from "../lib/feeds";
+import { useT } from "../lib/i18n";
 import { useStore } from "../store";
 import { ImportPanel } from "./ImportPanel";
 
 export function AddDialog() {
+  const t = useT();
   const { addOpen, addTab, set, reloadShows, notify, go, shows } = useStore(
     useShallow((s) => ({
       addOpen: s.addOpen,
@@ -79,7 +81,7 @@ export function AddDialog() {
       const show = await api.addSubscription(value);
       close();
       await reloadShows();
-      notify(`已订阅「${show.title}」`);
+      notify(t("已订阅「{title}」", { title: show.title }));
       go({ kind: "show", id: show.id });
     } catch (err) {
       setError(errText(err));
@@ -104,7 +106,7 @@ export function AddDialog() {
         className={tab === "search" ? "on" : ""}
         onClick={() => switchTab("search")}
       >
-        <Search size={15} /> 搜索节目
+        <Search size={15} /> {t("搜索节目")}
       </button>
       <button
         type="button"
@@ -113,7 +115,7 @@ export function AddDialog() {
         className={tab === "link" ? "on" : ""}
         onClick={() => switchTab("link")}
       >
-        <Link2 size={15} /> 链接或 RSS
+        <Link2 size={15} /> {t("链接或 RSS")}
       </button>
       <button
         type="button"
@@ -122,17 +124,17 @@ export function AddDialog() {
         className={tab === "import" ? "on" : ""}
         onClick={() => switchTab("import")}
       >
-        <Import size={15} /> 导入订阅
+        <Import size={15} /> {t("导入订阅")}
       </button>
     </div>
   );
 
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="添加节目">
+      <div className="modal" role="dialog" aria-modal="true" aria-label={t("添加节目")}>
         <div className="modal-head">
           {head}
-          <button className="icon-btn" onClick={close} aria-label="关闭">
+          <button className="icon-btn" onClick={close} aria-label={t("关闭")}>
             <X size={18} />
           </button>
         </div>
@@ -158,7 +160,7 @@ export function AddDialog() {
                   spellCheck={false}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="输入节目名，比如 Lex Fridman、张小珺"
+                  placeholder={t("输入节目名，比如 Lex Fridman、张小珺")}
                 />
                 {(searching || busy) && <Loader2 size={14} className="spin muted" />}
               </div>
@@ -166,20 +168,20 @@ export function AddDialog() {
               <div className="add-results">
                 {pastedLink ? (
                   <div className="add-empty">
-                    <p className="muted small">这是一个链接，回车直接添加</p>
+                    <p className="muted small">{t("这是一个链接，回车直接添加")}</p>
                     <button type="submit" className="btn primary sm" disabled={busy}>
-                      添加
+                      {t("添加")}
                     </button>
                   </div>
                 ) : !q.trim() ? (
                   <div className="add-empty">
                     <p className="muted small">
-                      搜索 Apple Podcasts 上的节目，中英文名都可以。YouTube 频道或小宇宙请用「链接或 RSS」。
+                      {t("搜索 Apple Podcasts 上的节目，中英文名都可以。YouTube 频道或小宇宙请用「链接或 RSS」。")}
                     </p>
                   </div>
                 ) : results && !results.length ? (
                   <div className="add-empty">
-                    <p className="muted small">没有找到，换个关键词，或者用「链接或 RSS」添加</p>
+                    <p className="muted small">{t("没有找到，换个关键词，或者用「链接或 RSS」添加")}</p>
                   </div>
                 ) : (
                   results?.map((r) => {
@@ -196,7 +198,7 @@ export function AddDialog() {
                           <p className="meta-line clamp1">{r.author}</p>
                         </div>
                         {done ? (
-                          <span className="sub-done">已订阅</span>
+                          <span className="sub-done">{t("已订阅")}</span>
                         ) : (
                           <button
                             type="button"
@@ -205,7 +207,7 @@ export function AddDialog() {
                             disabled={adding != null}
                           >
                             {adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />}{" "}
-                            订阅
+                            {t("订阅")}
                           </button>
                         )}
                       </div>
@@ -229,35 +231,35 @@ export function AddDialog() {
                 spellCheck={false}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接"
+                placeholder={t("粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接")}
               />
               {error && <p className="error-text">{error}</p>}
               <ul className="hints muted small">
                 <li>
-                  <b>YouTube</b> 频道（@名字 / 频道链接 / 播放列表），或单个视频链接
+                  <b>YouTube</b> {t("频道（@名字 / 频道链接 / 播放列表），或单个视频链接")}
                 </li>
                 <li>
-                  <b>Apple Podcasts</b> 节目链接
+                  <b>Apple Podcasts</b> {t("节目链接")}
                 </li>
                 <li>
-                  <b>小宇宙</b> 节目或单集链接
+                  <b>{t("小宇宙")}</b> {t("节目或单集链接")}
                 </li>
                 <li>
-                  任意播客 <b>RSS</b> 地址
+                  {t("任意播客")} <b>RSS</b> {t("地址")}
                 </li>
               </ul>
               <div className="modal-foot">
                 <div className="spacer" />
                 <button type="button" className="btn ghost" onClick={close}>
-                  取消
+                  {t("取消")}
                 </button>
                 <button type="submit" className="btn primary" disabled={busy || !input.trim()}>
                   {busy ? (
                     <>
-                      <Loader2 size={14} className="spin" /> 正在读取…
+                      <Loader2 size={14} className="spin" /> {t("正在读取…")}
                     </>
                   ) : (
-                    "添加"
+                    t("添加")
                   )}
                 </button>
               </div>

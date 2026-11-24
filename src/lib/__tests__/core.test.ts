@@ -1,0 +1,161 @@
+import { describe, expect, it } from "vitest";
+import { activeIndex } from "../playback";
+import { isSafeHttpUrl } from "../safeUrl";
+import { ACTIONS, checkCombo, keymap, prettyCombo } from "../shortcuts";
+import { resolveChatModel } from "../modelResolve";
+import { DEFAULTS } from "../settings";
+import { buildCues, renderTranscript } from "../exportTranscript";
+import { shortLines } from "../clipLines";
+import { buildPlatformPost } from "../highlights";
+import { resolveLocale, translate } from "../i18n";
+
+describe("playback.activeIndex", () => {
+  it("finds active segment via binary search", () => {
+    const starts = [0, 5.2, 12.0, 20.5, 45.0];
+    expect(activeIndex(starts, 0)).toBe(0);
+    expect(activeIndex(starts, 5.19)).toBe(0);
+    expect(activeIndex(starts, 5.2)).toBe(1);
+    expect(activeIndex(starts, 19.9)).toBe(2);
+    expect(activeIndex(starts, 100)).toBe(4);
+  });
+});
+
+describe("safeUrl.isSafeHttpUrl", () => {
+  it("allows only http and https URLs", () => {
+    expect(isSafeHttpUrl("https://subpodcast.app/ep/1")).toBe(true);
+    expect(isSafeHttpUrl("http://localhost:1420")).toBe(true);
+    expect(isSafeHttpUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafeHttpUrl("file:///etc/passwd")).toBe(false);
+    expect(isSafeHttpUrl("open://custom")).toBe(false);
+    expect(isSafeHttpUrl("not a url")).toBe(false);
+  });
+});
+
+describe("shortcuts registry", () => {
+  it("exposes all 19 actions and detects conflicts and reserved combos", () => {
+    expect(ACTIONS.length).toBe(19);
+    const m = keymap({ playPause: ["P"] });
+    expect(m.playPause).toEqual(["P"]);
+    expect(checkCombo("Mod+Q", "playPause").reserved).toBe(true);
+    expect(checkCombo("F", "playPause").takenBy).toBe("fullscreen");
+    expect(prettyCombo("Mod+/").length).toBeGreaterThan(0);
+  });
+});
+
+describe("settings & modelResolve", () => {
+  it("defaults shareTranscripts to false for privacy", () => {
+    expect(DEFAULTS.shareTranscripts).toBe(false);
+  });
+
+  it("prefers settings.chatModel for active chatProvider", () => {
+    const s = { ...DEFAULTS, chatProvider: "deepseek", chatModel: "deepseek-reasoner" };
+    expect(resolveChatModel(s)).toBe("deepseek-reasoner");
+    const s2 = { ...DEFAULTS, chatProvider: "deepseek", chatModel: "" };
+    expect(resolveChatModel(s2)).toBe(DEFAULTS.providers.deepseek.model);
+  });
+});
+
+describe("exportTranscript & clipLines", () => {
+  it("formats SRT bilingual export cleanly", () => {
+    const cues = buildCues([{ start: 1.5, end: 4.2, text: "Hello world" }], ["你好世界"], "bilingual", true);
+    const content = renderTranscript({
+      format: "srt",
+      episode: {
+        id: "ep1",
+        showId: "s1",
+        guid: "g1",
+        title: "Test Episode",
+        progress: 0,
+        hasTranscript: true,
+        showTitle: "Test Show",
+      },
+      cues,
+      sourceLabel: "官方字幕",
+    });
+    expect(content).toContain("00:00:01,500 --> 00:00:04,200");
+    expect(content).toContain("你好世界");
+    expect(content).toContain("Hello world");
+  });
+
+  it("splits long Chinese caption lines within max CJK budget", () => {
+    const lines = shortLines("这是一段用来测试竖屏字幕自动换行的较长中文口语表达内容", 12);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.join("")).toBe("这是一段用来测试竖屏字幕自动换行的较长中文口语表达内容");
+  });
+});
+
+describe("i18n engine", () => {
+  it("resolves explicit locales and translates zh-CN / zh-TW / en", () => {
+    expect(resolveLocale("zh-CN")).toBe("zh-CN");
+    expect(resolveLocale("zh-TW")).toBe("zh-TW");
+    expect(resolveLocale("en")).toBe("en");
+    expect(translate("zh-CN", "首页")).toBe("首页");
+    expect(translate("zh-TW", "首页")).toBe("首頁");
+    expect(translate("en", "首页")).toBe("Home");
+  });
+});
+
+describe("highlights.buildPlatformPost", () => {
+  it("updates short, article, and social copy when regenerated while preserving cover", () => {
+    const base = {
+      ep: { title: "Ep 1", showTitle: "Show A", videoId: "abc123" },
+      coverHook: "封面【大字】",
+      coverSub: "封面副标题",
+      segments: [{ start: 10, end: 15, text: "Original line" }],
+      zh: ["中文原话"],
+      startIdx: 0,
+      endIdx: 0,
+      clipStart: 10,
+      tags: ["AI"],
+    };
+    const v1Short = buildPlatformPost("short", {
+      ...base,
+      title: "第一版标题",
+      shareCopy: "第一版正文 #AI",
+      articleCopy: "第一版导读",
+    });
+    const v2Short = buildPlatformPost("short", {
+      ...base,
+      title: "第二版标题",
+      shareCopy: "第二版正文 #AI",
+      articleCopy: "第二版导读",
+    });
+    expect(v1Short).toContain("第一版标题");
+    expect(v2Short).toContain("第二版标题");
+    expect(v2Short).not.toBe(v1Short);
+
+    const v1Article = buildPlatformPost("article", {
+      ...base,
+      title: "第一版标题",
+      shareCopy: "第一版正文",
+      articleCopy: "第一版导读",
+    });
+    const v2Article = buildPlatformPost("article", {
+      ...base,
+      title: "第二版标题",
+      shareCopy: "第二版正文",
+      articleCopy: "第二版导读",
+    });
+    expect(v1Article).toContain("# 封面大字");
+    expect(v2Article).toContain("# 封面大字");
+    expect(v2Article).toContain("第二版导读");
+    expect(v2Article).not.toBe(v1Article);
+
+    const v1Social = buildPlatformPost("social", {
+      ...base,
+      title: "第一版标题",
+      shareCopy: "第一版开头\n第二行",
+      articleCopy: "第一版导读",
+    });
+    const v2Social = buildPlatformPost("social", {
+      ...base,
+      title: "第二版标题",
+      shareCopy: "第二版开头\n第二行",
+      articleCopy: "第二版导读",
+    });
+    expect(v1Social).toContain("「第一版标题」");
+    expect(v2Social).toContain("「第二版标题」");
+    expect(v2Social).toContain("第二版开头");
+    expect(v2Social).not.toBe(v1Social);
+  });
+});

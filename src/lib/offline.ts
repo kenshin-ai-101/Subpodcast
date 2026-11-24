@@ -8,6 +8,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { api, errText, type Episode } from "./api";
+import { tNow } from "./i18n";
 import { useStore } from "../store";
 
 export interface Saved {
@@ -88,7 +89,7 @@ export function isLocalAssetSrc(src: string): boolean {
 
 export async function downloadEpisode(ep: Episode) {
   if (!ep.audioUrl && !ep.videoId) {
-    useStore.getState().notify("这集没有可下载的音频");
+    useStore.getState().notify(tNow("这集没有可下载的音频"));
     return;
   }
   await ensureListen();
@@ -99,7 +100,7 @@ export async function downloadEpisode(ep: Episode) {
       const { [ep.id]: _, ...rest } = s.progress;
       return { saved: { ...s.saved, [ep.id]: saved }, progress: rest };
     });
-    useStore.getState().notify("已下载，可离线收听");
+    useStore.getState().notify(tNow("已下载，可离线收听"));
   } catch (e) {
     useOffline.setState((s) => {
       const { [ep.id]: _, ...rest } = s.progress;
@@ -123,14 +124,14 @@ export async function removeDownload(episodeId: string) {
     const { [episodeId]: _, ...rest } = s.saved;
     return { saved: rest };
   });
-  useStore.getState().notify("已删除下载");
+  useStore.getState().notify(tNow("已删除下载"));
 }
 
 /** 清空全部离线音频；字幕与收听进度保留。 */
 export async function clearDownloads() {
   await api.clearDownloads();
   useOffline.setState({ saved: {}, progress: {} });
-  useStore.getState().notify("已删除全部下载");
+  useStore.getState().notify(tNow("已删除全部下载"));
 }
 
 export function bytes(n: number): string {

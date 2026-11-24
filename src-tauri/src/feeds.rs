@@ -998,11 +998,12 @@ fn preferred_xyz_pid(html: &str) -> Option<String> {
 
 /// 同一期的稳定键（#010 / EP010 / 第10期 → `#10`）；跨源合并与库内去重共用。
 pub fn episode_dedupe_key(title: &str) -> String {
-    // #010 / EP010 / Ep 10 / 第10期 → 同一期
-    if let Some(c) = Regex::new(r"(?i)(?:#|ep|第)\s*0*(\d+)")
-        .ok()
-        .and_then(|re| re.captures(title))
-    {
+    static EP_NUM_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"(?i)(?:^|[\s\[\(【（|·\-—:])(?:#|ep\.?|第)\s*0*(\d+)(?:[\s\]\)】）|·\-—:：期]|$)")
+            .expect("ep num regex")
+    });
+    // #010 / EP010 / Ep 10 / 第10期 → 同一期；要求词边界，避免误匹配 Deep 1 / Step 1
+    if let Some(c) = EP_NUM_RE.captures(title) {
         return format!("#{}", &c[1]);
     }
     title
@@ -1083,7 +1084,7 @@ fn xyzfm_slug(url: &str) -> Option<String> {
 fn youtube_twin_handle(feed_url: &str, title: &str) -> Option<&'static str> {
     let u = feed_url.to_lowercase();
     let t = title.to_lowercase();
-    if qiaomu_preferred_source(feed_url, title).is_some()
+    if qiaomu_preferred_source(feed_url, title) == Some("nexttoken")
         || u.contains("116d068f0")
         || u.contains("6a9956fafbb9512fc83ddbb5")
         || u.contains("nexttokentv")
@@ -1279,17 +1280,17 @@ async fn youtube_channel_id(input: &str) -> Result<String> {
 }
 
 fn apple_id(s: &str) -> Option<String> {
-    Regex::new(r"id(\d{6,})")
-        .ok()?
-        .captures(s)
-        .map(|c| c[1].to_string())
-        .or_else(|| {
-            if s.chars().all(|c| c.is_ascii_digit()) && s.len() >= 6 {
-                Some(s.to_string())
-            } else {
-                None
-            }
-        })
+    let trimmed = s.trim();
+    if trimmed.chars().all(|c| c.is_ascii_digit()) && trimmed.len() >= 6 {
+        return Some(trimmed.to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.contains("podcasts.apple.com") && !lower.contains("itunes.apple.com") {
+        return None;
+    }
+    static APPLE_ID_RE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"id(\d{6,})").expect("apple id regex"));
+    APPLE_ID_RE.captures(trimmed).map(|c| c[1].to_string())
 }
 
 /// 从节目页 / 音频 CDN / xyz RSS 等文本里抠 24 位 hex 节目 id。
@@ -1315,7 +1316,7 @@ pub fn xiaoyuzhou_podcast_id(s: &str) -> Option<String> {
 
 fn looks_like_html(body: &str) -> bool {
     let t = body.trim_start_matches('\u{feff}').trim_start();
-    let head = t.get(..64).unwrap_or(t).to_ascii_lowercase();
+    let head: String = t.chars().take(64).collect::<String>().to_ascii_lowercase();
     head.starts_with("<!doctype")
         || head.starts_with("<html")
         || head.starts_with("<head")
@@ -1718,5 +1719,45 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert!(m.iter().any(|e| e.title.contains("#010")));
         assert!(m.iter().any(|e| e.title.contains("better") && e.audio_url.is_some()));
+    }
+
+    #[test]
+    fn twin_handle_does_not_hijack_other_qiaomu_shows() {
+        assert_eq!(
+            youtube_twin_handle("https://rss.qiaomu.ai/sources/nexttoken", "词元之外"),
+            Some("https://www.youtube.com/@nexttokentv")
+        );
+        assert_eq!(
+            youtube_twin_handle("https://rss.qiaomu.ai/sources/zhangxiaojun", "张小珺商业访谈录"),
+            None
+        );
+        assert_eq!(
+            youtube_twin_handle("https://rss.qiaomu.ai/sources/latetalk", "晚点聊"),
+            None
+        );
+    }
+
+    #[test]
+    fn dedupe_key_ignores_embedded_ep_words() {
+        assert_eq!(episode_dedupe_key("#009 hello"), "#9");
+        assert_eq!(episode_dedupe_key("EP010 访谈"), "#10");
+        assert_eq!(episode_dedupe_key("第 12 期 对话"), "#12");
+        assert_ne!(episode_dedupe_key("Deep 1: Scaling"), "#1");
+        assert_ne!(episode_dedupe_key("Step 1 to AGI"), "#1");
+        assert_ne!(episode_dedupe_key("Sleep 2 hours"), "#2");
+        assert_ne!(
+            episode_dedupe_key("Deep 1: Scaling"),
+            episode_dedupe_key("Step 1 to AGI")
+        );
+    }
+
+    #[test]
+    fn apple_id_requires_apple_domain_or_digits() {
+        assert_eq!(
+            apple_id("https://podcasts.apple.com/us/podcast/lex/id1434243584"),
+            Some("1434243584".into())
+        );
+        assert_eq!(apple_id("1434243584"), Some("1434243584".into()));
+        assert_eq!(apple_id("https://example.com/feed/id1234567.xml"), None);
     }
 }

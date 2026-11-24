@@ -20,10 +20,11 @@ import {
   Trash2,
   Youtube,
 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../lib/safeUrl";
 import { api, type Episode } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { date, duration, parseClock, plainText } from "../lib/format";
+import { tNow, useT } from "../lib/i18n";
 import { autoTranslate, ensureTranscript, useJobs } from "../lib/jobs";
 import { PANEL, useLayout } from "../lib/layout";
 import { toggleFavorite, useLibrary } from "../lib/library";
@@ -62,7 +63,7 @@ function withStamps(text: string, seek: (sec: number) => void): ReactNode[] {
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            void openUrl(part);
+            void openExternalUrl(part);
           }}
         >
           {label}
@@ -76,7 +77,7 @@ function withStamps(text: string, seek: (sec: number) => void): ReactNode[] {
         key={i}
         type="button"
         className="stamp"
-        title="跳到这里播放"
+        title={tNow("跳到这里播放")}
         onClick={(e) => {
           e.stopPropagation();
           seek(sec);
@@ -99,6 +100,7 @@ function seekNotes(ep: Episode, sec: number) {
 }
 
 function DownloadButton({ ep }: { ep: Episode }) {
+  const t = useT();
   const saved = useOffline((s) => s.saved[ep.id]);
   const progress = useOffline((s) => s.progress[ep.id]);
   const [menu, setMenu] = useState(false);
@@ -109,7 +111,7 @@ function DownloadButton({ ep }: { ep: Episode }) {
       <button
         type="button"
         className="round-btn dl-busy"
-        title={pct == null ? "正在下载，点一下取消" : `已下载 ${pct}%，点一下取消`}
+        title={pct == null ? t("正在下载，点一下取消") : t("已下载 {pct}%，点一下取消", { pct })}
         onClick={() => cancelDownload(ep.id)}
       >
         <ArrowDownToLine size={15} className="spin" />
@@ -123,7 +125,7 @@ function DownloadButton({ ep }: { ep: Episode }) {
         <button
           type="button"
           className="round-btn dl-done"
-          title={`已下载 · ${bytes(saved.bytes)}`}
+          title={`${t("已下载")} · ${bytes(saved.bytes)}`}
           aria-haspopup="menu"
           aria-expanded={menu}
           onClick={() => setMenu(!menu)}
@@ -132,19 +134,19 @@ function DownloadButton({ ep }: { ep: Episode }) {
         </button>
         {menu && (
           <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
-            <p className="menu-note">已下载 · {bytes(saved.bytes)}</p>
+            <p className="menu-note">{t("已下载")} · {bytes(saved.bytes)}</p>
             <button
               type="button"
               role="menuitem"
               className="danger"
               onClick={() => {
                 setMenu(false);
-                void ask("删除这一集已下载的音频？之后在线播放，字幕和进度都会保留。").then((yes) => {
+                void ask(t("删除这一集已下载的音频？之后在线播放，字幕和进度都会保留。")).then((yes) => {
                   if (yes) void removeDownload(ep.id);
                 });
               }}
             >
-              <Trash2 size={14} /> 删除下载
+              <Trash2 size={14} /> {t("删除下载")}
             </button>
           </div>
         )}
@@ -156,7 +158,7 @@ function DownloadButton({ ep }: { ep: Episode }) {
     <button
       type="button"
       className="round-btn"
-      title={ep.audioUrl || ep.videoId ? "下载，离线也能听" : "没有可下载的音频"}
+      title={ep.audioUrl || ep.videoId ? t("下载，离线也能听") : t("没有可下载的音频")}
       disabled={!ep.audioUrl && !ep.videoId}
       onClick={() => void downloadEpisode(ep)}
     >
@@ -166,8 +168,9 @@ function DownloadButton({ ep }: { ep: Episode }) {
 }
 
 export function EpisodeView({ episodeId }: { episodeId: string }) {
-  const { current, load, shows, time } = useStore(
-    useShallow((s) => ({ current: s.current, load: s.load, shows: s.shows, time: s.time })),
+  const t = useT();
+  const { current, load, shows } = useStore(
+    useShallow((s) => ({ current: s.current, load: s.load, shows: s.shows })),
   );
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === episodeId));
   const ytPromo = usePromo();
@@ -197,6 +200,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
 
   useEffect(() => {
     setNoDeep(null);
+    const cur = useStore.getState().current;
+    setEp(cur?.id === episodeId ? cur : null);
     let cancelled = false;
     let transcriptTimer = 0;
     void (async () => {
@@ -279,7 +284,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
       <div className="episode">
         <div className="ep-leftcol">
           <TopBar />
-          <div className="ep-left muted">加载中…</div>
+          <div className="ep-left muted">{t("加载中…")}</div>
         </div>
       </div>
     );
@@ -315,7 +320,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 <button
                   type="button"
                   className="round-btn"
-                  title="显示字幕栏"
+                  title={t("显示字幕栏")}
                   onClick={() => putLayout({ panelOpen: true })}
                 >
                   <PanelRightOpen size={15} />
@@ -325,7 +330,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 type="button"
                 className={`round-btn fav-btn ${fav ? "on" : ""}`}
                 aria-pressed={fav}
-                title={fav ? "取消收藏" : "收藏这一集"}
+                title={fav ? t("取消收藏") : t("收藏这一集")}
                 onClick={() => toggleFavorite(ep)}
               >
                 <Bookmark size={15} fill={fav ? "currentColor" : "none"} />
@@ -335,17 +340,23 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 <button
                   type="button"
                   className="round-btn yt-open"
-                  title="在 YouTube 打开（从当前位置继续）"
+                  title={t("在 YouTube 打开（从当前位置继续）")}
                   onClick={() => {
-                    const s = Math.floor(isCurrent ? time : ep.progress ?? 0);
-                    void openUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
+                    const st = useStore.getState();
+                    const s = Math.floor(isCurrent ? st.time : ep.progress ?? 0);
+                    void openExternalUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
                   }}
                 >
                   <Youtube size={16} />
                 </button>
               ) : (
                 ep.link && (
-                  <button type="button" className="round-btn" title="节目网页" onClick={() => void openUrl(ep.link!)}>
+                  <button
+                    type="button"
+                    className="round-btn"
+                    title={t("节目网页")}
+                    onClick={() => void openExternalUrl(ep.link!)}
+                  >
                     <ExternalLink size={15} />
                   </button>
                 )
@@ -357,7 +368,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
             {ytPromo && ytChannel && (
               <YtVideoStrip
                 channel={ytChannel}
-                name={epShow?.title ?? ep.showTitle ?? "频道"}
+                name={epShow?.title ?? ep.showTitle ?? t("频道")}
                 cover={epShow?.cover ?? ep.cover}
               />
             )}
@@ -371,7 +382,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                   onClick={() => setNotesOpen(!notesOpen)}
                   onKeyDown={(e) => e.key === "Enter" && setNotesOpen(!notesOpen)}
                 >
-                  <span>本集简介</span>
+                  <span>{t("本集简介")}</span>
                   <span className="spacer" />
                   <ChevronDown size={14} style={{ transform: notesOpen ? "rotate(180deg)" : undefined }} />
                 </div>
@@ -398,7 +409,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
             def={Math.min(PANEL.def, panelMax)}
             snap={PANEL.min}
             edge="left"
-            label="字幕栏宽度"
+            label={t("字幕栏宽度")}
             onChange={(w) => putLayout({ panel: w, panelOpen: true })}
             /* 右栏拖窄只贴最小宽，不整栏消失；收起靠 Tab 关闭 / ⌘\ */
             onCollapse={() => putLayout({ panel: PANEL.min, panelOpen: true })}
@@ -411,49 +422,49 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                 role="tab"
                 className={tab === "transcript" ? "on" : ""}
                 aria-selected={tab === "transcript"}
-                title="字幕"
+                title={t("字幕")}
                 onClick={() => setTab("transcript")}
               >
                 <Captions size={15} />
-                <span>字幕</span>
+                <span>{t("字幕")}</span>
               </button>
               {showDeep && (
                 <button
                   role="tab"
                   className={tab === "deep" ? "on" : ""}
                   aria-selected={tab === "deep"}
-                  title="精读"
+                  title={t("精读")}
                   onClick={() => setTab("deep")}
                 >
                   <BookOpen size={15} />
-                  <span>精读</span>
+                  <span>{t("精读")}</span>
                 </button>
               )}
               <button
                 role="tab"
                 className={tab === "summary" ? "on" : ""}
                 aria-selected={tab === "summary"}
-                title="导读"
+                title={t("导读")}
                 onClick={() => setTab("summary")}
               >
                 <ScrollText size={15} />
-                <span>导读</span>
+                <span>{t("导读")}</span>
               </button>
               <button
                 role="tab"
                 className={tab === "chat" ? "on" : ""}
                 aria-selected={tab === "chat"}
-                title="问答"
+                title={t("问答")}
                 onClick={() => setTab("chat")}
               >
                 <MessageCircle size={15} />
-                <span>问答</span>
+                <span>{t("问答")}</span>
               </button>
               <span className="spacer" data-tauri-drag-region />
               <button
                 type="button"
                 className="icon-btn tabs-close"
-                title="收起字幕栏"
+                title={t("收起字幕栏")}
                 onClick={() => putLayout({ panelOpen: false })}
               >
                 <PanelRightClose size={16} />
@@ -464,8 +475,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
               {tab === "deep" && (
                 <DeepRead ep={ep} onMissing={onMissingDeep}>
                   <div className="panel-empty">
-                    <p className="lead">这一集还没有精读</p>
-                    <p className="muted">这期没有精读长文，字幕和 AI 导读依然可以帮你。</p>
+                    <p className="lead">{t("这一集还没有精读")}</p>
+                    <p className="muted">{t("这期没有精读长文，字幕和 AI 导读依然可以帮你。")}</p>
                   </div>
                 </DeepRead>
               )}

@@ -6,63 +6,69 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import DOMPurify from "dompurify";
 import { api, type Episode } from "../lib/api";
 import { parseClock } from "../lib/format";
-import { useStore } from "../store";
+import { useT } from "../lib/i18n";
+import { seekEpisode } from "../lib/playback";
+import { openExternalUrl } from "../lib/safeUrl";
 import { ReadAloud } from "./ReadAloud";
 
-const KEEP = new Set([
-  "P",
-  "H2",
-  "H3",
-  "H4",
-  "BLOCKQUOTE",
-  "UL",
-  "OL",
-  "LI",
-  "STRONG",
-  "EM",
-  "B",
-  "I",
-  "A",
-  "BR",
-  "HR",
-  "SPAN",
-  "ASIDE",
-  "FIGURE",
-  "FIGCAPTION",
-  "CODE",
-  "PRE",
-]);
+const ALLOWED_TAGS = [
+  "p",
+  "h2",
+  "h3",
+  "h4",
+  "blockquote",
+  "ul",
+  "ol",
+  "li",
+  "strong",
+  "em",
+  "b",
+  "i",
+  "a",
+  "br",
+  "hr",
+  "span",
+  "aside",
+  "figure",
+  "figcaption",
+  "code",
+  "pre",
+];
 
-/** 去掉可执行内容，只留结构、链接与 data-t 时间戳。 */
+/** 使用 DOMPurify 清洗远端精读 HTML，只留安全排版标签、http(s) 链接与合法 data-t 时间戳。 */
 function sanitize(html: string): string {
-  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const purified = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR: ["href", "data-t"],
+    ALLOW_DATA_ATTR: false,
+    ADD_ATTR: ["data-t"],
+    ALLOWED_URI_REGEXP: /^https?:\/\//i,
+    FORBID_CONTENTS: ["script", "style", "iframe", "object", "embed", "noscript", "template", "math", "svg"],
+  });
+  const doc = new DOMParser().parseFromString(`<div>${purified}</div>`, "text/html");
   const root = doc.body.firstElementChild;
   if (!root) return "";
-  const walk = (el: Element) => {
-    for (const c of Array.from(el.children)) {
-      walk(c);
-      if (["SCRIPT", "STYLE", "IFRAME", "BUTTON", "FORM", "INPUT", "SVG", "IMG", "VIDEO", "AUDIO"].includes(c.tagName)) {
-        c.remove();
-        continue;
-      }
-      if (!KEEP.has(c.tagName)) {
-        c.replaceWith(...Array.from(c.childNodes));
-        continue;
-      }
-      const href = c.getAttribute("href");
-      const t = c.getAttribute("data-t");
-      for (const a of Array.from(c.attributes)) c.removeAttribute(a.name);
-      if (c.tagName === "A" && href && /^https?:/.test(href)) c.setAttribute("href", href);
-      if (t && /^[\d:]+$/.test(t)) {
-        c.setAttribute("data-t", t);
-        c.setAttribute("class", "ts");
+  for (const el of Array.from(root.querySelectorAll("[data-t], a"))) {
+    if (el.tagName === "A") {
+      const href = el.getAttribute("href") ?? "";
+      if (!/^https?:\/\//i.test(href)) {
+        el.removeAttribute("href");
+      } else {
+        el.setAttribute("rel", "noopener noreferrer");
       }
     }
-  };
-  walk(root);
+    const t = el.getAttribute("data-t");
+    if (t) {
+      if (/^[\d:]+$/.test(t)) {
+        el.setAttribute("class", "ts");
+      } else {
+        el.removeAttribute("data-t");
+      }
+    }
+  }
   return root.innerHTML;
 }
 
@@ -75,23 +81,29 @@ export function DeepRead({
   children?: React.ReactNode;
   onMissing?: () => void;
 }) {
+  const t = useT();
   const [html, setHtml] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     let live = true;
     setHtml(undefined);
-    void api.getBlob(ep.id, "deep-read").then(async (cached) => {
-      if (cached) {
-        if (live) setHtml(cached);
-        return;
-      }
-      try {
-        const d = await api.qiaomuDetail(ep.id);
-        if (live) setHtml(d.deepRead ?? null);
-      } catch {
+    void api
+      .getBlob(ep.id, "deep-read")
+      .then(async (cached) => {
+        if (cached) {
+          if (live) setHtml(cached);
+          return;
+        }
+        try {
+          const d = await api.qiaomuDetail(ep.id);
+          if (live) setHtml(d.deepRead ?? null);
+        } catch {
+          if (live) setHtml(null);
+        }
+      })
+      .catch(() => {
         if (live) setHtml(null);
-      }
-    });
+      });
     return () => {
       live = false;
     };
@@ -114,8 +126,8 @@ export function DeepRead({
   if (html === undefined) {
     return (
       <div className="panel-empty">
-        <p className="lead">正在加载精读</p>
-        <p className="muted">通读整期访谈后的中文长文…</p>
+        <p className="lead">{t("正在加载精读")}</p>
+        <p className="muted">{t("通读整期访谈后的中文长文…")}</p>
       </div>
     );
   }
@@ -124,13 +136,13 @@ export function DeepRead({
   return (
     <div className="deep-read">
       <div className="deep-head">
-        <span className="deep-badge" title="AI 基于完整访谈改写的中文长文，不是逐字翻译">
-          <BookOpen size={13} /> 乔木精读
+        <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}>
+          <BookOpen size={13} /> {t("乔木精读")}
         </span>
         <span className="spacer" />
-        <ReadAloud text={readText} title="用豆包语音朗读精读全文" />
+        <ReadAloud text={readText} title={t("朗读精读全文")} />
         {ep.link && (
-          <button type="button" className="icon-btn" title="在网页中打开" onClick={() => void openUrl(ep.link!)}>
+          <button type="button" className="icon-btn" title={t("在网页中打开")} onClick={() => void openExternalUrl(ep.link!)}>
             <ExternalLink size={14} />
           </button>
         )}
@@ -143,13 +155,13 @@ export function DeepRead({
           const ts = el.closest<HTMLElement>("[data-t]");
           if (ts?.dataset.t) {
             const sec = parseClock(ts.dataset.t);
-            if (sec != null) useStore.getState().player?.seek(sec);
+            if (sec != null) seekEpisode(ep, sec);
             return;
           }
           const a = el.closest("a");
           if (a?.href) {
             e.preventDefault();
-            void openUrl(a.href);
+            void openExternalUrl(a.href);
           }
         }}
       />

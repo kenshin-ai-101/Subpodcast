@@ -5,6 +5,8 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { sameFeed } from "./feeds";
+import { resolveLocale } from "./i18n";
+import { useStore } from "../store";
 
 export type Topic = "AI 前沿" | "AI 工程" | "创业投资" | "产品与增长" | "科技评论" | "中文播客" | "人文社科" | "个人成长";
 export const TOPICS: Topic[] = ["AI 前沿", "AI 工程", "创业投资", "产品与增长", "科技评论", "中文播客", "人文社科", "个人成长"];
@@ -98,18 +100,22 @@ export function shortName(title: string): string {
   return s.length >= 2 ? s : title;
 }
 
-/** A show's display name: our curated Chinese name when we have one, else its own short name. Names are proper
- *  nouns, so they are never machine-translated (Google turns "Dwarkesh Patel" into a transliteration). */
+/** A show's display name: our curated Chinese name in Chinese UIs, else its own short name. */
 export function showName(title: string): string {
   const short = shortName(title);
+  if (resolveLocale(useStore.getState().settings.uiLang) === "en") return short;
   const p = PICKS.find((x) => x.title === title || shortName(x.title) === short || x.by === title || x.channel === title);
   return p ? p.zh : short;
 }
 
 /** A pick's name in the interface language: the curated Chinese name in Chinese UIs, its own title elsewhere. */
-export const pickName = (p: Pick) => p.zh;
+export const pickName = (p: Pick) =>
+  resolveLocale(useStore.getState().settings.uiLang) === "en" ? p.title : p.zh;
 /** The line under a pick's name: the original title when the name differs from it, else the host. */
-export const pickSub = (p: Pick) => (p.zh !== p.title ? p.title : p.by);
+export const pickSub = (p: Pick) => {
+  const name = pickName(p);
+  return name !== p.title ? p.title : p.by;
+};
 
 export { sameFeed } from "./feeds";
 

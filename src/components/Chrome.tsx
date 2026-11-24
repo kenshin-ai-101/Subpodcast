@@ -10,6 +10,7 @@ import {
   BookMarked,
   ChartColumn,
   ChevronLeft,
+  Clock,
   Compass,
   Inbox,
   Link2,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { api, errText, type Show } from "../lib/api";
 import { looksLikeLink } from "../lib/feeds";
+import { useT } from "../lib/i18n";
 import { useLayout } from "../lib/layout";
 import { showName } from "../lib/picks";
 import { IS_MAC } from "../lib/shortcuts";
@@ -39,6 +41,7 @@ function isView(view: View, v: View) {
 const SIDE_MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 export function Sidebar() {
+  const t = useT();
   const { shows, view, go, set } = useStore(
     useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })),
   );
@@ -51,6 +54,7 @@ export function Sidebar() {
   const nav = (v: View, icon: React.ReactNode, label: string, badge?: number) => (
     <button
       key={v.kind}
+      type="button"
       className={`nav ${isView(view, v) ? "on" : ""}`}
       onClick={() => go(v)}
       title={rail ? label : undefined}
@@ -68,37 +72,40 @@ export function Sidebar() {
       <div className="brand" data-tauri-drag-region>
         <div className="logo-mark">声</div>
         <div>
-          <p className="brand-name">声译</p>
+          <p className="brand-name">{t("声译")}</p>
           <p className="brand-sub">Subpodcast</p>
         </div>
       </div>
       <nav>
-        {nav({ kind: "home" }, <Inbox size={16} />, "首页")}
-        {nav({ kind: "discover" }, <Compass size={16} />, "发现")}
-        {nav({ kind: "stats" }, <ChartColumn size={16} />, "收听统计")}
+        {nav({ kind: "home" }, <Inbox size={16} />, t("首页"))}
+        {nav({ kind: "discover" }, <Compass size={16} />, t("发现"))}
+        {nav({ kind: "recent" }, <Clock size={16} />, t("最近与收藏"))}
+        {nav({ kind: "stats" }, <ChartColumn size={16} />, t("收听统计"))}
         {(wordsNav || view.kind === "words") &&
-          nav({ kind: "words" }, <BookMarked size={16} />, "生词本", due || undefined)}
+          nav({ kind: "words" }, <BookMarked size={16} />, t("生词本"), due || undefined)}
       </nav>
       <div className="side-sep" />
       <div className="side-head">
-        <span className="label">订阅</span>
-        <button className="icon-btn sm" title="添加节目" onClick={() => set({ addOpen: true })}>
+        <span className="label">{t("订阅")}</span>
+        <button type="button" className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true })}>
           <Plus size={14} />
         </button>
       </div>
       <div className="show-list">
         {shows.map((s) => {
           const n = s.episodeCount ?? 0;
+          const activeShow = isView(view, { kind: "show", id: s.id });
           return (
             <button
               key={s.id}
-              className={`show-item ${isView(view, { kind: "show", id: s.id }) ? "on" : ""}`}
+              type="button"
+              className={`show-item ${activeShow ? "on" : ""}`}
               onClick={() => go({ kind: "show", id: s.id })}
               title={rail ? showName(s.title) : s.title}
             >
               <span className="show-cover">
                 {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
-                {rail && n > 0 && <span className="rail-dot" />}
+                {rail && activeShow && <span className="rail-dot" />}
               </span>
               <span className="show-title">{showName(s.title)}</span>
               {n > 0 && <span className="show-count">{n}</span>}
@@ -107,24 +114,26 @@ export function Sidebar() {
         })}
         {!shows.length && (
           <p className="muted small side-empty" style={{ padding: "4px 10px" }}>
-            还没有订阅
+            {t("还没有订阅")}
           </p>
         )}
       </div>
       <div className="side-foot">
         <button
+          type="button"
           className="nav settings-btn"
           onClick={() => set({ settingsOpen: true })}
-          title="设置"
-          aria-label="设置"
+          title={t("设置")}
+          aria-label={t("设置")}
         >
           <Cog size={16} />
         </button>
         <button
+          type="button"
           className="icon-btn side-toggle"
           onClick={() => putLayout({ sideOpen: rail })}
-          title={rail ? `展开侧栏（${SIDE_MOD}B）` : `收起为图标（${SIDE_MOD}B）`}
-          aria-label={rail ? "展开侧栏" : "收起侧栏"}
+          title={rail ? `${t("展开侧栏")}（${SIDE_MOD}B）` : `${t("收起侧栏")}（${SIDE_MOD}B）`}
+          aria-label={rail ? t("展开侧栏") : t("收起侧栏")}
         >
           {rail ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
@@ -134,6 +143,7 @@ export function Sidebar() {
 }
 
 export function TopBar() {
+  const t = useT();
   const { history, back, reloadShows, go, notify, shows } = useStore(
     useShallow((s) => ({
       history: s.history,
@@ -179,7 +189,7 @@ export function TopBar() {
       setOpen(false);
       setResults(null);
       await reloadShows();
-      notify(`已订阅「${show.title}」`);
+      notify(t("已订阅「{title}」", { title: show.title }));
       go({ kind: "show", id: show.id });
     } catch (e) {
       notify(errText(e));
@@ -195,7 +205,7 @@ export function TopBar() {
 
   return (
     <div className="topbar" data-tauri-drag-region>
-      <button className="round-btn" onClick={back} disabled={!history.length} aria-label="返回">
+      <button className="round-btn" onClick={back} disabled={!history.length} aria-label={t("返回")}>
         <ChevronLeft size={18} />
       </button>
       <div className="search-wrap">
@@ -203,7 +213,7 @@ export function TopBar() {
           {link ? <Link2 size={16} /> : <Search size={16} />}
           <input
             value={q}
-            placeholder="粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名"
+            placeholder={t("粘贴 YouTube / 小宇宙 / 播客链接，或搜索节目名")}
             spellCheck={false}
             onFocus={() => setOpen(true)}
             onBlur={() => setTimeout(() => setOpen(false), 150)}
@@ -219,7 +229,7 @@ export function TopBar() {
           {busy || adding ? (
             <Loader2 size={14} className="spin" />
           ) : link ? (
-            <span className="kbd-hint">回车订阅</span>
+            <span className="kbd-hint">{t("回车订阅")}</span>
           ) : (
             !open && !q && <kbd className="kbd-hint">⌘L</kbd>
           )}
@@ -228,7 +238,7 @@ export function TopBar() {
           <div className="search-drop">
             {results.length === 0 ? (
               <p className="muted small" style={{ padding: 12, textAlign: "center" }}>
-                没有找到，换个关键词试试
+                {t("没有找到，换个关键词试试")}
               </p>
             ) : (
               results.map((r) => {
@@ -241,10 +251,10 @@ export function TopBar() {
                       <p className="meta-line clamp1">{r.author}</p>
                     </div>
                     {done ? (
-                      <span className="muted small">已订阅</span>
+                      <span className="muted small">{t("已订阅")}</span>
                     ) : (
                       <button className="btn sm" onClick={() => void subscribe(r.feedUrl)} disabled={adding != null}>
-                        {adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 订阅
+                        {adding === r.feedUrl ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} {t("订阅")}
                       </button>
                     )}
                   </div>

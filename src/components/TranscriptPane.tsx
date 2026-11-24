@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
   Download,
@@ -29,6 +30,7 @@ import {
   useHighlights,
   type HighlightClip,
 } from "../lib/highlights";
+import { resolveLocale, tNow, useT } from "../lib/i18n";
 import {
   cancelAsr,
   ensureTranscript,
@@ -37,7 +39,7 @@ import {
   switchYoutubeTrack,
   useJobs,
 } from "../lib/jobs";
-import { activeIndex } from "../lib/playback";
+import { activeIndex, seekEpisode } from "../lib/playback";
 import { activeCloudAsr, ASR_SERVICES, CLOUD_ASR_MAIN, type Settings } from "../lib/settings";
 import { useStore } from "../store";
 import { HighlightsPanel, useClipWarm } from "./HighlightViews";
@@ -55,29 +57,29 @@ const autoStarted = new Set<string>();
 function sourceLabel(source: string) {
   switch (source) {
     case "youtube":
-      return "YouTube 官方";
+      return tNow("YouTube 官方");
     case "youtube-auto":
-      return "YouTube 自动";
+      return tNow("YouTube 自动");
     case "qiaomu":
-      return "精读站原文";
+      return tNow("精读站原文");
     case "podscribe":
       return "Podscribe";
     case "cloud":
     case "openai":
-      return "云端识别";
+      return tNow("云端识别");
     case "qwen3":
-      return "本机 Qwen3";
+      return tNow("本机 Qwen3");
     case "whisper":
-      return "本机 Whisper";
+      return tNow("本机 Whisper");
     default:
-      return source || "字幕";
+      return source || tNow("字幕");
   }
 }
 
 function engineLabel(engine?: string) {
-  if (engine === "youtube") return "节目方中文字幕";
-  if (engine === "google") return "谷歌翻译";
-  if (engine === "llm") return "模型翻译";
+  if (engine === "youtube") return tNow("节目方中文字幕");
+  if (engine === "google") return tNow("谷歌翻译");
+  if (engine === "llm") return tNow("模型翻译");
   return null;
 }
 
@@ -104,6 +106,8 @@ function TrackPicker({
   language: string;
   auto: boolean;
 }) {
+  const t = useT();
+  const uiLang = useStore((s) => s.settings.uiLang);
   const notify = useStore((s) => s.notify);
   const [tracks, setTracks] = useState(trackCache.get(episode.id) ?? null);
   const [busy, setBusy] = useState(false);
@@ -127,21 +131,30 @@ function TrackPicker({
   }, [open]);
 
   useEffect(() => {
+    setTracks(trackCache.get(episode.id) ?? null);
+    setOpen(false);
+  }, [episode.id]);
+
+  useEffect(() => {
     if (tracks || !episode.videoId) return;
+    let live = true;
     void api
       .youtubeTracks(episode.id)
       .then((list) => {
         trackCache.set(episode.id, list);
-        setTracks(list);
+        if (live) setTracks(list);
       })
       .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, [episode.id, episode.videoId, tracks]);
 
   if (!tracks || tracks.length < 2) return null;
 
   let names: Intl.DisplayNames | null = null;
   try {
-    names = new Intl.DisplayNames(["zh-CN"], { type: "language" });
+    names = new Intl.DisplayNames([resolveLocale(uiLang)], { type: "language" });
   } catch {
     /* old WebView */
   }
@@ -153,7 +166,7 @@ function TrackPicker({
     }
   };
   const label = (x: { language: string; auto: boolean }) =>
-    `${name(x.language)}${x.auto ? " · 自动" : ""}`;
+    `${name(x.language)}${x.auto ? ` · ${t("自动")}` : ""}`;
 
   const pick = async (x: { language: string; auto: boolean }) => {
     setOpen(false);
@@ -162,7 +175,7 @@ function TrackPicker({
     try {
       await switchYoutubeTrack(episode, x.language, x.auto);
     } catch (e) {
-      notify(`切换字幕失败：${errText(e)}`);
+      notify(t("切换字幕失败：{msg}", { msg: errText(e) }));
     } finally {
       setBusy(false);
     }
@@ -173,8 +186,8 @@ function TrackPicker({
       <button
         type="button"
         className="track-pick"
-        title="字幕语言"
-        aria-label="字幕语言"
+        title={t("字幕语言")}
+        aria-label={t("字幕语言")}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={busy}
@@ -216,6 +229,7 @@ function NoTranscript({
   official: string;
   officialError?: string;
 }) {
+  const t = useT();
   const notify = useStore((s) => s.notify);
   const set = useStore((s) => s.set);
   const settingsOpen = useStore((s) => s.settingsOpen);
@@ -342,7 +356,7 @@ function NoTranscript({
       <div className="transcript">
         <div className="status-line">
           <Loader2 size={14} className="spin" />
-          <span className="status-text">正在查找字幕…</span>
+          <span className="status-text">{t("正在查找字幕…")}</span>
         </div>
         <div className="gen-wrap">
           <div className="gen-card">
@@ -351,7 +365,7 @@ function NoTranscript({
               <span />
               <span />
             </div>
-            <p className="gen-note">先看节目有没有自带字幕…</p>
+            <p className="gen-note">{t("先看节目有没有自带字幕…")}</p>
           </div>
         </div>
       </div>
@@ -363,8 +377,8 @@ function NoTranscript({
     return (
       <GenCard
         icon={<TrayArt busy />}
-        title="正在准备识别模型"
-        note="只需下载这一次，完成后自动生成字幕。可以先听着。"
+        title={t("正在准备识别模型")}
+        note={t("只需下载这一次，完成后自动生成字幕。可以先听着。")}
       >
         <div className="gen-progress">
           <div className="bar live">
@@ -373,7 +387,7 @@ function NoTranscript({
           <span>{pct}%</span>
         </div>
         <button type="button" className="btn ghost sm" onClick={() => void cancelDownload(dlId)}>
-          取消
+          {t("取消")}
         </button>
       </GenCard>
     );
@@ -384,7 +398,7 @@ function NoTranscript({
     const pct = Math.round((asrProgress?.progress ?? 0) * 100);
     const label =
       asrProgress?.message ||
-      (asrProgress?.stage === "download" ? "正在获取音频" : "正在识别");
+      (asrProgress?.stage === "download" ? t("正在获取音频") : t("正在识别"));
     return (
       <div className="transcript">
         <div className="status-line">
@@ -395,13 +409,13 @@ function NoTranscript({
           <span className="row-actions tight">
             <select
               className="engine-switch-mini"
-              aria-label="换一种识别方式"
-              title="换一种识别方式（从头开始）"
+              aria-label={t("换一种识别方式")}
+              title={t("换一种识别方式（从头开始）")}
               value=""
               onChange={(e) => e.target.value && void switchEngine(e.target.value)}
             >
-              <option value="">换一种方式…</option>
-              <optgroup label="本机模型 · 音频不出本机">
+              <option value="">{t("换一种方式…")}</option>
+              <optgroup label={t("本机模型 · 音频不出本机")}>
                 {pickerModels(models, settings)
                   .filter((m) => !(settings.asrEngine === "local" && settings.asrModel === m.id))
                   .map((m) => (
@@ -411,19 +425,19 @@ function NoTranscript({
                     </option>
                   ))}
               </optgroup>
-              <optgroup label="云端服务 · 更快，需要 Key">
+              <optgroup label={t("云端服务 · 更快，需要 Key")}>
                 {pickerCloud(settings)
                   .filter((a) => settings.asrEngine !== a.id)
                   .map((a) => (
                     <option key={a.id} value={`cloud:${a.id}`}>
-                      {a.name}
+                      {t(a.name)}
                     </option>
                   ))}
               </optgroup>
-              <option value="more">更多…</option>
+              <option value="more">{t("更多…")}</option>
             </select>
             <button type="button" className="btn ghost sm" onClick={() => void stopRunning()}>
-              取消
+              {t("取消")}
             </button>
           </span>
         </div>
@@ -456,12 +470,12 @@ function NoTranscript({
               <CassetteArt mode={asrProgress?.stage === "download" ? "fetch" : "listen"} />
               <p className="muted">
                 {asrProgress?.stage === "download"
-                  ? "先把音频取回来，马上开始听写"
+                  ? t("先把音频取回来，马上开始听写")
                   : asrProgress?.message?.includes("解码")
-                    ? "正在把音频转成识别用的格式，稍等片刻"
+                    ? t("正在把音频转成识别用的格式，稍等片刻")
                     : settings.asrModel === "qwen3-asr"
-                      ? "识别完成后会一次性显示全部文字"
-                      : "识别出的文字会实时出现在这里"}
+                      ? t("识别完成后会一次性显示全部文字")
+                      : t("识别出的文字会实时出现在这里")}
               </p>
             </div>
           )}
@@ -474,8 +488,8 @@ function NoTranscript({
     return (
       <GenCard
         icon={<CassetteArt mode="tangled" />}
-        title="字幕没有生成成功"
-        note="可以换一个识别模型，或检查网络后再试。"
+        title={t("字幕没有生成成功")}
+        note={t("可以换一个识别模型，或检查网络后再试。")}
       >
         {asrError && (
           <p className="gen-warn" title={asrError}>
@@ -493,7 +507,7 @@ function NoTranscript({
             void generate();
           }}
         >
-          重试
+          {t("重试")}
         </button>
       </GenCard>
     );
@@ -505,29 +519,29 @@ function NoTranscript({
   return (
     <GenCard
       icon={<WaveToTextArt />}
-      title="这集还没有字幕"
+      title={t("这集还没有字幕")}
       note={
         cloud
-          ? `用${cloud.name}生成，音频会上传到该服务，速度更快。生成后自动翻译成中文。`
-          : "用本机模型生成，音频只在这台电脑上处理。生成后自动翻译成中文。"
+          ? t("用 {name} 生成，音频会上传到该服务，速度更快。生成后自动翻译成中文。", { name: t(cloud.name) })
+          : t("用本机模型生成，音频只在这台电脑上处理。生成后自动翻译成中文。")
       }
     >
       {official === "error" && officialError && (
         <p className="gen-warn" title={officialError}>
-          <span>节目自带的字幕没读到：{plainError(officialError)}</span>
+          <span>{t("节目自带的字幕没读到：{msg}", { msg: plainError(officialError) })}</span>
         </p>
       )}
       <button
         type="button"
         className="btn primary gen-go"
         disabled={!model || !canAsr}
-        title={!canAsr ? (cloud ? "这集没有音频地址，无法云端识别" : "这集没有可识别的音频") : undefined}
+        title={!canAsr ? (cloud ? t("这集没有音频地址，无法云端识别") : t("这集没有可识别的音频")) : undefined}
         onClick={() => void generate()}
       >
-        {missingKey ? "先填写 API Key" : "生成字幕"}
+        {missingKey ? t("先填写 API Key") : t("生成字幕")}
       </button>
       {needsDownload && model && (
-        <p className="gen-size">第一次会先下载识别模型（约 {sizeMb(model.sizeMb)}），之后不用再下载</p>
+        <p className="gen-size">{t("第一次会先下载识别模型（约 {size}），之后不用再下载", { size: sizeMb(model.sizeMb) })}</p>
       )}
       {needsDownload &&
         (() => {
@@ -539,13 +553,13 @@ function NoTranscript({
               onClick={() => void saveSettings({ asrEngine: "local", asrModel: have.id })}
             >
               {have.from
-                ? `改用${have.from}里已有的 ${have.name}，不用下载`
-                : `改用已下载的 ${have.name}`}
+                ? t("改用 {from} 里已有的 {name}，不用下载", { from: have.from, name: have.name })
+                : t("改用已下载的 {name}", { name: have.name })}
             </button>
           ) : null;
         })()}
       {missingKey && cloud && (
-        <p className="gen-size">用{cloud.name}识别需要它的 API Key，填好就能开始</p>
+        <p className="gen-size">{t("用 {name} 识别需要它的 API Key，填好就能开始", { name: t(cloud.name) })}</p>
       )}
       <button
         type="button"
@@ -553,19 +567,19 @@ function NoTranscript({
         aria-expanded={options}
         onClick={() => setOptions(!options)}
       >
-        识别设置
+        {t("识别设置")}
         <ChevronDown size={12} className={options ? "flip" : ""} />
       </button>
       {!options && <NightNote />}
       {options && (
         <div className="gen-options">
           <label>
-            <span>识别方式</span>
+            <span>{t("识别方式")}</span>
             <select
               value={cloud ? `cloud:${cloud.id}` : `local:${model?.id ?? ""}`}
               onChange={(e) => pickEngine(e.target.value)}
             >
-              <optgroup label="本机模型 · 音频不出本机">
+              <optgroup label={t("本机模型 · 音频不出本机")}>
                 {pickerModels(models, settings).map((m) => (
                   <option key={m.id} value={`local:${m.id}`}>
                     {m.name}
@@ -573,14 +587,14 @@ function NoTranscript({
                   </option>
                 ))}
               </optgroup>
-              <optgroup label="云端服务 · 更快，需要 Key">
+              <optgroup label={t("云端服务 · 更快，需要 Key")}>
                 {pickerCloud(settings).map((a) => (
                   <option key={a.id} value={`cloud:${a.id}`}>
-                    {a.name}
+                    {t(a.name)}
                   </option>
                 ))}
               </optgroup>
-              <option value="more">更多…</option>
+              <option value="more">{t("更多…")}</option>
             </select>
           </label>
         </div>
@@ -647,6 +661,7 @@ function PanelMenu({
   source: string;
   learn?: LearnMenuState;
 }) {
+  const t = useT();
   const [menu, setMenu] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [words, setWords] = useState(false);
@@ -655,11 +670,18 @@ function PanelMenu({
 
   useEffect(() => {
     if (!menu) return;
-    const h = (e: PointerEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (!box.current?.contains(e.target as Node)) setMenu(false);
     };
-    document.addEventListener("pointerdown", h);
-    return () => document.removeEventListener("pointerdown", h);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [menu]);
 
   return (
@@ -667,42 +689,42 @@ function PanelMenu({
       <button
         type="button"
         className="icon-btn"
-        title="更多"
-        aria-label="更多"
+        title={t("更多")}
+        aria-label={t("更多")}
         aria-expanded={menu}
         onClick={() => setMenu(!menu)}
       >
         <Ellipsis size={15} />
       </button>
       {menu && (
-        <div className="panel-menu-pop" role="menu">
+        <div className="panel-menu-pop right" role="menu">
           {learn && (
             <>
               <button type="button" role="menuitem" onClick={() => { setMenu(false); setWords(true); }}>
-                <ListChecks size={14} /> 本期生词…
+                <ListChecks size={14} /> {t("本期生词…")}
               </button>
               <button
                 type="button"
                 role="menuitemcheckbox"
                 aria-checked={learn.shadow}
                 disabled={!learn.canShadow}
-                title={learn.canShadow ? undefined : "先播放这一集"}
+                title={learn.canShadow ? undefined : t("先播放这一集")}
                 onClick={() => {
                   setMenu(false);
                   learn.setShadow(!learn.shadow);
                 }}
               >
-                <Mic size={14} /> {learn.shadow ? "退出跟读模式" : "跟读模式"}
+                <Mic size={14} /> {learn.shadow ? t("退出跟读模式") : t("跟读模式")}
               </button>
               <button type="button" role="menuitem" onClick={() => { setMenu(false); setDictation(true); }}>
-                <PenLine size={14} /> 听写练习…
+                <PenLine size={14} /> {t("听写练习…")}
               </button>
               <div className="menu-sep" role="separator" />
             </>
           )}
           {foreign && (
             <button type="button" role="menuitem" onClick={() => { setMenu(false); setExporting(true); }}>
-              <Download size={14} /> 导出字幕…
+              <Download size={14} /> {t("导出字幕…")}
             </button>
           )}
         </div>
@@ -734,8 +756,8 @@ function PanelMenu({
 }
 
 export function TranscriptPane({ episode }: { episode: Episode }) {
+  const t = useT();
   const time = useStore((s) => s.time);
-  const player = useStore((s) => s.player);
   const currentId = useStore((s) => s.current?.id);
   const { subtitleMode, learnOn, learnCard } = useStore(
     useShallow((s) => ({
@@ -770,13 +792,16 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
 
   useEffect(() => {
     setShowHighlights(false);
+    setCard(null);
+    setShadow(false);
     void loadHighlights(episode.id);
   }, [episode.id]);
 
+  const isCurrent = currentId === episode.id;
   const segs = transcript?.segments ?? [];
   useClipWarm(episode, segs);
-  const starts = segs.map((s) => s.start);
-  const active = segs.length ? activeIndex(starts, time) : -1;
+  const starts = useMemo(() => segs.map((s) => s.start), [segs]);
+  const active = isCurrent && segs.length ? activeIndex(starts, time) : -1;
   const zhItems = translation?.items;
 
   const hlStarts = useMemo(() => {
@@ -803,28 +828,39 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
     (c: HighlightClip) => openVideoClipDialog({ ep: episode, segments: segs, zh: zhItems, clip: c }),
     [episode, segs, zhItems],
   );
+  const rowVirtualizer = useVirtualizer({
+    count: segs.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 68,
+    overscan: 8,
+  });
+
   const jumpFromHl = useCallback(
     (index: number, t: number) => {
       setShowHighlights(false);
-      player?.seek(t);
+      seekEpisode(episode, t);
       requestAnimationFrame(() => {
-        listRef.current?.querySelector(`[data-i="${index}"]`)?.scrollIntoView({
-          block: "center",
-          behavior: "smooth",
-        });
+        rowVirtualizer.scrollToIndex(index, { align: "center", behavior: "smooth" });
       });
     },
-    [player],
+    [episode, rowVirtualizer],
   );
-  const foreign = transcript
-    ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
-    : false;
-  const english = transcript
-    ? looksEnglish(transcript.language, segs.slice(0, 20).map((x) => x.text).join(" "))
-    : false;
+  const foreign = useMemo(
+    () =>
+      transcript
+        ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
+        : false,
+    [transcript, segs],
+  );
+  const english = useMemo(
+    () =>
+      transcript
+        ? looksEnglish(transcript.language, segs.slice(0, 20).map((x) => x.text).join(" "))
+        : false,
+    [transcript, segs],
+  );
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && learnOn);
-  const isCurrent = currentId === episode.id;
   const zhTag = engineLabel(translation?.engine);
 
   useShadowing(shadow && isCurrent, episode.id, segs);
@@ -833,10 +869,9 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   }, [learning]);
 
   useEffect(() => {
-    const root = listRef.current;
-    if (!root || active < 0) return;
-    root.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [active]);
+    if (!isCurrent || active < 0 || showHighlights) return;
+    rowVirtualizer.scrollToIndex(active, { align: "auto", behavior: "smooth" });
+  }, [active, isCurrent, showHighlights, rowVirtualizer]);
 
   const onWordClick = (e: React.MouseEvent) => {
     if (!marks || !learnCard) return;
@@ -876,12 +911,12 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         <button
           type="button"
           className={`hl-toggle ${showHighlights ? "on" : ""} ${hlBundle?.clips.length ? "has" : ""}`}
-          title="高光金句片段"
+          title={t("高光金句片段")}
           aria-pressed={showHighlights}
           onClick={() => setShowHighlights((v) => !v)}
         >
           <Sparkles size={13} />
-          <span>高光</span>
+          <span>{t("高光")}</span>
           {(hlBundle?.clips.length || hlLoading) && (
             <span className="hl-badge">{hlLoading ? "…" : hlBundle?.clips.length}</span>
           )}
@@ -890,13 +925,13 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           <button
             type="button"
             className="track-pick"
-            title="导出字幕"
-            aria-label="导出字幕"
+            title={t("导出字幕")}
+            aria-label={t("导出字幕")}
             disabled={!segs.length}
             onClick={() => setExporting(true)}
           >
             <Download size={14} />
-            <span>导出</span>
+            <span>{t("导出")}</span>
           </button>
         )}
         {(foreign || learning) && (
@@ -922,12 +957,12 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           />
         )}
         {foreign && (
-          <div className="seg-control" role="group" aria-label="字幕显示">
+          <div className="seg-control" role="group" aria-label={t("字幕显示")}>
             {(
               [
-                ["bilingual", "双语"],
-                ["translation", "中文"],
-                ["original", "原文"],
+                ["bilingual", t("双语")],
+                ["translation", t("中文")],
+                ["original", t("原文")],
               ] as const
             ).map(([k, label]) => (
               <button key={k} type="button" className={mode === k ? "on" : ""} onClick={() => setMode(k)}>
@@ -937,14 +972,14 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           </div>
         )}
       </div>
-      {translation?.running && <div className="translate-bar">正在翻译成中文…</div>}
+      {translation?.running && <div className="translate-bar">{t("正在翻译成中文…")}</div>}
       {translation?.error && <div className="translate-bar">{translation.error}</div>}
       {shadow && isCurrent && (
         <div className="shadow-bar">
           <Mic size={13} />
-          <span>跟读模式：每句说完会停一下，跟着说一遍</span>
+          <span>{t("跟读模式：每句说完会停一下，跟着说一遍")}</span>
           <button type="button" className="btn ghost sm" onClick={() => setShadow(false)}>
-            退出
+            {t("退出")}
           </button>
         </div>
       )}
@@ -962,49 +997,73 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         onClickCapture={onWordClick}
       >
         {english && <LearnTip />}
-        {segs.map((s, i) => {
-          const zh = translation?.items?.[i];
-          const showZh = foreign && zh && mode !== "original";
-          // 学英语时中文模式仍保留原文，方便点词
-          const showOrig = mode !== "translation" || !zh || !!marks;
-          const hl = hlStarts.get(i);
-          const inHl = hlRange.has(i);
-          const hlEnd = inHl && !hlRange.has(i + 1);
-          return (
-            <div key={`${s.start}-${i}`} className={hl ? "hl-group" : undefined}>
-              {hl && (
-                <div className="hl-head">
-                  <span className="hl-score">✦ {hl.score}</span>
-                  <span className="hl-head-title clamp1">{hl.title}</span>
-                  <span className="spacer" />
-                  <button type="button" className="link-btn" onClick={() => onHlPreview(hl)}>
-                    <Play size={11} fill="currentColor" /> 试看
-                  </button>
-                  {episode.videoId && (
-                    <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
-                      <Scissors size={11} /> 剪视频
-                    </button>
-                  )}
-                </div>
-              )}
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+          {rowVirtualizer.getVirtualItems().map((vRow) => {
+            const i = vRow.index;
+            const s = segs[i]!;
+            const zh = translation?.items?.[i];
+            const showZh = foreign && zh && mode !== "original";
+            // 学英语时中文模式仍保留原文，方便点词
+            const showOrig = mode !== "translation" || !zh || !!marks;
+            const hl = hlStarts.get(i);
+            const inHl = hlRange.has(i);
+            const hlEnd = inHl && !hlRange.has(i + 1);
+            return (
               <div
-                data-i={i}
-                className={`line ${i === active ? "active" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
-                onClick={() => player?.seek(s.start)}
+                key={`${s.start}-${i}`}
+                data-index={i}
+                ref={rowVirtualizer.measureElement}
+                className={hl ? "hl-group" : undefined}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vRow.start}px)`,
+                }}
               >
-                <div className="line-time">{clock(s.start)}</div>
-                <div className="line-text">
-                  {showZh && <div className="zh">{zh}</div>}
-                  {showOrig && (
-                    <div className="orig">
-                      {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
-                    </div>
-                  )}
+                {hl && (
+                  <div className="hl-head">
+                    <span className="hl-score">✦ {hl.score}</span>
+                    <span className="hl-head-title clamp1">{hl.title}</span>
+                    <span className="spacer" />
+                    <button type="button" className="link-btn" onClick={() => onHlPreview(hl)}>
+                      <Play size={11} fill="currentColor" /> {t("试看")}
+                    </button>
+                    {episode.videoId && (
+                      <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
+                        <Scissors size={11} /> {t("剪视频")}
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div
+                  data-i={i}
+                  role="button"
+                  tabIndex={0}
+                  className={`line ${i === active ? "active" : ""}${inHl ? " hl-in" : ""}${hl ? " hl-start" : ""}${hlEnd ? " hl-end" : ""}`}
+                  onClick={() => seekEpisode(episode, s.start)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      seekEpisode(episode, s.start);
+                    }
+                  }}
+                >
+                  <div className="line-time">{clock(s.start)}</div>
+                  <div className="line-text">
+                    {showZh && <div className="zh">{zh}</div>}
+                    {showOrig && (
+                      <div className="orig">
+                        {marks ? <LearnText text={s.text} marks={marks} /> : s.text}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
         {card && <WordCard target={card} ep={episode} onClose={closeCard} />}
       </div>
       )}

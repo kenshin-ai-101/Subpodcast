@@ -41,8 +41,31 @@ struct AppState {
     db: Mutex<rusqlite::Connection>,
     /// 应用数据目录（yt-dlp、本机 ASR 模型）
     data: PathBuf,
-    /// 可取消任务：episodeId / model:{id}
-    jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 可取消任务：episodeId / model:{id} / llm:{id}
+    jobs: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+
+/// RAII 任务守卫：退出/panic/取消时只清理自己注册的那份 cancel flag（Arc::ptr_eq），不误删替代任务。
+struct JobGuard {
+    jobs: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    id: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl JobGuard {
+    fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.flag.clone()
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.jobs.lock() {
+            if map.get(&self.id).is_some_and(|cur| Arc::ptr_eq(cur, &self.flag)) {
+                map.remove(&self.id);
+            }
+        }
+    }
 }
 
 type Res<T> = Result<T, String>;
@@ -59,13 +82,141 @@ fn install_id(conn: &rusqlite::Connection) -> String {
     id
 }
 
+/// 默认关闭匿名上传（隐私保护）；仅当用户显式开启时返回 true。
 fn share_on(conn: &rusqlite::Connection) -> bool {
     db::get_setting(conn, "app")
         .ok()
         .flatten()
         .and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
         .and_then(|s| s["shareTranscripts"].as_bool())
-        .unwrap_or(true)
+        .unwrap_or(false)
+}
+
+/// 私有/含鉴权参数或内网订阅源永不上传共享库。
+fn is_private_episode(conn: &rusqlite::Connection, ep: &Episode) -> bool {
+    let urls = [
+        ep.audio_url.as_deref().unwrap_or(""),
+        ep.link.as_deref().unwrap_or(""),
+    ];
+    let feed_url = db::get_show(conn, &ep.show_id)
+        .ok()
+        .flatten()
+        .map(|s| s.feed_url)
+        .unwrap_or_default();
+    for raw in urls.into_iter().chain(std::iter::once(feed_url.as_str())) {
+        if raw.is_empty() {
+            continue;
+        }
+        let Ok(u) = reqwest::Url::parse(raw) else {
+            continue;
+        };
+        if !u.username().is_empty() || u.password().is_some() {
+            return true;
+        }
+        if let Some(host) = u.host_str() {
+            let h = host.to_ascii_lowercase();
+            if h == "localhost"
+                || h.ends_with(".local")
+                || h.starts_with("127.")
+                || h.starts_with("10.")
+                || h.starts_with("192.168.")
+                || h == "::1"
+            {
+                return true;
+            }
+        }
+        if let Some(q) = u.query() {
+            let ql = q.to_ascii_lowercase();
+            if ql.contains("token=")
+                || ql.contains("api_key=")
+                || ql.contains("apikey=")
+                || ql.contains("auth=")
+                || ql.contains("pass=")
+                || ql.contains("secret=")
+                || ql.contains("signature=")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn validate_outbound_base_url(raw: &str) -> Res<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| "服务地址格式无效".to_string())?;
+    let host = parsed
+        .host_str()
+        .map(|h| h.to_ascii_lowercase())
+        .unwrap_or_default();
+    let is_local = host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]";
+    match parsed.scheme() {
+        "https" => Ok(trimmed.to_string()),
+        "http" if is_local => Ok(trimmed.to_string()),
+        _ => Err("服务地址必须使用 https://（仅本机服务允许 http://）".into()),
+    }
+}
+
+/// 从已持久化 settings 中解析 provider 对应的 baseUrl，阻断前端单次传参把密钥发往任意第三方域名。
+fn resolve_saved_base_url(
+    state: &AppState,
+    section: &str,
+    provider: &str,
+    fallback: &str,
+) -> Res<String> {
+    let saved = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| db::get_setting(&conn, "app").ok().flatten())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| {
+            v.get(section)?
+                .get(provider)?
+                .get("baseUrl")?
+                .as_str()
+                .map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty());
+    if let Some(url) = saved {
+        return validate_outbound_base_url(&url);
+    }
+    // 尚未写库前的首次预设调用：仅放行常见官方域名或本机地址
+    let checked = validate_outbound_base_url(fallback)?;
+    let parsed = reqwest::Url::parse(&checked).map_err(|_| "服务地址格式无效".to_string())?;
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    const KNOWN_SUFFIXES: &[&str] = &[
+        "openai.com",
+        "anthropic.com",
+        "deepseek.com",
+        "googleapis.com",
+        "openrouter.ai",
+        "siliconflow.cn",
+        "bigmodel.cn",
+        "moonshot.cn",
+        "groq.com",
+        "dashscope.aliyuncs.com",
+        "volces.com",
+        "minimaxi.com",
+        "minimax.chat",
+        "elevenlabs.io",
+        "xiaomimimo.com",
+        "x.ai",
+        "mistral.ai",
+        "perplexity.ai",
+        "together.xyz",
+        "fireworks.ai",
+        "aliyuncs.com",
+    ];
+    let is_local = host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]";
+    let is_known = KNOWN_SUFFIXES
+        .iter()
+        .any(|s| host == *s || host.ends_with(&format!(".{s}")));
+    if is_local || is_known {
+        Ok(checked)
+    } else {
+        Err("请先在设置中保存该自定义服务地址后再调用".into())
+    }
 }
 
 /// 共享库命中则落库字幕，并写入节目方译文（engine=shared）。
@@ -524,16 +675,18 @@ async fn fetch_official_transcript(
 
     let t = match t {
         Some(t) => Some(t),
-        None if ep.transcript_type.as_deref() == Some("podscribe") && ep.transcript_url.is_some() => {
-            let segs = qiaomu::podscribe_transcript(ep.transcript_url.as_ref().unwrap())
-                .await
-                .map_err(e)?;
-            (!segs.is_empty()).then(|| Transcript {
-                episode_id: ep.id.clone(),
-                source: "podscribe".into(),
-                language: "en".into(),
-                segments: captions::resegment(segs),
-            })
+        None if ep.transcript_type.as_deref() == Some("podscribe") => {
+            if let Some(url) = ep.transcript_url.as_deref() {
+                let segs = qiaomu::podscribe_transcript(url).await.map_err(e)?;
+                (!segs.is_empty()).then(|| Transcript {
+                    episode_id: ep.id.clone(),
+                    source: "podscribe".into(),
+                    language: "en".into(),
+                    segments: captions::resegment(segs),
+                })
+            } else {
+                None
+            }
         }
         None if ep.transcript_type.as_deref() == Some("qiaomu") => match &ep.link {
             Some(link) => {
@@ -689,14 +842,20 @@ async fn local_tts_install(
     mirror_first: bool,
 ) -> Res<()> {
     let job = format!("local-tts:{id}");
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
+    let _guard = {
+        let flag = Arc::new(AtomicBool::new(false));
         let mut jobs = state.jobs.lock().map_err(e)?;
         if jobs.contains_key(&job) {
             return Err("语音模型正在下载".into());
         }
-        jobs.insert(job.clone(), cancel.clone());
-    }
+        jobs.insert(job.clone(), flag.clone());
+        JobGuard {
+            jobs: state.jobs.clone(),
+            id: job.clone(),
+            flag,
+        }
+    };
+    let cancel = _guard.cancel_flag();
     let result = local_tts::install(&state.data, &id, &cancel, mirror_first, |received, total| {
         let _ = app.emit(
             "local-tts-download",
@@ -704,7 +863,6 @@ async fn local_tts_install(
         );
     })
     .await;
-    end_job(&state, &job);
     result.map_err(e)
 }
 
@@ -847,18 +1005,18 @@ fn get_settings(state: State<'_, AppState>) -> Res<Option<String>> {
 fn set_settings(state: State<'_, AppState>, value: String) -> Res<()> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) {
         let proxy = v.get("proxy").and_then(|x| x.as_str()).map(str::to_string);
-        let _ = net::set_proxy(proxy);
+        net::set_proxy(proxy).map_err(|err| format!("代理设置无效：{err}"))?;
     }
     let conn = state.db.lock().map_err(e)?;
     db::set_setting(&conn, "app", &value).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_api_key(provider: String, key: String) -> Res<()> {
     secrets::set_key(&provider, &key).map_err(e)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn has_api_key(provider: String) -> Res<bool> {
     Ok(secrets::has_key(&provider))
 }
@@ -875,15 +1033,18 @@ struct ChatReq {
     max_tokens: Option<u32>,
     json_mode: Option<bool>,
     quick: Option<bool>,
+    job_id: Option<String>,
 }
 
 #[tauri::command]
-async fn llm_chat(app: AppHandle, req: ChatReq) -> Res<String> {
-    let key = secrets::get_key(&req.provider)
-        .map_err(e)?
-        .ok_or_else(|| "请先在设置里保存 API Key".to_string())?;
+async fn llm_chat(app: AppHandle, state: State<'_, AppState>, req: ChatReq) -> Res<String> {
+    let base_url = resolve_saved_base_url(&state, "providers", &req.provider, &req.base_url)?;
+    let key = secrets::get_key(&req.provider).map_err(e)?.unwrap_or_default();
+    if req.protocol == "anthropic" && key.is_empty() {
+        return Err("请先在设置里保存 API Key".to_string());
+    }
     let cfg = llm::LlmConfig {
-        base_url: req.base_url,
+        base_url,
         model: req.model,
         protocol: req.protocol,
         api_key: key,
@@ -893,10 +1054,23 @@ async fn llm_chat(app: AppHandle, req: ChatReq) -> Res<String> {
         json_mode: req.json_mode.unwrap_or(false),
         quick: req.quick.unwrap_or(false),
     };
+    let guard = req
+        .job_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .map(|id| begin_job(&state, id));
+    let cancel = guard
+        .as_ref()
+        .map(|g| g.cancel_flag())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     if req.stream.unwrap_or(true) {
         let app2 = app.clone();
-        llm::chat_stream(&cfg, &req.messages, move |delta| {
-            let _ = app2.emit("llm-delta", delta);
+        let req_id = req.job_id.clone().unwrap_or_default();
+        llm::chat_stream_opts(&cfg, &req.messages, &opts, &cancel, move |delta| {
+            let _ = app2.emit(
+                "llm-delta",
+                serde_json::json!({ "requestId": req_id, "delta": delta }),
+            );
         })
         .await
         .map_err(e)
@@ -913,6 +1087,7 @@ struct TranslateReq {
     texts: Vec<String>,
     target: Option<String>,
     engine: Option<String>,
+    quality: Option<String>,
     provider: Option<String>,
     base_url: Option<String>,
     model: Option<String>,
@@ -920,21 +1095,32 @@ struct TranslateReq {
 }
 
 #[tauri::command]
-async fn translate_batch(req: TranslateReq) -> Res<Vec<String>> {
+async fn translate_batch(state: State<'_, AppState>, req: TranslateReq) -> Res<Vec<String>> {
     let target = req.target.unwrap_or_else(|| "zh-CN".into());
     let engine = req.engine.unwrap_or_else(|| "google".into());
+    let quality = req.quality.unwrap_or_else(|| "fast".into());
     if engine == "llm" {
         let provider = req.provider.ok_or_else(|| "缺少 provider".to_string())?;
-        let key = secrets::get_key(&provider)
-            .map_err(e)?
-            .ok_or_else(|| "请先保存 API Key".to_string())?;
+        let base_url = resolve_saved_base_url(
+            &state,
+            "providers",
+            &provider,
+            req.base_url.as_deref().unwrap_or(""),
+        )?;
+        let protocol = req.protocol.unwrap_or_else(|| "openai".into());
+        let key = secrets::get_key(&provider).map_err(e)?.unwrap_or_default();
+        if protocol == "anthropic" && key.is_empty() {
+            return Err("请先保存 API Key".to_string());
+        }
         let cfg = llm::LlmConfig {
-            base_url: req.base_url.unwrap_or_default(),
+            base_url,
             model: req.model.unwrap_or_default(),
-            protocol: req.protocol.unwrap_or_else(|| "openai".into()),
+            protocol,
             api_key: key,
         };
-        translate::llm_batch(&cfg, &req.texts, &target).await.map_err(e)
+        translate::llm_batch_quality(&cfg, &req.texts, &target, &quality)
+            .await
+            .map_err(e)
     } else {
         translate::google_batch(&req.texts, &target).await.map_err(e)
     }
@@ -964,12 +1150,16 @@ async fn translate_texts(
     if !missing.is_empty() {
         let lines: Vec<String> = missing.iter().map(|&i| texts[i].clone()).collect();
         let done = translate::google_batch(&lines, &tl).await.map_err(e)?;
-        let conn = state.db.lock().map_err(e)?;
+        let mut pairs: Vec<(String, String)> = Vec::with_capacity(missing.len());
         for (j, &i) in missing.iter().enumerate() {
             if let Some(t) = done.get(j) {
-                let _ = db::tr_put(&conn, &keys[i], t);
+                pairs.push((keys[i].clone(), t.clone()));
                 out[i] = Some(t.clone());
             }
+        }
+        if !pairs.is_empty() {
+            let mut conn = state.db.lock().map_err(e)?;
+            let _ = db::tr_put_batch(&mut conn, &pairs);
         }
     }
     Ok(out.into_iter().map(Option::unwrap_or_default).collect())
@@ -998,9 +1188,10 @@ async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<T
     if let Some(t) = take_shared(&state, &ep).await {
         return Ok(t);
     }
+    let base_url = resolve_saved_base_url(&state, "cloudAsr", &req.provider, &req.base_url)?;
     let key = secrets::get_key(&req.provider).map_err(e)?;
     let bytes = net::get_bytes(&req.audio_url).await.map_err(e)?;
-    let url = format!("{}/audio/transcriptions", req.base_url.trim_end_matches('/'));
+    let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name("audio.mp3")
         .mime_str("audio/mpeg")
@@ -1066,7 +1257,7 @@ async fn cloud_transcribe(state: State<'_, AppState>, req: CloudAsrReq) -> Res<T
     if !share_keys.is_empty() {
         let (on, install) = {
             let conn = state.db.lock().map_err(e)?;
-            (share_on(&conn), install_id(&conn))
+            (share_on(&conn) && !is_private_episode(&conn, &ep), install_id(&conn))
         };
         if on {
             let last_end = t.segments.last().map(|s| s.end).unwrap_or(0.0);
@@ -1099,12 +1290,13 @@ struct ListModelsReq {
 
 /// OpenAI 兼容 /models；Anthropic 暂返回空，前端可手填。
 #[tauri::command]
-async fn list_models(req: ListModelsReq) -> Res<Vec<String>> {
+async fn list_models(state: State<'_, AppState>, req: ListModelsReq) -> Res<Vec<String>> {
     if req.protocol == "anthropic" {
         return Ok(vec![]);
     }
+    let base_url = resolve_saved_base_url(&state, "providers", &req.provider, &req.base_url)?;
     let key = secrets::get_key(&req.provider).map_err(e)?.unwrap_or_default();
-    let url = format!("{}/models", req.base_url.trim_end_matches('/'));
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
     let mut b = net::client().get(&url);
     if !key.is_empty() {
         b = b.bearer_auth(key);
@@ -1216,51 +1408,71 @@ async fn learn_clip(
         .video_id
         .filter(|v| !v.is_empty())
         .ok_or_else(|| "这一集没有音频".to_string())?;
-    // Subpodcast 无 youtube_stream_url：先落到临时目录再按本地文件截。
-    let work = data.join("clips").join(format!(".yt-{episode_id}"));
-    let _ = tokio::fs::remove_dir_all(&work).await;
-    tokio::fs::create_dir_all(&work).await.map_err(e)?;
+    // Subpodcast 无 youtube_stream_url：用独立临时目录避免同集并发删彼此工作目录。
+    let clips_root = data.join("clips");
+    tokio::fs::create_dir_all(&clips_root).await.map_err(e)?;
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!(".yt-{episode_id}-"))
+        .tempdir_in(&clips_root)
+        .map_err(e)?;
+    let work = tmp.path().to_path_buf();
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = async {
-        let file = asr::youtube_audio(&data, &vid, &work, cancel)
-            .await
-            .map_err(e)?;
-        clip::make(
-            &data,
-            clip::Source::File(file),
-            &episode_id,
-            start,
-            end,
-        )
+    let file = asr::youtube_audio(&data, &vid, &work, cancel)
         .await
-        .map(|p| p.to_string_lossy().into_owned())
-        .map_err(e)
-    }
-    .await;
-    let _ = tokio::fs::remove_dir_all(&work).await;
-    result
+        .map_err(e)?;
+    clip::make(
+        &data,
+        clip::Source::File(file),
+        &episode_id,
+        start,
+        end,
+    )
+    .await
+    .map(|p| p.to_string_lossy().into_owned())
+    .map_err(e)
 }
 
 /// 英语学习：生词本导出为 Anki .apkg（路径由保存对话框选定）。
 #[tauri::command]
 async fn export_anki(
+    state: State<'_, AppState>,
     path: String,
     deck: String,
     model: String,
     notes: Vec<anki::Note>,
 ) -> Res<usize> {
-    tokio::task::spawn_blocking(move || {
-        anki::write(std::path::Path::new(&path), &deck, &model, &notes)
-    })
-    .await
-    .map_err(e)?
-    .map_err(e)
+    let clips_dir = state.data.join("clips");
+    let out = std::path::PathBuf::from(&path);
+    if !out
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("apkg"))
+    {
+        return Err("导出文件必须以 .apkg 结尾".into());
+    }
+    tokio::task::spawn_blocking(move || anki::write(&out, &deck, &model, &notes, &clips_dir))
+        .await
+        .map_err(e)?
+        .map_err(e)
 }
 
-/// 英语学习：把文本（如 CSV）写到选定路径。
+/// 英语学习：把文本（如 CSV）写到选定路径（仅允许白名单文本扩展名）。
 #[tauri::command]
 fn save_text(path: String, text: String) -> Res<()> {
-    std::fs::write(path, text).map_err(e)
+    const ALLOWED_EXTS: &[&str] = &["csv", "txt", "md", "srt", "vtt", "ass", "lrc", "opml", "json"];
+    let p = std::path::Path::new(&path);
+    let ext_ok = p
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|ext| ALLOWED_EXTS.contains(&ext.to_ascii_lowercase().as_str()));
+    let hidden = p
+        .file_name()
+        .and_then(|x| x.to_str())
+        .is_some_and(|n| n.starts_with('.'));
+    if !ext_ok || hidden {
+        return Err("不支持写入该类型的文件".into());
+    }
+    std::fs::write(p, text).map_err(e)
 }
 
 /// 高光切片：FFmpeg 是否就绪、能否硬编。
@@ -1300,14 +1512,14 @@ async fn video_clip_prepare(
     end: f64,
     ranges: Option<Vec<(f64, f64)>>,
 ) -> Res<videoclip::PreparedClip> {
-    let cancel = begin_job(&state, &job_id);
+    let guard = begin_job(&state, &job_id);
+    let cancel = guard.cancel_flag();
     let data = state.data.clone();
     let report = clip_progress(&app, &job_id);
     let result = match ranges.filter(|r| r.len() > 1) {
         Some(r) => videoclip::prepare_montage(&data, &video_id, &r, &cancel, report).await,
         None => videoclip::prepare_segment(&data, &video_id, start, end, &cancel, report).await,
     };
-    end_job(&state, &job_id);
     result.map_err(e)
 }
 
@@ -1319,26 +1531,64 @@ async fn video_clip_render(
     job_id: String,
     req: videoclip::RenderRequest,
 ) -> Res<videoclip::RenderResult> {
-    let cancel = begin_job(&state, &job_id);
+    let guard = begin_job(&state, &job_id);
+    let cancel = guard.cancel_flag();
     let data = state.data.clone();
     let result = videoclip::render(&data, req, &cancel, clip_progress(&app, &job_id)).await;
-    end_job(&state, &job_id);
     result.map_err(e)
 }
 
-/// 在访达 / 资源管理器里选中文件（导出完成后「在文件夹中显示」）。
+/// 在访达 / 资源管理器里打开路径：普通目录直接打开，文件或 macOS Bundle（.app/.pkg 等）仅选中不启动。
 #[tauri::command]
-fn reveal_file(path: String) -> Res<()> {
-    if !std::path::Path::new(&path).exists() {
-        return Err("找不到这个文件".into());
+fn reveal_file(app: AppHandle, path: String) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err("找不到这个文件或文件夹".into());
     }
-    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(e)
+    const BUNDLE_EXTS: &[&str] = &["app", "pkg", "dmg", "command", "workflow", "action", "prefpane", "kext"];
+    let is_bundle = p
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|ext| BUNDLE_EXTS.contains(&ext.to_ascii_lowercase().as_str()));
+    if p.is_dir() && !is_bundle {
+        app.opener().open_path(path, None::<&str>).map_err(e)
+    } else {
+        app.opener().reveal_item_in_dir(&path).map_err(e)
+    }
 }
 
-/// 本地路径是否仍在（高光「已导出」复用前校验）。
+/// 本地路径是否仍在（高光「已导出」复用前校验；限定在应用数据 / 下载 / 导出目录内）。
 #[tauri::command]
-fn file_exists(path: String) -> bool {
-    !path.is_empty() && std::path::Path::new(&path).is_file()
+fn file_exists(state: State<'_, AppState>, path: String) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let Ok(canon) = std::fs::canonicalize(&path) else {
+        return false;
+    };
+    if !canon.is_file() {
+        return false;
+    }
+    let mut allowed: Vec<PathBuf> = vec![state.data.clone()];
+    if let Ok(dl) = downloads_dir() {
+        allowed.push(dl);
+    }
+    if let Ok(conn) = state.db.lock() {
+        if let Some(dir) = db::get_setting(&conn, "app")
+            .ok()
+            .flatten()
+            .and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+            .and_then(|v| v.get("clipExportDir")?.as_str().map(PathBuf::from))
+            .filter(|p| !p.as_os_str().is_empty())
+        {
+            allowed.push(dir);
+        }
+    }
+    allowed
+        .into_iter()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .any(|root| canon.starts_with(&root))
 }
 
 /// 写入系统剪贴板。WebView 在 await 后常丢 user activation，前端 Clipboard API 会 NotAllowedError。
@@ -1352,8 +1602,38 @@ fn clipboard_write(text: String) -> Res<()> {
 /// 把文本或 base64 二进制写到系统「下载」；字幕 MD/PDF 与其它导出共用。
 #[tauri::command]
 fn save_download(name: String, data: String, binary: bool) -> Res<String> {
+    const ALLOWED_EXTS: &[&str] = &[
+        "srt", "vtt", "ass", "lrc", "txt", "md", "pdf", "csv", "json", "opml", "png", "jpg", "jpeg",
+    ];
     let name = safe_download_name(&name)?;
-    let path = downloads_dir()?.join(name);
+    let ext_ok = std::path::Path::new(&name)
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|ext| ALLOWED_EXTS.contains(&ext.to_ascii_lowercase().as_str()));
+    if !ext_ok {
+        return Err("不支持保存该类型的文件".into());
+    }
+    let dir = downloads_dir()?;
+    let mut path = dir.join(&name);
+    if path.exists() {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("export")
+            .to_string();
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("txt")
+            .to_string();
+        for idx in 1..1000u32 {
+            let cand = dir.join(format!("{stem} ({idx}).{ext}"));
+            if !cand.exists() {
+                path = cand;
+                break;
+            }
+        }
+    }
     if binary {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let bytes = STANDARD
@@ -1418,7 +1698,8 @@ async fn download_episode(
             .ok_or_else(|| "单集不存在".to_string())?
     };
     let job = format!("dl:{episode_id}");
-    let cancel = begin_job(&state, &job);
+    let _guard = begin_job(&state, &job);
+    let cancel = _guard.cancel_flag();
     let data = state.data.clone();
     let id = episode_id.clone();
     let result = offline::download(&data, &ep, cancel, |p| {
@@ -1428,7 +1709,6 @@ async fn download_episode(
         );
     })
     .await;
-    end_job(&state, &job);
     result.map_err(e)
 }
 
@@ -1465,6 +1745,11 @@ fn open_data_folder(app: AppHandle, state: State<'_, AppState>, kind: String) ->
 
 #[tauri::command(async)]
 fn clear_temp(state: State<'_, AppState>) -> Res<()> {
+    if let Ok(jobs) = state.jobs.lock() {
+        if !jobs.is_empty() {
+            return Err("有正在进行的识别或剪辑任务，请等待完成或取消后再清理临时文件".into());
+        }
+    }
     let dir = state.data.join("work");
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(e)?;
@@ -1472,28 +1757,26 @@ fn clear_temp(state: State<'_, AppState>) -> Res<()> {
     Ok(())
 }
 
-fn begin_job(state: &AppState, id: &str) -> Arc<AtomicBool> {
+fn begin_job(state: &AppState, id: &str) -> JobGuard {
     let flag = Arc::new(AtomicBool::new(false));
     if let Ok(mut jobs) = state.jobs.lock() {
         if let Some(old) = jobs.insert(id.to_string(), flag.clone()) {
             old.store(true, Ordering::Relaxed);
         }
     }
-    flag
-}
-
-fn end_job(state: &AppState, id: &str) {
-    if let Ok(mut jobs) = state.jobs.lock() {
-        jobs.remove(id);
+    JobGuard {
+        jobs: state.jobs.clone(),
+        id: id.to_string(),
+        flag,
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn asr_models(state: State<'_, AppState>) -> Res<Vec<asr::ModelInfo>> {
     Ok(asr::list_models(&state.data))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rescan_asr_models(state: State<'_, AppState>) -> Res<Vec<asr::ModelInfo>> {
     asr::rescan();
     Ok(asr::list_models(&state.data))
@@ -1507,7 +1790,8 @@ async fn download_asr_model(
     mirror_first: Option<bool>,
 ) -> Res<()> {
     let job = format!("model:{id}");
-    let cancel = begin_job(&state, &job);
+    let _guard = begin_job(&state, &job);
+    let cancel = _guard.cancel_flag();
     let data = state.data.clone();
     let mirror = mirror_first.unwrap_or(true);
     let result = asr::download_model(&data, &id, &cancel, mirror, |received, total| {
@@ -1517,7 +1801,6 @@ async fn download_asr_model(
         );
     })
     .await;
-    end_job(&state, &job);
     result.map_err(e)
 }
 
@@ -1569,7 +1852,8 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
     if !resolved.path.is_file() {
         return Err("请先下载本机模型".into());
     }
-    let cancel = begin_job(&state, &req.episode_id);
+    let _guard = begin_job(&state, &req.episode_id);
+    let cancel = _guard.cancel_flag();
     let work = state.data.join("work").join(format!("{}-{}", ep.id, Uuid::new_v4()));
     let language = req.language.unwrap_or_else(|| "auto".into());
     let emit_asr = |stage: &str, progress: f64, message: Option<&str>| {
@@ -1607,10 +1891,14 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
                 .and_then(|x| x.to_str())
                 .unwrap_or("m4a");
             let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
+            let part = offline::dir(&state.data).join(format!("{}.{ext}.part", ep.id));
             let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
-            if tokio::fs::copy(&dest, &kept).await.is_ok() {
+            if tokio::fs::copy(&dest, &part).await.is_ok()
+                && tokio::fs::rename(&part, &kept).await.is_ok()
+            {
                 kept
             } else {
+                let _ = tokio::fs::remove_file(&part).await;
                 dest
             }
         } else if let Some(vid) = ep.video_id.as_deref().filter(|v| !v.is_empty()) {
@@ -1645,10 +1933,14 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
                 .and_then(|x| x.to_str())
                 .unwrap_or("m4a");
             let kept = offline::dir(&state.data).join(format!("{}.{ext}", ep.id));
+            let part = offline::dir(&state.data).join(format!("{}.{ext}.part", ep.id));
             let _ = tokio::fs::create_dir_all(offline::dir(&state.data)).await;
-            if tokio::fs::copy(&got, &kept).await.is_ok() {
+            if tokio::fs::copy(&got, &part).await.is_ok()
+                && tokio::fs::rename(&part, &kept).await.is_ok()
+            {
                 kept
             } else {
+                let _ = tokio::fs::remove_file(&part).await;
                 got
             }
         } else {
@@ -1768,11 +2060,11 @@ async fn local_transcribe(app: AppHandle, state: State<'_, AppState>, req: Local
     };
 
     let result = run.await;
-    let _ = std::fs::remove_dir_all(&work);
-    end_job(&state, &req.episode_id);
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    drop(_guard);
     if let (Ok(ref t), false) = (&result, share_keys.is_empty()) {
         let (on, install) = match state.db.lock() {
-            Ok(conn) => (share_on(&conn), install_id(&conn)),
+            Ok(conn) => (share_on(&conn) && !is_private_episode(&conn, &ep), install_id(&conn)),
             Err(_) => (false, String::new()),
         };
         if on {
@@ -1834,7 +2126,7 @@ pub fn run() {
         .manage(AppState {
             db: Mutex::new(conn),
             data: dir,
-            jobs: Mutex::new(HashMap::new()),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             add_subscription,
@@ -1913,18 +2205,22 @@ pub fn run() {
             let url = tauri::WebviewUrl::App("index.html".into());
             #[cfg(not(debug_assertions))]
             let url = {
-                let port = ui::serve_bundled_ui(app.handle());
+                let port = ui::serve_bundled_ui(app.handle())?;
                 tauri::WebviewUrl::External(
                     format!("http://localhost:{port}")
                         .parse()
                         .expect("localhost url"),
                 )
             };
-            tauri::WebviewWindowBuilder::new(app, "main", url)
+            let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
                 .title("Subpodcast · 声译")
                 .inner_size(1280.0, 840.0)
-                .min_inner_size(960.0, 640.0)
-                .build()?;
+                .min_inner_size(960.0, 640.0);
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+            builder.build()?;
             Ok(())
         })
         .run(tauri::generate_context!())

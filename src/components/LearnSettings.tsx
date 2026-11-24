@@ -7,6 +7,7 @@
 import { useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { LEVELS, loadDict, useDict } from "../lib/dict";
+import { useT } from "../lib/i18n";
 import type { LearnLevel } from "../lib/settings";
 import { useWords } from "../lib/words";
 import { useStore } from "../store";
@@ -15,6 +16,7 @@ import { exportWords } from "./WordsBook";
 const DAILY = [10, 20, 30];
 
 export function LearnSettings() {
+  const t = useT();
   const { s, save, set, go } = useStore(
     useShallow((st) => ({
       s: st.settings,
@@ -42,14 +44,14 @@ export function LearnSettings() {
       <section className="setup-block">
         <div className="ls-main">
           <div>
-            <p className="ls-name">英语学习模式</p>
-            <p className="muted small">点单词查释义，生词进生词本，按记忆曲线复习。只对英文节目生效。</p>
+            <p className="ls-name">{t("英语学习模式")}</p>
+            <p className="muted small">{t("点单词查释义，生词进生词本，按记忆曲线复习。只对英文节目生效。")}</p>
           </div>
           <button
             type="button"
             role="switch"
             aria-checked={s.learnOn}
-            aria-label="英语学习模式"
+            aria-label={t("英语学习模式")}
             className={`switch ${s.learnOn ? "on" : ""}`}
             onClick={() => void save({ learnOn: !s.learnOn, learnAsked: true })}
           >
@@ -57,17 +59,17 @@ export function LearnSettings() {
           </button>
         </div>
         {s.learnOn && dictFailed && (
-          <p className="error-text small">词典没能加载，查词暂时用不了。重启声译再试。</p>
+          <p className="error-text small">{t("词典没能加载，查词暂时用不了。重启声译再试。")}</p>
         )}
       </section>
       {s.learnOn && (
         <>
           <section className="setup-block">
-            <p className="setup-title">水平</p>
+            <p className="setup-title">{t("水平")}</p>
             <div className="ls-group">
               <div className="ls-row">
-                <span>我的水平</span>
-                <div className="seg-control" role="radiogroup" aria-label="我的水平">
+                <span>{t("我的水平")}</span>
+                <div className="seg-control" role="radiogroup" aria-label={t("我的水平")}>
                   {LEVELS.map(([id, label]) => (
                     <button
                       key={id}
@@ -77,7 +79,7 @@ export function LearnSettings() {
                       className={s.learnLevel === id ? "on" : ""}
                       onClick={() => void save({ learnLevel: id as LearnLevel })}
                     >
-                      {label}
+                      {t(label)}
                     </button>
                   ))}
                 </div>
@@ -89,13 +91,13 @@ export function LearnSettings() {
                     checked={s.learnMark}
                     onChange={(e) => void save({ learnMark: e.target.checked })}
                   />{" "}
-                  在字幕里标出超过这个水平的词
+                  {t("在字幕里标出超过这个水平的词")}
                 </label>
               </div>
             </div>
           </section>
           <section className="setup-block">
-            <p className="setup-title">查词</p>
+            <p className="setup-title">{t("查词")}</p>
             <div className="ls-group">
               <div className="ls-row">
                 <label className="check">
@@ -104,7 +106,7 @@ export function LearnSettings() {
                     checked={s.learnCard}
                     onChange={(e) => void save({ learnCard: e.target.checked })}
                   />{" "}
-                  点单词弹出词卡
+                  {t("点单词弹出词卡")}
                 </label>
               </div>
               <div className="ls-row">
@@ -114,16 +116,16 @@ export function LearnSettings() {
                     checked={s.learnAi}
                     onChange={(e) => void save({ learnAi: e.target.checked })}
                   />{" "}
-                  用 AI 解释「在这句里」的意思
+                  {t("用 AI 解释「在这句里」的意思")}
                 </label>
                 <button type="button" className="link-btn small" onClick={() => set({ settingsSection: "ai" })}>
-                  用「AI」页的默认模型
+                  {t("用「AI」页的默认模型")}
                 </button>
               </div>
             </div>
           </section>
           <section className="setup-block">
-            <p className="setup-title">生词本与复习</p>
+            <p className="setup-title">{t("生词本与复习")}</p>
             <div className="ls-group">
               <div className="ls-row">
                 <label className="check">
@@ -132,12 +134,12 @@ export function LearnSettings() {
                     checked={s.learnSide}
                     onChange={(e) => void save({ learnSide: e.target.checked })}
                   />{" "}
-                  侧栏显示「生词本」
+                  {t("侧栏显示「生词本」")}
                 </label>
               </div>
               <div className="ls-row">
-                <span>每天新学</span>
-                <div className="seg-control" role="radiogroup" aria-label="每天新学">
+                <span>{t("每天新学")}</span>
+                <div className="seg-control" role="radiogroup" aria-label={t("每天新学")}>
                   {DAILY.map((n) => (
                     <button
                       key={n}
@@ -159,7 +161,7 @@ export function LearnSettings() {
                     checked={s.learnRemind}
                     onChange={(e) => void save({ learnRemind: e.target.checked })}
                   />{" "}
-                  打开声译时，有要复习的词就提醒我
+                  {t("打开声译时，有要复习的词就提醒我")}
                 </label>
               </div>
               <div className="ls-row">
@@ -169,11 +171,11 @@ export function LearnSettings() {
                     checked={s.learnSounds}
                     onChange={(e) => void save({ learnSounds: e.target.checked })}
                   />{" "}
-                  拼写复习时播放按键和对错音效
+                  {t("拼写复习时播放按键和对错音效")}
                 </label>
               </div>
               <div className="ls-row">
-                <span>生词本 {count} 个词</span>
+                <span>{t("生词本 {n} 个词", { n: count })}</span>
                 <div className="row-actions">
                   <button
                     type="button"
@@ -184,18 +186,18 @@ export function LearnSettings() {
                       go({ kind: "words" });
                     }}
                   >
-                    查看
+                    {t("查看")}
                   </button>
                   <button type="button" className="btn sm" disabled={!count} onClick={() => void exportAs("anki")}>
-                    导出 Anki
+                    {t("导出 Anki")}
                   </button>
                   <button type="button" className="btn sm" disabled={!count} onClick={() => void exportAs("csv")}>
-                    导出 CSV
+                    {t("导出 CSV")}
                   </button>
                 </div>
               </div>
             </div>
-            <p className="muted small">词典来自开源的 ECDICT，离线可用。</p>
+            <p className="muted small">{t("词典来自开源的 ECDICT，离线可用。")}</p>
           </section>
         </>
       )}

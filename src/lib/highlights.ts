@@ -7,7 +7,9 @@
 import { create } from "zustand";
 import { api, errText, type Episode, type Segment } from "./api";
 import { clock } from "./format";
+import { resolveLocale, tNow } from "./i18n";
 import { llmReady } from "./jobs";
+import { resolveChatModel } from "./modelResolve";
 import type { Provider } from "./settings";
 import { seekSoon, useStore } from "../store";
 
@@ -361,18 +363,20 @@ export function deduplicateHighlights(clips: HighlightClip[], maxCount: number):
 
 function chatProvider(): Provider | null {
   const settings = useStore.getState().settings;
-  return settings.providers[settings.chatProvider] ?? null;
+  const p = settings.providers[settings.chatProvider];
+  if (!p) return null;
+  return { ...p, model: resolveChatModel(settings, p) };
 }
 
 const WINDOW_TIMEOUT_MS = 75_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
-  if (signal?.aborted) return Promise.reject(new Error("（已停止）"));
+  if (signal?.aborted) return Promise.reject(new Error(tNow("（已停止）")));
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("这一段挑选超时，已跳过")), ms);
+    const timer = window.setTimeout(() => reject(new Error(tNow("这一段挑选超时，已跳过"))), ms);
     const onAbort = () => {
       window.clearTimeout(timer);
-      reject(new Error("（已停止）"));
+      reject(new Error(tNow("（已停止）")));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     p.then(
@@ -397,25 +401,33 @@ async function llmJson(opts: {
   maxTokens: number;
   signal?: AbortSignal;
 }): Promise<string> {
-  if (opts.signal?.aborted) throw new Error("（已停止）");
-  const slow = isSlowThinkModel(opts.provider.model);
-  // reasoner / o1：压预算防空转；json_mode 与原站一致（openai 开），慢模型仍开以便结构稳定。
-  const maxTokens = slow ? Math.min(opts.maxTokens, 4000) : opts.maxTokens;
+  if (opts.signal?.aborted) throw new Error(tNow("（已停止）"));
+  const model = resolveChatModel(useStore.getState().settings, opts.provider);
+  const jobId = `llm-json-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const onAbort = () => {
+    void api.cancelJob(jobId).catch(() => {});
+  };
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
   const call = api.llmChat({
     provider: opts.provider.id,
     baseUrl: opts.provider.baseUrl,
-    model: opts.provider.model,
+    model,
     protocol: opts.provider.protocol,
     stream: false,
-    maxTokens,
+    maxTokens: opts.maxTokens,
     jsonMode: opts.provider.protocol === "openai",
     quick: true,
+    jobId,
     messages: [
       { role: "system", content: opts.system },
       { role: "user", content: opts.user },
     ],
   });
-  return withTimeout(call, WINDOW_TIMEOUT_MS, opts.signal);
+  try {
+    return await withTimeout(call, WINDOW_TIMEOUT_MS, opts.signal);
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 function setProgress(episodeId: string, done: number, total: number) {
@@ -534,15 +546,15 @@ export async function extractHighlights(opts: {
     if (allTimeout) {
       throw new Error(
         isSlowThinkModel(provider.model)
-          ? "挑选超时。当前是慢思考模型，请到设置换成普通对话模型（如 deepseek-chat）后重试"
-          : "挑选超时，请检查网络或换个模型后重试",
+          ? tNow("挑选超时。当前是慢思考模型，请到设置换成普通对话模型（如 deepseek-chat）后重试")
+          : tNow("挑选超时，请检查网络或换个模型后重试"),
       );
     }
     throw errors[0];
   }
 
   const clips = deduplicateHighlights(candidates, profile.countHi);
-  if (!clips.length) throw new Error("没有从文稿里挑出合适的高光片段，可以换个方向或重试");
+  if (!clips.length) throw new Error(tNow("没有从文稿里挑出合适的高光片段，可以换个方向或重试"));
   const bundle: HighlightBundle = {
     clips,
     intent: intent?.trim() || undefined,
@@ -655,13 +667,13 @@ export async function runHighlights(
   const ctl = new AbortController();
   aborts.set(ep.id, ctl);
   try {
-    if (!segments.length) throw new Error("需要先有字幕才能提取高光");
+    if (!segments.length) throw new Error(tNow("需要先有字幕才能提取高光"));
     const ready = await llmReady("chat");
     if (!ready || !provider?.model) {
-      throw Object.assign(new Error("请先在设置里连接 AI 模型"), { setup: true });
+      throw Object.assign(new Error(tNow("请先在设置里连接 AI 模型")), { setup: true });
     }
     if (isSlowThinkModel(provider.model)) {
-      useStore.getState().notify("当前是慢思考模型，高光会偏慢；建议换成普通对话模型（如 deepseek-chat）");
+      useStore.getState().notify(tNow("当前是慢思考模型，高光会偏慢；建议换成普通对话模型（如 deepseek-chat）"));
     }
     const bundle = await extractHighlights({
       ep,
@@ -676,7 +688,8 @@ export async function runHighlights(
   } catch (e) {
     if (!ctl.signal.aborted) {
       const setup =
-        Boolean((e as { setup?: boolean })?.setup) || /设置|API Key|模型/.test(String((e as Error)?.message ?? e));
+        Boolean((e as { setup?: boolean })?.setup) ||
+        /设置|API Key|模型|Settings|model/i.test(String((e as Error)?.message ?? e));
       useHighlights.setState((s) => ({
         error: { ...s.error, [ep.id]: errText(e) },
         needsSetup: { ...s.needsSetup, [ep.id]: setup },
@@ -759,7 +772,7 @@ export async function polishClipCopy(opts: {
   const ready = await llmReady("chat");
   const provider = chatProvider();
   if (!ready || !provider?.model) {
-    throw Object.assign(new Error("请先在设置里连接 AI 模型"), { setup: true });
+    throw Object.assign(new Error(tNow("请先在设置里连接 AI 模型")), { setup: true });
   }
   const lines = ranges
     .map((r) =>
@@ -772,13 +785,15 @@ export async function polishClipCopy(opts: {
         .join("\n"),
     )
     .join("\n……\n");
+  const loc = resolveLocale(useStore.getState().settings.uiLang);
+  const outLang = loc === "en" ? "English" : loc === "zh-TW" ? "繁體中文" : "简体中文";
   const system = `你是顶级播客内容包装主编，请为这段播客切片提炼高点击、高传播的封面标题与全平台发布文案。
-输出语言：简体中文
+输出语言：${outLang}
 节目：${ep.showTitle || ""}
 本期：${ep.title}
 
 要求：
-1. coverHook：10–18字封面冲击大字，必须用【】包住1个最核心的高亮词或反转点。忠于原话，不低俗标题党。
+1. coverHook：10–18字封面冲击大字，必须用【】包住1个最核心的高亮词或反转点（例如：未来三年，【会提问的人】将淘汰写代码的人）。忠于原话，不低俗标题党。
 2. coverSub：12–24字封面副标题钩子，交代说话人背景或核心冲突。
 3. title：不超过22字的短视频标题。
 4. shareCopy：适合小红书/视频号/抖音/B站的短视频正文，2–3句有钩子的话 + 2–3个话题标签。
@@ -798,7 +813,7 @@ export async function polishClipCopy(opts: {
   const clean = raw.replace(/^```(?:json)?\s*|\s*```$/gm, "").trim();
   const a = clean.indexOf("{");
   const b = clean.lastIndexOf("}");
-  if (a < 0 || b < a) throw new Error("模型没有返回 JSON");
+  if (a < 0 || b < a) throw new Error(tNow("模型没有返回 JSON"));
   const v = JSON.parse(clean.slice(a, b + 1)) as Record<string, unknown>;
   const str = (k: string) =>
     String(v[k] ?? "")
@@ -841,12 +856,12 @@ export function buildPlatformPost(
   const showLabel = ep.showTitle ? `${ep.showTitle} · ` : "";
   const tagLine = tags?.length
     ? tags.map((x) => (x.startsWith("#") ? x : `#${x}`)).join(" ")
-    : `#播客切片 #双语字幕`;
+    : `#${tNow("播客切片")} #${tNow("双语字幕")}`;
 
   if (platform === "short") {
     const head = (title || coverHook || "").replace(/[【】]/g, "").trim();
     const body = shareCopy?.trim() || [coverSub?.trim(), tagLine].filter(Boolean).join("\n\n");
-    return [head, body, showLabel ? `来源：${showLabel}${ep.title}` : ""].filter(Boolean).join("\n\n");
+    return [head, body, showLabel ? `${tNow("来源")}：${showLabel}${ep.title}` : ""].filter(Boolean).join("\n\n");
   }
 
   const sliceLen = endIdx - startIdx + 1;
@@ -861,10 +876,10 @@ export function buildPlatformPost(
 
   if (platform === "article") {
     const lead = articleCopy?.trim() || shareCopy?.trim() || coverSub?.trim() || "";
-    const quoteBlock = quotes.length ? `**片段原话精选**\n\n${quotes.join("\n\n")}` : "";
+    const quoteBlock = quotes.length ? `**${tNow("片段原话精选")}**\n\n${quotes.join("\n\n")}` : "";
     const foot = [
-      `出处：${showLabel}《${ep.title}》（${clock(clipStart)}）`,
-      url ? `原片链接：${url}` : "",
+      `${tNow("出处")}：${showLabel}《${ep.title}》（${clock(clipStart)}）`,
+      url ? `${tNow("原片链接")}：${url}` : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -873,10 +888,11 @@ export function buildPlatformPost(
       .join("\n\n");
   }
 
+  const socialHead = (title || coverHook || "").replace(/[【】]/g, "").trim();
   const snippet = zh?.[startIdx]?.trim() || segments[startIdx]?.text.trim() || "";
   return [
-    `「${cleanHook}」`,
-    coverSub?.trim() || shareCopy?.split("\n")[0]?.trim() || "",
+    `「${socialHead}」`,
+    shareCopy?.split("\n")[0]?.trim() || coverSub?.trim() || "",
     snippet ? `“${snippet}”` : "",
     [showLabel ? `${showLabel}${ep.title}` : ep.title, url].filter(Boolean).join("\n"),
   ]

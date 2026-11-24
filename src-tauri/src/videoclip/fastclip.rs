@@ -70,11 +70,16 @@ pub fn parse_index(head: &[u8]) -> Result<Index, Parse> {
         if size < hdr {
             return Err(Parse::Invalid);
         }
-        let end = at + size;
+        let end = at.checked_add(size).ok_or(Parse::Invalid)?;
         match kind {
             b"moov" => init_len = Some(end),
             b"sidx" => {
-                let body = head.get(p + hdr as usize..end as usize).ok_or(Parse::Need(end))?;
+                let start_off = at
+                    .checked_add(hdr)
+                    .and_then(|v| usize::try_from(v).ok())
+                    .ok_or(Parse::Invalid)?;
+                let end_off = usize::try_from(end).map_err(|_| Parse::Invalid)?;
+                let body = head.get(start_off..end_off).ok_or(Parse::Need(end))?;
                 let init_len = init_len.ok_or(Parse::Invalid)?;
                 let fragments = read_sidx(body, end).ok_or(Parse::Invalid)?;
                 return Ok(Index { init_len, fragments });
@@ -100,20 +105,23 @@ fn read_sidx(body: &[u8], anchor: u64) -> Option<Vec<Fragment>> {
     };
     let count = be(body, p + 2, 2)? as usize;
     p += 4;
-    let mut offset = anchor + first_offset;
+    let mut offset = anchor.checked_add(first_offset)?;
     let mut t = earliest as f64 / timescale;
-    let mut out = Vec::with_capacity(count);
+    let mut out = Vec::with_capacity(count.min(65536));
     for _ in 0..count {
         let word = be(body, p, 4)?;
         if word >> 31 == 1 {
             return None;
         }
         let size = word & 0x7fff_ffff;
+        if size == 0 {
+            return None;
+        }
         let dur = be(body, p + 4, 4)? as f64 / timescale;
         out.push(Fragment { offset, size, start: t, dur });
-        offset += size;
+        offset = offset.checked_add(size)?;
         t += dur;
-        p += 12;
+        p = p.checked_add(12)?;
     }
     (!out.is_empty()).then_some(out)
 }
@@ -267,7 +275,10 @@ async fn range(
     b: u64,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>> {
-    let want = b - a + 1;
+    if b < a {
+        bail!("无效的字节范围");
+    }
+    let want = b.checked_sub(a).and_then(|d| d.checked_add(1)).context("无效的字节范围")?;
     let mut failure = None;
     for attempt in 0..4u64 {
         if cancel.load(Ordering::Relaxed) {
@@ -325,31 +336,59 @@ async fn fetch_stretch(
     let (Some(first), Some(last)) = (frs.first(), frs.last()) else {
         bail!("索引里找不到这一段");
     };
-    let (a, b) = (first.offset, last.offset + last.size - 1);
-    tally.total.fetch_add(b - a + 1, Ordering::Relaxed);
-    let spans: Vec<(u64, u64)> = (a..=b)
-        .step_by(CHUNK as usize)
-        .map(|s| (s, (s + CHUNK - 1).min(b)))
-        .collect();
-    let mut parts: Vec<(u64, Vec<u8>)> = stream::iter(spans)
-        .map(|(s, e)| async move {
-            let bytes = range(url, headers, s, e, cancel).await?;
-            tally.got.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            Ok::<_, anyhow::Error>((s, bytes))
-        })
-        .buffer_unordered(CONNECTIONS)
-        .try_collect()
-        .await?;
-    parts.sort_unstable_by_key(|p| p.0);
+    let a = first.offset;
+    let b = last
+        .offset
+        .checked_add(last.size)
+        .and_then(|v| v.checked_sub(1))
+        .context("分片偏移溢出")?;
+    if b < a {
+        bail!("索引分片范围无效");
+    }
+    let span_len = b.checked_sub(a).and_then(|d| d.checked_add(1)).context("分片长度溢出")?;
+    tally.total.fetch_add(span_len, Ordering::Relaxed);
     let init = head
         .get(..index.init_len as usize)
         .context("初始化段不完整")?;
-    let mut file = Vec::with_capacity(init.len() + (b - a + 1) as usize);
-    file.extend_from_slice(init);
-    for (_, p) in parts {
-        file.extend_from_slice(&p);
+    let init_len = init.len() as u64;
+    let part_file = std::sync::Arc::new(tokio::sync::Mutex::new({
+        use tokio::io::AsyncWriteExt;
+        let mut f = tokio::fs::File::create(out).await?;
+        f.write_all(init).await?;
+        f.set_len(init_len + span_len).await?;
+        f
+    }));
+    let spans: Vec<(u64, u64)> = (a..=b)
+        .step_by(CHUNK as usize)
+        .map(|s| (s, s.saturating_add(CHUNK - 1).min(b)))
+        .collect();
+    let write_res: Result<()> = stream::iter(spans)
+        .map(|(s, e)| {
+            let pf = part_file.clone();
+            async move {
+                use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+                let bytes = range(url, headers, s, e, cancel).await?;
+                tally.got.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                let mut f = pf.lock().await;
+                f.seek(std::io::SeekFrom::Start(init_len + (s - a))).await?;
+                f.write_all(&bytes).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+        })
+        .buffer_unordered(CONNECTIONS)
+        .try_collect::<Vec<()>>()
+        .await
+        .map(|_| ());
+    if let Err(err) = write_res {
+        drop(part_file);
+        let _ = tokio::fs::remove_file(out).await;
+        return Err(err);
     }
-    tokio::fs::write(out, file).await?;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut f = part_file.lock().await;
+        f.flush().await?;
+    }
     Ok(first.start)
 }
 

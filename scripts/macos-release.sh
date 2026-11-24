@@ -16,6 +16,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
+TMP_DIRS=()
+cleanup() {
+  for d in "${TMP_DIRS[@]:-}"; do
+    [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d"
+  done
+}
+trap cleanup EXIT
+mk_tmp() {
+  local d
+  d="$(mktemp -d)"
+  TMP_DIRS+=("$d")
+  printf '%s' "$d"
+}
+
 UNIVERSAL=0
 SKIP_NOTARIZE=0
 while [ $# -gt 0 ]; do
@@ -93,8 +107,12 @@ build_one() {
   npm run tauri build -- --target "$target" --bundles "$bundles"
 
   local app="src-tauri/target/$target/release/bundle/macos/${PRODUCT}.app"
-  local dmg_src
-  dmg_src=$(find "src-tauri/target/$target/release/bundle/dmg" -name "${PRODUCT}_*.dmg" 2>/dev/null | head -1)
+  local dmg_list dmg_src
+  dmg_list=$(find "src-tauri/target/$target/release/bundle/dmg" -maxdepth 1 -name "${PRODUCT}_${VERSION}_*.dmg" 2>/dev/null || true)
+  if [ -z "$dmg_list" ]; then
+    dmg_list=$(find "src-tauri/target/$target/release/bundle/dmg" -maxdepth 1 -name "${PRODUCT}_*.dmg" 2>/dev/null || true)
+  fi
+  dmg_src=$(printf '%s\n' "$dmg_list" | head -1)
 
   [ -d "$app" ] || { echo "找不到 $app" >&2; exit 1; }
   codesign --verify --deep --strict "$app"
@@ -121,14 +139,14 @@ build_one() {
       # 可能只签了未公证：补公证
       if ! xcrun stapler validate "$app" >/dev/null 2>&1; then
         local zip
-        zip="$(mktemp -d)/${PRODUCT}.zip"
+        zip="$(mk_tmp)/${PRODUCT}.zip"
         ditto -c -k --keepParent "$app" "$zip"
         notarize_file "$zip"
         xcrun stapler staple "$app"
       fi
       # 重新打 DMG 再公证（装订后的 .app）
       local stage
-      stage="$(mktemp -d)"
+      stage="$(mk_tmp)"
       cp -R "$app" "$stage/"
       ln -s /Applications "$stage/Applications"
       rm -f "$dmg"
@@ -140,10 +158,10 @@ build_one() {
   else
     echo "Tauri 未产出 DMG，从 .app 自制" >&2
     local stage
-    stage="$(mktemp -d)"
+    stage="$(mk_tmp)"
     if ! xcrun stapler validate "$app" >/dev/null 2>&1; then
       local zip
-      zip="$(mktemp -d)/${PRODUCT}.zip"
+      zip="$(mk_tmp)/${PRODUCT}.zip"
       ditto -c -k --keepParent "$app" "$zip"
       notarize_file "$zip"
       xcrun stapler staple "$app"

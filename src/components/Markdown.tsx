@@ -7,6 +7,7 @@
 import { Fragment, memo, type ReactNode } from "react";
 import { Scissors } from "lucide-react";
 import { parseClock } from "../lib/format";
+import { tNow, useT } from "../lib/i18n";
 
 const INLINE =
   /(\*\*[^*]+\*\*|`[^`]+`|\[\d{1,2}:\d{2}(?::\d{2})?\](?:\s*[-–~至]\s*\[\d{1,2}:\d{2}(?::\d{2})?\])?)/g;
@@ -30,14 +31,14 @@ function inline(
       if (s1 == null) return <Fragment key={k}>{part}</Fragment>;
       return (
         <span key={k} className="stamp-range">
-          <button type="button" className="stamp" title="跳到这里播放" onClick={() => onSeek(s1)}>
+          <button type="button" className="stamp" title={tNow("跳到这里播放")} onClick={() => onSeek(s1)}>
             {range[1]}
           </button>
           <span className="muted"> – </span>
           <button
             type="button"
             className="stamp"
-            title="跳到结束"
+            title={tNow("跳到结束")}
             onClick={() => onSeek(s2 ?? s1)}
           >
             {range[2]}
@@ -46,8 +47,8 @@ function inline(
             <button
               type="button"
               className="stamp-clip"
-              title="剪成双语视频"
-              aria-label="剪成双语视频"
+              title={tNow("剪成双语视频")}
+              aria-label={tNow("剪成双语视频")}
               onClick={() => onClip(s1, s2 ?? undefined)}
             >
               <Scissors size={11} />
@@ -62,15 +63,15 @@ function inline(
       if (sec == null) return <Fragment key={k}>{part}</Fragment>;
       return (
         <span key={k} className="stamp-range">
-          <button type="button" className="stamp" title="跳到这里播放" onClick={() => onSeek(sec)}>
+          <button type="button" className="stamp" title={tNow("跳到这里播放")} onClick={() => onSeek(sec)}>
             {stamp[1]}
           </button>
           {onClip && (
             <button
               type="button"
               className="stamp-clip"
-              title="剪成双语视频"
-              aria-label="剪成双语视频"
+              title={tNow("剪成双语视频")}
+              aria-label={tNow("剪成双语视频")}
               onClick={() => onClip(sec)}
             >
               <Scissors size={11} />
@@ -92,6 +93,7 @@ export const Markdown = memo(function Markdown({
   onSeek: (t: number) => void;
   onClip?: (start: number, end?: number) => void;
 }) {
+  useT();
   const blocks: ReactNode[] = [];
   let list: ReactNode[] = [];
   let ordered = false;

@@ -1,12 +1,16 @@
-# rss.qiaomu.ai integration notes (research, 2026-11-16)
+# rss.qiaomu.ai 接入协议说明
 
-- Server code: `~/Documents/ChatGPT/qiaomu-clipper/integration/qmreader/unified/server.js`
-  - `GET https://rss.qiaomu.ai/api/sources` → `{sources:[{id,name,category,siteUrl,description,entryCount,...}]}`; 37 have `category: "podcast"`.
-  - `GET /api/entries?source=<id>&limit=N` → entries `{id,title,titleZh,link,published,summary,audio:{url,type}}`.
-  - `GET /api/entry/<id>` → full entry incl. `content` (HTML; for `*-zh` sources this is the Chinese 精读 rewrite).
-- Chinese deep-read sites (one per show; static, built by e.g. `~/Documents/ChatGPT/lex/tools/build.py`):
-  lex, allin, nopriors, cogrev, trainingdata, unsupervised, zhangxiaojun, 42zhangjing, latetalk, crossing, aialchemy, 35huan, zhixing, mianji  (`https://<id>.qiaomu.ai`)
-  - `/data/episodes.json` → `{updated, episodes:[{n,t,s(slug),d,y(YouTube id),zh(title),guest,tr(ot|asr|kg),au,r,ds(zh blurb)}]}`
-  - `/ep/<slug>/index.md` → Chinese 精读 markdown; `/transcripts/<slug>.txt` → original-language transcript (plain text, header lines first; may lack timestamps).
-  - `/feed.xml` → RSS of latest 20 精读 with audio enclosures.
-- Plan: a "精选频道" source type in SubCast that reads `episodes.json`, maps each episode to an Episode (audio from the official feed / YouTube id `y`), shows `ds`/`zh` as bilingual title+blurb, adds a 「精读」 tab rendering index.md, and uses transcripts txt as the original transcript (time-spread if untimed).
+本文件记录 Subpodcast 接入 `rss.qiaomu.ai` 与 `*.qiaomu.ai` 精读站的公开接口约定（实现见 `src-tauri/src/qiaomu.rs`）。
+
+## 1. RSS / 改写聚合接口（`https://rss.qiaomu.ai`）
+
+- `GET /api/sources`：返回源列表 `{ sources: [{ id, name, category, siteUrl, description, entryCount, ... }] }`。
+- `GET /api/entries?source=<id>&limit=N`：分页返回条目 `{ id, title, titleZh, link, published, summary, audio: { url, type }, rewriteReady }`。
+- `GET /api/entry/<id>`：返回单集详情，含 `rewrite.bodyHtml`（中文精读 HTML，前端渲染前必须经 DOMPurify 清洗）。
+
+## 2. 单节目静态精读站（`https://<id>.qiaomu.ai`）
+
+- 支持站点：`lex`、`allin`、`nopriors`、`cogrev`、`trainingdata`、`unsupervised`、`zhangxiaojun`、`42zhangjing`、`latetalk`、`crossing`、`aialchemy`、`35huan`、`zhixing`、`mianji`。
+- `/data/episodes.json`：`{ updated, episodes: [{ n, t, s(slug), d, y(YouTube id), zh(title), guest, tr, au, r, ds }] }`。
+- `/ep/<slug>/index.md`：中文精读 Markdown；`/transcripts/<slug>.txt`：原语言文稿。
+- `/feed.xml`：最新 20 期含音频 enclosure 的 RSS。

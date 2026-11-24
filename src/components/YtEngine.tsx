@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { pauseAudioHost, releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
+import { tNow } from "../lib/i18n";
 import { noteListening } from "../lib/listening";
 import { preferAudio, usesYtEngine } from "../lib/media";
 import { audioSrc } from "../lib/offline";
@@ -20,7 +21,6 @@ import { useYtKick } from "../lib/ytKick";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
 
 const TICK_MS = 250;
-const UNPLAYABLE = "这个视频无法在应用内播放，已切换为音频";
 
 export const useYtUi = create<{ error: string | null }>(() => ({ error: null }));
 
@@ -51,7 +51,7 @@ function fallbackToAudio() {
   });
   if (cur && preferAudio(cur)) takeAudioEngine(cur, { play: wanted });
   else if (id) s.set({ playWhenReady: id });
-  s.notify(UNPLAYABLE);
+  s.notify(tNow("这个视频无法在应用内播放，已切换为音频"));
 }
 
 export function YtEngine() {
@@ -134,7 +134,7 @@ export function YtEngine() {
     offerPlayer(handle);
   };
 
-  // 贴合槽位；无槽 / 仅音频壳 → 屏外继续播；theater 抬高以压在背板之上、叠层之下
+  // 贴合槽位；用 ResizeObserver + scroll/resize 事件替代 60-120fps rAF 持续轮询
   useEffect(() => {
     const box = boxRef.current;
     if (!box || !active) return;
@@ -145,7 +145,8 @@ export function YtEngine() {
     }
     let raf = 0;
     let last = "";
-    const tick = () => {
+    const sync = () => {
+      raf = 0;
       const r = slotEl.getBoundingClientRect();
       const host = theater ? " theater-host" : "";
       const key = `${r.left},${r.top},${r.width},${r.height},${host}`;
@@ -159,10 +160,23 @@ export function YtEngine() {
           height: `${r.height}px`,
         });
       }
-      raf = requestAnimationFrame(tick);
     };
-    tick();
-    return () => cancelAnimationFrame(raf);
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(sync);
+    };
+    sync();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(slotEl);
+    const scrollParent = slotEl.closest<HTMLElement>(".ep-left") ?? window;
+    const onEvent = () => schedule();
+    scrollParent.addEventListener("scroll", onEvent, { passive: true });
+    window.addEventListener("resize", onEvent, { passive: true });
+    return () => {
+      ro.disconnect();
+      scrollParent.removeEventListener("scroll", onEvent);
+      window.removeEventListener("resize", onEvent);
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, [active, slotEl, shell, videoId, theater]);
 
   // 供 audioHost / store 同步停声（不靠本 effect 的异步）
@@ -246,7 +260,8 @@ export function YtEngine() {
     // 复用：只换 videoId
     if (ytRef.current && videoIdRef.current === vid) {
       onReady(ytRef.current);
-      return;
+      const unsubVol = useVolume.subscribe(() => applyYtPlayerVolume(ytRef.current));
+      return () => unsubVol();
     }
     if (ytRef.current && videoIdRef.current && videoIdRef.current !== vid) {
       waiting(true);
@@ -340,8 +355,8 @@ export function YtEngine() {
               const cur = epRef.current;
               if (cur && audioSrc(cur)) fallbackToAudio();
               else {
-                useYtUi.setState({ error: "这集视频暂时播不了" });
-                useStore.getState().notify("这集视频暂时播不了");
+                useYtUi.setState({ error: tNow("这集视频暂时播不了") });
+                useStore.getState().notify(tNow("这集视频暂时播不了"));
               }
             },
           },
@@ -354,7 +369,7 @@ export function YtEngine() {
         const cur = epRef.current;
         if (cur && audioSrc(cur)) fallbackToAudio();
         else {
-          const msg = err.message || "无法加载 YouTube 播放器";
+          const msg = err.message || tNow("无法加载 YouTube 播放器");
           useYtUi.setState({ error: msg });
           useStore.getState().notify(msg);
         }
@@ -369,8 +384,13 @@ export function YtEngine() {
 
   useEffect(() => {
     if (!active || !playWhenReady || !current || playWhenReady !== current.id || !ytRef.current) return;
-    ytRef.current.playVideo();
-    useStore.getState().set({ playWhenReady: null });
+    if (typeof ytRef.current.playVideo !== "function") return;
+    try {
+      ytRef.current.playVideo();
+      useStore.getState().set({ playWhenReady: null });
+    } catch {
+      /* 播放器尚未完全就绪，等 onReady 消费 playWhenReady */
+    }
   }, [playWhenReady, active, videoId, current?.id]);
 
   useEffect(() => {

@@ -90,9 +90,29 @@ pub async fn make(
     if pcm.len() < (SAMPLE_RATE as usize) / 10 {
         bail!("没有截到声音");
     }
-    let part = dest.with_extension("part");
-    crate::asr::write_wav(&part, &pcm)?;
-    std::fs::rename(&part, &dest)?;
+    let key = dest.to_string_lossy().into_owned();
+    let lock = {
+        static CLIP_LOCKS: once_cell::sync::Lazy<
+            std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+        > = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut map = CLIP_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(key)
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _guard = lock.lock().await;
+    if dest.exists() {
+        return Ok(dest);
+    }
+    let part = dest.with_extension(format!("{}.part", uuid::Uuid::new_v4().simple()));
+    if let Err(err) = crate::asr::write_wav(&part, &pcm) {
+        let _ = std::fs::remove_file(&part);
+        return Err(err);
+    }
+    if let Err(err) = std::fs::rename(&part, &dest) {
+        let _ = std::fs::remove_file(&part);
+        return Err(err.into());
+    }
     Ok(dest)
 }
 

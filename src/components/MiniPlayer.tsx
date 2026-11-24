@@ -5,12 +5,16 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useShallow } from "zustand/react/shallow";
-import { Loader2, Pause, Play } from "lucide-react";
+import { Loader2, Pause, Play, X } from "lucide-react";
+import { pauseAudioHost, releaseAudioHost } from "../lib/audioHost";
+import { useT } from "../lib/i18n";
 import { showName } from "../lib/picks";
+import { pauseYoutubeHost } from "../lib/ytHost";
 import { useStore } from "../store";
 
 export function MiniPlayer() {
-  const { current, view, playing, player, time, length, loadingSince, audioOnly, openEpisode } = useStore(
+  const t = useT();
+  const { current, view, playing, player, time, length, loadingSince, theater, openEpisode, set } = useStore(
     useShallow((s) => ({
       current: s.current,
       view: s.view,
@@ -19,18 +23,24 @@ export function MiniPlayer() {
       time: Math.floor(s.time),
       length: s.length,
       loadingSince: s.loadingSince,
-      audioOnly: s.audioOnly,
+      theater: s.theater,
       openEpisode: s.openEpisode,
+      set: s.set,
     })),
   );
 
-  // 视频全屏舞台不走迷你条；当前就在该集单集页也不显示
-  if (!current) return null;
-  if (!audioOnly && current.videoId) return null;
+  // 全屏舞台或正在当前单集页时不显示；离页播放（含视频离页后台播）始终保留控播与返回入口
+  if (!current || theater) return null;
   if (view.kind === "episode" && view.id === current.id) return null;
 
   const pct = length ? Math.min(100, (time / length) * 100) : 0;
   const busy = !!loadingSince;
+  const dismiss = () => {
+    pauseAudioHost();
+    releaseAudioHost();
+    pauseYoutubeHost();
+    set({ current: null, playing: false, loadingSince: null, playWhenReady: null, player: null });
+  };
 
   return (
     <div className="mini">
@@ -40,7 +50,7 @@ export function MiniPlayer() {
         onClick={() => player?.toggle()}
         disabled={!player}
         aria-busy={busy}
-        aria-label={playing ? "暂停" : "播放"}
+        aria-label={playing ? t("暂停") : t("播放")}
       >
         {busy ? <Loader2 size={16} className="spin" /> : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
@@ -49,8 +59,14 @@ export function MiniPlayer() {
         className="mini-meta"
         role="button"
         tabIndex={0}
+        title={t("返回单集")}
         onClick={() => openEpisode(current)}
-        onKeyDown={(e) => e.key === "Enter" && openEpisode(current)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openEpisode(current);
+          }
+        }}
       >
         <p className="ep-name">{current.title}</p>
         {current.showTitle && <p className="meta-line">{showName(current.showTitle)}</p>}
@@ -58,6 +74,15 @@ export function MiniPlayer() {
           <div style={{ width: `${pct}%` }} />
         </div>
       </div>
+      <button
+        type="button"
+        className="icon-btn sm"
+        title={t("关闭迷你播放器")}
+        aria-label={t("关闭迷你播放器")}
+        onClick={dismiss}
+      >
+        <X size={15} />
+      </button>
     </div>
   );
 }

@@ -58,6 +58,9 @@ fn macos_identity_signed() -> bool {
     else {
         return false;
     };
+    if !out.status.success() {
+        return false;
+    }
     // codesign 诊断写在 stderr
     let text = String::from_utf8_lossy(&out.stderr);
     if text.contains("Signature=adhoc") || text.contains("(adhoc)") {
@@ -94,11 +97,18 @@ fn persist_file(cache: &HashMap<String, Option<String>>) -> Result<()> {
     let path = file_path();
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(&map)?;
-    fs::write(&tmp, body)?;
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
     }
     fs::rename(&tmp, &path)?;
     #[cfg(unix)]

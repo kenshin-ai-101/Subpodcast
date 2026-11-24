@@ -34,6 +34,7 @@ export interface CloudAsr {
 export type SubtitleMode = "bilingual" | "original" | "translation";
 export type SettingsSection = "subtitles" | "ai" | "tts" | "general" | "learn";
 export type LangSetting = "auto" | "zh-CN" | "zh-TW" | "en";
+export type ThemeSetting = "system" | "light" | "dark";
 export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";
 
 export interface QuickPrompt {
@@ -72,10 +73,12 @@ export interface Settings {
   playbackRate?: number;
   shortcuts?: Partial<Record<import("./shortcuts").ActionId, string[]>>;
   uiLang: LangSetting;
+  theme?: ThemeSetting;
   youtubePromo: boolean;
   homeBannerHidden: boolean;
-  /** 匿名分享字幕、译文与导读（阅读共享库始终开启）。 */
+  /** 匿名分享字幕、译文与导读（默认关，用户显式开启后生效；私有源永不上传）。 */
   shareTranscripts: boolean;
+  shareTranscriptsAsked?: boolean;
   /** 当前使用的朗读引擎。 */
   ttsEngine: string;
   ttsServices: Record<string, TtsService>;
@@ -377,9 +380,11 @@ export const DEFAULTS: Settings = {
   autoNext: false,
   playbackRate: 1,
   uiLang: "auto",
+  theme: "system",
   youtubePromo: true,
   homeBannerHidden: false,
-  shareTranscripts: true,
+  shareTranscripts: false,
+  shareTranscriptsAsked: false,
   ttsEngine: "system",
   ttsServices: Object.fromEntries(TTS_SERVICES.map((service) => [service.id, service])),
   ttsRate: 1,

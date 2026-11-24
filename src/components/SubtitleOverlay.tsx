@@ -4,6 +4,7 @@
  * [POS]: YouTube 舞台叠加层；与字幕面板共用时间轴与 autoTranslate 结果
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useJobs } from "../lib/jobs";
 import { activeIndex } from "../lib/playback";
@@ -18,10 +19,11 @@ export function SubtitleOverlay({ episodeId }: { episodeId: string }) {
       items: s.translations[episodeId]?.items,
     })),
   );
-  if (!transcript?.segments.length) return null;
-  const starts = transcript.segments.map((x) => x.start);
+  const segs = transcript?.segments ?? [];
+  const starts = useMemo(() => segs.map((x) => x.start), [segs]);
+  if (!segs.length) return null;
   const i = activeIndex(starts, time);
-  const seg = transcript.segments[i];
+  const seg = segs[i];
   if (!seg || time > seg.end + 1.5) return null;
   const zh = items?.[i];
   return (

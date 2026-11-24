@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Check, Loader2, Plus, RefreshCw } from "lucide-react";
 import { api, errText, type Episode, type Show } from "../lib/api";
 import { plainText } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { PICKS, pickName, pickSub, sameFeed, showName } from "../lib/picks";
 import { showLinks } from "../lib/showLinks";
 import { playAll } from "../lib/queue";
@@ -18,9 +19,10 @@ import { MonthFilter, useMonthFilter } from "./MonthFilter";
 import { AlsoOn, usePromo, YtButton } from "./PromoBanner";
 
 function EpisodeList({ episodes }: { episodes: Episode[] | null }) {
+  const t = useT();
   const openEpisode = useStore((s) => s.openEpisode);
-  if (episodes == null) return <p className="muted">加载中…</p>;
-  if (!episodes.length) return <p className="muted">暂无单集</p>;
+  if (episodes == null) return <p className="muted">{t("加载中…")}</p>;
+  if (!episodes.length) return <p className="muted">{t("暂无单集")}</p>;
   return (
     <EpFeed>
       {episodes.map((ep) => (
@@ -31,6 +33,7 @@ function EpisodeList({ episodes }: { episodes: Episode[] | null }) {
 }
 
 export function ChannelView({ input }: { input: string }) {
+  const t = useT();
   const { shows, reloadShows, notify, go } = useStore(
     useShallow((s) => ({
       shows: s.shows,
@@ -75,7 +78,7 @@ export function ChannelView({ input }: { input: string }) {
     try {
       const show = await api.addSubscription(input);
       await reloadShows();
-      notify(`已订阅「${pick ? pickName(pick) : show.title}」`);
+      notify(t("已订阅「{title}」", { title: pick ? pickName(pick) : show.title }));
       go({ kind: "show", id: show.id });
     } catch (e) {
       notify(errText(e));
@@ -93,31 +96,31 @@ export function ChannelView({ input }: { input: string }) {
       <div className="show-head">
         {cover ? <img src={cover} alt="" /> : <div className="cover-fallback" />}
         <div className="show-info">
-          <p className="meta-line">{pick ? pickSub(pick) : data?.show.author ?? "频道"}</p>
+          <p className="meta-line">{pick ? pickSub(pick) : data?.show.author ?? t("频道")}</p>
           <h1 className="show-title-h">{pick ? pickName(pick) : showName(data?.show.title ?? "")}</h1>
-          {pick && pick.zh !== pick.title && <span className="orig-line clamp1">{pick.title}</span>}
+          {pick && pickName(pick) !== pick.title && <span className="orig-line clamp1">{pick.title}</span>}
           {desc && <p className="show-desc clamp3">{desc}</p>}
           <div className="row-actions">
             {sub ? (
               <button type="button" className="btn sm" onClick={() => go({ kind: "show", id: sub.id })}>
-                <Check size={13} /> 已订阅 · 查看
+                <Check size={13} /> {t("已订阅 · 查看")}
               </button>
             ) : (
               <button type="button" className="btn primary" onClick={() => void subscribe()} disabled={busy}>
-                {busy ? <Loader2 size={14} className="spin" /> : <Plus size={15} />} 订阅
+                {busy ? <Loader2 size={14} className="spin" /> : <Plus size={15} />} {t("订阅")}
               </button>
             )}
             {playable.length > 1 && (
               <button type="button" className="btn sm" onClick={() => playAll(playable)}>
-                播放全部（{playable.length}）
+                {t("播放全部（{n}）", { n: playable.length })}
               </button>
             )}
             {promo && links.youtube && <YtButton channel={links.youtube} small={!!sub} />}
             {promo && links.youtube && <AlsoOn feedUrl={pick?.input ?? input} />}
             {data && (
               <span className="muted small">
-                {data.episodes.length} 期节目 · 不订阅也可以直接收听
-                {refreshing ? " · 正在更新…" : ""}
+                {t("{n} 期节目 · 不订阅也可以直接收听", { n: data.episodes.length })}
+                {refreshing ? ` · ${t("正在更新…")}` : ""}
               </span>
             )}
           </div>
@@ -127,7 +130,7 @@ export function ChannelView({ input }: { input: string }) {
         <div className="panel-empty">
           <p className="error-text">{error}</p>
           <button type="button" className="btn sm" onClick={() => setAttempt((n) => n + 1)}>
-            <RefreshCw size={13} /> 重试
+            <RefreshCw size={13} /> {t("重试")}
           </button>
         </div>
       ) : (

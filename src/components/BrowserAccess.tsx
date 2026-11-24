@@ -7,6 +7,7 @@
 import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../lib/api";
+import { useT } from "../lib/i18n";
 
 const NAMES: Record<string, string> = {
   chrome: "Chrome",
@@ -22,6 +23,7 @@ const NAMES: Record<string, string> = {
 export const browserName = (b: string) => NAMES[b] ?? b;
 
 export function BrowserAccess({ browser, onRetry }: { browser: string; onRetry: () => void }) {
+  const t = useT();
   const name = browserName(browser);
   useEffect(() => {
     let armed = false;
@@ -39,18 +41,18 @@ export function BrowserAccess({ browser, onRetry }: { browser: string; onRetry: 
 
   return (
     <div className="browser-access">
-      <p>macOS 需要你允许声译读取 {name} 的数据，才能借用它的 YouTube 登录。</p>
+      <p>{t("macOS 需要你允许声译读取 {name} 的数据，才能借用它的 YouTube 登录。", { name })}</p>
       <ol className="small">
-        <li>点下面的按钮打开「文件和文件夹」</li>
-        <li>在声译下打开「{name}」</li>
-        <li>回到声译，会自动重试</li>
+        <li>{t("点下面的按钮打开「文件和文件夹」")}</li>
+        <li>{t("在声译下打开「{name}」", { name })}</li>
+        <li>{t("回到声译，会自动重试")}</li>
       </ol>
       <div className="row-actions">
         <button className="btn primary sm" onClick={() => void api.openPrivacySettings()}>
-          打开系统设置
+          {t("打开系统设置")}
         </button>
         <button className="btn ghost sm" onClick={onRetry}>
-          重试
+          {t("重试")}
         </button>
       </div>
     </div>

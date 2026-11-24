@@ -10,6 +10,7 @@ import { ChevronDown } from "lucide-react";
 import type { Provider } from "../lib/settings";
 import { GROUPS } from "../lib/settings";
 import { api } from "../lib/api";
+import { useT } from "../lib/i18n";
 import { useStore } from "../store";
 import { Seg } from "./ReadingSettings";
 
@@ -37,6 +38,7 @@ export function ModelSettings({
 }: {
   ProviderEditor: (props: { p: Provider; onChange: (p: Provider) => void }) => ReactElement;
 }) {
+  const t = useT();
   const { settings, saveSettings } = useStore(useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings })));
   const [editing, setEditing] = useState(settings.chatProvider);
   const [more, setMore] = useState(false);
@@ -49,7 +51,7 @@ export function ModelSettings({
     );
   }, [apiProviders.length, editing]);
 
-  const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? "默认" : "");
+  const used = (id: string) => (settings.translateProvider === id && settings.translateMode !== "google" ? t("默认") : "");
   const ready = (p: Provider) => !p.needsKey || keys[p.id];
   const inUse = (id: string) => settings.chatProvider === id || settings.translateProvider === id;
   const rank = (p: Provider) => (inUse(p.id) ? 0 : p.needsKey && keys[p.id] ? 1 : RECOMMENDED.includes(p.id) ? 2 + RECOMMENDED.indexOf(p.id) : 9);
@@ -65,13 +67,13 @@ export function ModelSettings({
       ...(np.id === settings.chatProvider && np.model !== p?.model ? { chatModel: "" } : {}),
     });
 
-  const nameOf = (id: string) => settings.providers[id]?.name ?? "";
+  const nameOf = (id: string) => (settings.providers[id]?.name ? t(settings.providers[id]!.name) : "");
   const google = settings.translateMode === "google";
-  const translateName = google ? "谷歌翻译（免费）" : nameOf(settings.translateProvider) || "没有设置";
+  const translateName = google ? t("谷歌翻译（免费）") : nameOf(settings.translateProvider) || t("没有设置");
   const split = google || settings.chatProvider !== settings.translateProvider;
   const [advanced, setAdvanced] = useState(split);
 
-  const choices = apiProviders.filter(ready).map((x) => ({ id: x.id, name: x.name }));
+  const choices = apiProviders.filter(ready).map((x) => ({ id: x.id, name: t(x.name) }));
   const withCurrent = (id: string) => (choices.some((c) => c.id === id) || !settings.providers[id] ? choices : [...choices, { id, name: nameOf(id) }]);
 
   return (
@@ -80,12 +82,12 @@ export function ModelSettings({
         <div className="ms-use">
           {split ? (
             <b>
-              问答：{nameOf(settings.chatProvider) || "没有设置"} · 字幕翻译：{translateName}
+              {t("问答")}：{nameOf(settings.chatProvider) || t("没有设置")} · {t("字幕翻译")}：{translateName}
             </b>
           ) : (
             <b>
-              当前：{nameOf(settings.chatProvider) || "没有设置"}
-              <span className="muted small"> · 管问答和翻译</span>
+              {t("当前")}：{nameOf(settings.chatProvider) || t("没有设置")}
+              <span className="muted small"> · {t("管问答和翻译")}</span>
             </b>
           )}
         </div>
@@ -94,34 +96,27 @@ export function ModelSettings({
         <aside className="ms-list">
           <div className="ms-group-h">
             <span>
-              本机 AI<em>用你已有的订阅，不需要 Key</em>
-            </span>
-          </div>
-          <p className="muted small ms-empty">本机 Agent（Claude Code / Codex）检测安排在下一期。现在请用右侧 API 模型。</p>
-
-          <div className="ms-group-h">
-            <span>
-              API 模型<em>填 Key 使用，按量付费</em>
+              {t("API 模型")}<em>{t("填 Key 使用，按量付费")}</em>
             </span>
           </div>
           {mine.map((x) => (
             <button key={x.id} type="button" className={`ms-item ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
-              <Mark id={x.id} name={x.name} />
+              <Mark id={x.id} name={t(x.name)} />
               <span className="ms-item-name">
-                {x.name}
-                <small>{used(x.id) || (ready(x) ? "已填 Key" : "未设置")}</small>
+                {t(x.name)}
+                <small>{used(x.id) || (ready(x) ? t("已填 Key") : t("未设置"))}</small>
               </span>
               <span className={`ms-dot ${ready(x) ? "ok" : "idle"}`} />
             </button>
           ))}
           {custom && (
             <button type="button" className={`ms-item slim ${editing === custom.id ? "on" : ""}`} onClick={() => setEditing(custom.id)}>
-              <Mark id={custom.id} name={custom.name} size={20} />
-              <span className="ms-item-name">{custom.name}</span>
+              <Mark id={custom.id} name={t(custom.name)} size={20} />
+              <span className="ms-item-name">{t(custom.name)}</span>
             </button>
           )}
           <button type="button" className="ms-more" aria-expanded={more} onClick={() => setMore(!more)}>
-            <ChevronDown size={13} className={more ? "flip" : ""} /> {more ? "收起" : `更多服务商（${rest.length}）`}
+            <ChevronDown size={13} className={more ? "flip" : ""} /> {more ? t("收起") : t("更多服务商（{n}）", { n: rest.length })}
           </button>
           {more &&
             GROUPS.map((g) => {
@@ -129,11 +124,11 @@ export function ModelSettings({
               if (!list.length) return null;
               return (
                 <div key={g.id}>
-                  <p className="ms-sub-h">{g.name}</p>
+                  <p className="ms-sub-h">{t(g.name)}</p>
                   {list.map((x) => (
                     <button key={x.id} type="button" className={`ms-item slim ${editing === x.id ? "on" : ""}`} onClick={() => setEditing(x.id)}>
-                      <Mark id={x.id} name={x.name} size={20} />
-                      <span className="ms-item-name">{x.name}</span>
+                      <Mark id={x.id} name={t(x.name)} size={20} />
+                      <span className="ms-item-name">{t(x.name)}</span>
                     </button>
                   ))}
                 </div>
@@ -144,11 +139,11 @@ export function ModelSettings({
           {p && (
             <>
               <div className="ms-head">
-                <Mark id={p.id} name={p.name} size={36} />
+                <Mark id={p.id} name={t(p.name)} size={36} />
                 <div>
-                  <p className="ms-title">{p.name}</p>
+                  <p className="ms-title">{t(p.name)}</p>
                   <p className="muted small">
-                    {p.needsKey ? "用你自己的 API Key，按用量付费给服务商。Key 只保存在本机。" : "在你电脑上运行的模型服务，不需要 Key。"}
+                    {p.needsKey ? t("用你自己的 API Key，按用量付费给服务商。Key 只保存在本机。") : t("在你电脑上运行的模型服务，不需要 Key。")}
                   </p>
                 </div>
               </div>
@@ -158,12 +153,12 @@ export function ModelSettings({
         </section>
       </div>
       <button type="button" className="ms-more ms-adv" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>
-        <ChevronDown size={13} className={advanced ? "flip" : ""} /> 问答和翻译分别用不同模型
+        <ChevronDown size={13} className={advanced ? "flip" : ""} /> {t("问答和翻译分别用不同模型")}
       </button>
       {advanced && (
         <div className="setup-block ms-adv-body">
           <div className="reading-row">
-            <span>问答</span>
+            <span>{t("问答")}</span>
             <select value={settings.chatProvider} onChange={(e) => void saveSettings({ chatProvider: e.target.value, chatModel: "" })}>
               {withCurrent(settings.chatProvider).map((c) => (
                 <option key={c.id} value={c.id}>
@@ -173,7 +168,7 @@ export function ModelSettings({
             </select>
           </div>
           <div className="reading-row">
-            <span>字幕翻译</span>
+            <span>{t("字幕翻译")}</span>
             <select
               value={google ? "google" : settings.translateProvider}
               onChange={(e) =>
@@ -184,7 +179,7 @@ export function ModelSettings({
                 )
               }
             >
-              <option value="google">谷歌翻译（免费）</option>
+              <option value="google">{t("谷歌翻译（免费）")}</option>
               {withCurrent(settings.translateProvider).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -195,20 +190,20 @@ export function ModelSettings({
           {!google && (
             <>
               <div className="reading-row">
-                <span>翻译方式</span>
+                <span>{t("翻译方式")}</span>
                 <Seg
                   value={settings.translateQuality}
                   options={
                     [
-                      ["fast", "快速"],
-                      ["best", "精翻"],
-                    ] as const
+                      ["fast", t("快速")],
+                      ["best", t("精翻")],
+                    ]
                   }
                   onChange={(q) => void saveSettings({ translateQuality: q })}
                 />
               </div>
               <p className="muted small">
-                {settings.translateQuality === "best" ? "翻完再通读润色一遍，更准，时间和费用约多一倍。" : "一遍翻完，最快。"}
+                {settings.translateQuality === "best" ? t("翻完再通读润色一遍，更准，时间和费用约多一倍。") : t("一遍翻完，最快。")}
               </p>
             </>
           )}

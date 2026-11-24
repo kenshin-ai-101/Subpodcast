@@ -88,7 +88,7 @@ fn canvas(layout: &str, card_bg: &str, frame: Option<&Frame>) -> Canvas {
 
 /// `src` 画面按画布出成 `[base]`。
 fn base_chain(c: &Canvas, src: &str, crop_x: f64) -> String {
-    let cx = crop_x.clamp(0.0, 1.0);
+    let cx = if crop_x.is_finite() { crop_x.clamp(0.0, 1.0) } else { 0.5 };
     let Canvas { w, h, vx, vy, vw, vh, .. } = *c;
     if c.fill {
         return format!(
@@ -274,8 +274,11 @@ pub async fn render(
     if !raw.is_file() {
         bail!("找不到源视频片段，请重新获取");
     }
-    if req.duration <= 0.0 {
+    if !req.duration.is_finite() || req.duration <= 0.0 || req.duration > 7200.0 {
         bail!("片段时长无效");
+    }
+    if !req.speed.is_finite() || req.speed <= 0.0 {
+        bail!("倍速参数无效");
     }
     on_progress("ffmpeg", 0.04, "正在准备视频导出组件…");
     let bin = ffmpeg::ensure(data, cancel, |got, total| {

@@ -7,7 +7,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Flame } from "lucide-react";
+import { resolveLocale, useT } from "../lib/i18n";
 import { dayOf, isMastered, useWords, type DayLog, type Word } from "../lib/words";
+import { useStore } from "../store";
 
 const DAY_MS = 86_400_000;
 const CELL = 11;
@@ -57,6 +59,9 @@ function streakDays(days: Map<string, DayBucket>, now: number): number {
 }
 
 export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
+  const t = useT();
+  const uiLang = useStore((s) => s.settings.uiLang);
+  const loc = resolveLocale(uiLang);
   const { words, log } = useWords(useShallow((s) => ({ words: s.words, log: s.log })));
   const box = useRef<HTMLDivElement>(null);
   const [weeks, setWeeks] = useState(26);
@@ -101,7 +106,7 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
     const t0 = new Date(startOfDay(now));
     const monday = +t0 - ((t0.getDay() + 6) % 7) * DAY_MS;
     const first = startOfDay(monday - (weeks - 1) * 7 * DAY_MS + DAY_MS / 2);
-    const monthFmt = new Intl.DateTimeFormat("zh-CN", { month: "short" });
+    const monthFmt = new Intl.DateTimeFormat(loc, { month: "short" });
     const cols: { days: { key: string; n: number; future: boolean }[]; month?: string }[] = [];
     for (let c = 0; c < weeks; c++) {
       const col: (typeof cols)[number] = { days: [] };
@@ -115,21 +120,21 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
       cols.push(col);
     }
     return cols;
-  }, [days, weeks, today]);
+  }, [days, weeks, today, loc]);
 
-  const weekday = new Intl.DateTimeFormat("zh-CN", { weekday: "narrow" });
+  const weekday = new Intl.DateTimeFormat(loc, { weekday: "narrow" });
   const dayLabel = (key: string) =>
-    new Date(`${key}T12:00:00`).toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
+    new Date(`${key}T12:00:00`).toLocaleDateString(loc, { month: "long", day: "numeric", weekday: "short" });
 
   const tip = (key: string) => {
     const d = days.get(key);
     const label = dayLabel(key);
-    if (!d) return `${label}：没有学习`;
+    if (!d) return t("{day}：没有学习", { day: label });
     const r = d.r;
     const n = d.added.length;
-    if (r && n) return `${label}：复习 ${r} 次，新加 ${n} 个词`;
-    if (r) return `${label}：复习 ${r} 次`;
-    return `${label}：新加 ${n} 个词`;
+    if (r && n) return t("{day}：复习 {r} 次，新加 {n} 个词", { day: label, r, n });
+    if (r) return t("{day}：复习 {r} 次", { day: label, r });
+    return t("{day}：新加 {n} 个词", { day: label, n });
   };
 
   const sel = picked ? days.get(picked) : null;
@@ -143,16 +148,16 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
             {stats.streak > 0 && <Flame size={16} className="hm-fire" />}
             {stats.streak}
           </span>
-          <span className="hm-k">连续学习（天）</span>
+          <span className="hm-k">{t("连续学习（天）")}</span>
         </div>
         <div className="hm-num">
           <span className="hm-v">{stats.week}</span>
-          <span className="hm-k">近 7 天复习</span>
+          <span className="hm-k">{t("近 7 天复习")}</span>
         </div>
         <div className="hm-num">
           <span className="hm-v">{stats.kept == null ? "—" : `${stats.kept}%`}</span>
-          <span className="hm-k" title="近 30 天复习时没有选「忘了」的比例（至少复习 10 次后显示）">
-            记住率
+          <span className="hm-k" title={t("近 30 天复习时没有选「忘了」的比例（至少复习 10 次后显示）")}>
+            {t("记住率")}
           </span>
         </div>
         <div className="hm-num">
@@ -160,7 +165,7 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
             {stats.mastered}
             <span className="hm-of"> / {stats.total}</span>
           </span>
-          <span className="hm-k">已掌握</span>
+          <span className="hm-k">{t("已掌握")}</span>
         </div>
       </div>
       <div className="hm-map" ref={box}>
@@ -197,11 +202,11 @@ export function LearnStats({ onOpen }: { onOpen: (id: string) => void }) {
           ))}
         </div>
         <div className="hm-legend">
-          <span>少</span>
+          <span>{t("少")}</span>
           {[0, 1, 2, 3, 4].map((l) => (
             <span key={l} className={`hm-cell l${l}`} />
           ))}
-          <span>多</span>
+          <span>{t("多")}</span>
         </div>
       </div>
       {picked && (

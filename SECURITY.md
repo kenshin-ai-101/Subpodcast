@@ -1,11 +1,19 @@
-# 安全策略 / Security policy
+# 安全策略 / Security Policy
 
-**中文**
+## 报告安全漏洞
 
-发现安全问题，请不要公开提 Issue。用 GitHub 的私密报告：本仓库 › Security › [Report a vulnerability](https://github.com/joeseesun/subcast/security/advisories/new)。请写清影响范围、复现步骤和你测试的版本。我们会尽快回复，修复发布后再公开细节。
+如发现安全隐患（包括但不限于 WebView XSS/CSP 绕过、Tauri IPC 越权读写、API Key 泄露、二进制下载校验漏洞等），请**不要**在公开 Issue 中披露细节。
 
-只有最新发布的版本会收到安全修复。
+请通过本仓库的私密安全通告渠道（GitHub Repository › Security › Advisories › Report a vulnerability）提交，或直接联系项目维护者，并尽量提供：
 
-**English**
+1. 受影响的版本与操作系统平台
+2. 最小复现步骤或 PoC
+3. 潜在影响范围评估
 
-Please do not open a public issue for security problems. Report privately through GitHub: Security › [Report a vulnerability](https://github.com/joeseesun/subcast/security/advisories/new), with the affected version, impact and steps to reproduce. Only the latest release receives security fixes.
+我们会在确认后尽快修复并发布安全版本，随后再公开漏洞细节。仅最新发布的稳定版本获得安全更新支持。
+
+## 内建安全防线概览
+
+- Tauri WebView 启用显式 CSP 策略，远端精读 HTML 经 DOMPurify 清洗。
+- Tauri 外部链接打开强制校验 `http://` / `https://` 协议；`reveal_file` 对 macOS `.app`/`.pkg` 等 Bundle 仅定位不执行；`export_anki` 仅允许打包应用 `clips/` 目录内音频；`save_text` / `save_download` 执行扩展名白名单校验。
+- API Key 仅发往用户已持久化保存的服务 `baseUrl`（强制 `https://`，仅本机回环允许 `http://`）；正式签名包密钥存储于系统钥匙串。

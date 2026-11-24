@@ -5,6 +5,8 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { tNow } from "./i18n";
+
 declare global {
   interface Window {
     YT?: {
@@ -46,7 +48,7 @@ export function loadYouTube(): Promise<NonNullable<Window["YT"]>> {
       window.clearTimeout(timer);
       loading = null;
       script.remove();
-      reject(new Error("无法加载 YouTube 播放器，请检查网络或代理"));
+      reject(new Error(tNow("无法加载 YouTube 播放器，请检查网络或代理")));
     };
     script.onerror = fail;
     const timer = window.setTimeout(() => {

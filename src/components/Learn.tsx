@@ -11,6 +11,7 @@ import { Check, GraduationCap, Loader2, Pause, Play, Plus, Volume2 } from "lucid
 import { api, type Episode, type Segment } from "../lib/api";
 import { clipKey, prefetchClip, speak, toggleClip, useClipState } from "../lib/clip";
 import { WORD_RE, isNew, loadDict, lookup, tagLabel, useDict } from "../lib/dict";
+import { tNow, useT } from "../lib/i18n";
 import { llmReady } from "../lib/jobs";
 import type { LearnLevel } from "../lib/settings";
 import { useWords, type Word } from "../lib/words";
@@ -33,18 +34,18 @@ export function useLearnOn(): boolean {
 
 export const fmtWait = (ms: number) => {
   const m = ms / 60_000;
-  if (m < 60) return `${Math.max(1, Math.round(m))} 分钟`;
+  if (m < 60) return tNow("{m} 分钟", { m: Math.max(1, Math.round(m)) });
   const h = m / 60;
-  if (h < 24) return `${Math.round(h)} 小时`;
+  if (h < 24) return tNow("{h} 小时", { h: Math.round(h) });
   const d = h / 24;
-  if (d < 31) return `${Math.round(d)} 天`;
-  return `${Math.round(d / 30)} 个月`;
+  if (d < 31) return tNow("{n} 天", { n: Math.round(d) });
+  return tNow("{n} 个月", { n: Math.round(d / 30) });
 };
 
 export const dueLabel = (w: Word, now: number) => {
-  if (w.card.state === 0) return { text: "新词", now: false };
-  if (w.card.due <= now) return { text: "今天", now: true };
-  return { text: `${fmtWait(w.card.due - now)}后`, now: false };
+  if (w.card.state === 0) return { text: tNow("新词"), now: false };
+  if (w.card.due <= now) return { text: tNow("今天"), now: true };
+  return { text: tNow("{wait}后", { wait: fmtWait(w.card.due - now) }), now: false };
 };
 
 export function EmptyState({
@@ -94,12 +95,13 @@ export function ClipIcon({ k, size = 12 }: { k: string; size?: number }) {
 
 /** 图标 + 文案；播放中文案变为「暂停」。 */
 export function ClipLabel({ k, label }: { k: string; label: string }) {
+  const t = useT();
   const active = useClipState((s) => s.key === k);
   const loading = useClipState((s) => (s.key === k ? s.loading : false));
   return (
     <>
       <ClipIcon k={k} />
-      {active && !loading ? "暂停" : label}
+      {active && !loading ? t("暂停") : label}
     </>
   );
 }
@@ -109,6 +111,7 @@ export interface LearnMarks {
   level: LearnLevel;
   mark: boolean;
   saved: Record<string, Word>;
+  known: Record<string, number>;
 }
 
 /** 英文字幕标词所需数据；不适用时为 null。 */
@@ -122,10 +125,10 @@ export function useLearnMarks(english: boolean): LearnMarks | null {
     })),
   );
   const data = useDict((s) => s.data);
-  const saved = useWords((s) => s.words);
+  const { saved, known } = useWords(useShallow((s) => ({ saved: s.words, known: s.known })));
   return useMemo(
-    () => (on && english && data && (mark || card) ? { data, level, mark, saved } : null),
-    [on, english, data, level, mark, card, saved],
+    () => (on && english && data && (mark || card) ? { data, level, mark, saved, known } : null),
+    [on, english, data, level, mark, card, saved, known],
   );
 }
 
@@ -140,7 +143,11 @@ export const LearnText = memo(function LearnText({ text, marks }: { text: string
     const proper =
       /^[A-Z]/.test(m[0]) && ((i > 0 && !/[.?!]["”]?\s*$/.test(text.slice(0, i))) || !e?.tags);
     const cls =
-      e && marks.saved[e.lemma] ? " saved" : e && marks.mark && !proper && isNew(e, marks.level) ? " new" : "";
+      e && marks.saved[e.lemma]
+        ? " saved"
+        : e && marks.mark && !proper && !marks.known[e.lemma] && isNew(e, marks.level)
+          ? " new"
+          : "";
     out.push(
       <span key={i} className={`lw${cls}`}>
         {m[0]}
@@ -161,15 +168,22 @@ export interface CardTarget {
 
 /** 点击单词的词卡：释义、句内义、原声、加入生词本。 */
 export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Episode; onClose: () => void }) {
+  const t = useT();
   const data = useDict((s) => s.data);
   const entry = useMemo(() => (data ? lookup(data, target.token) : null), [data, target.token]);
   const id = entry?.lemma ?? target.token.toLowerCase();
   const saved = useWords((s) => s.words[id]);
+  const isKnown = useWords((s) => !!s.known[id]);
   const aiOn = useStore((s) => s.settings.learnAi);
   const [ctx, setCtx] = useState<string | null>(saved?.ctx ?? null);
   const [ctxState, setCtxState] = useState<"idle" | "loading" | "none" | "error">("idle");
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<CSSProperties>({ visibility: "hidden" });
+
+  useEffect(() => {
+    setCtx(saved?.ctx ?? null);
+    setCtxState("idle");
+  }, [id, target.seg.text, saved?.ctx]);
 
   useEffect(() => {
     target.el.classList.add("open");
@@ -266,7 +280,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
       start: target.seg.start,
       end: target.seg.end,
     });
-    useStore.getState().notify(`已加入生词本：${entry?.lemma ?? target.token}`);
+    useStore.getState().notify(t("已加入生词本：{word}", { word: entry?.lemma ?? target.token }));
     prefetchClip(ep.id, target.seg.start, target.seg.end);
   };
 
@@ -283,30 +297,30 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
         <button
           type="button"
           className="icon-btn sm wc-say"
-          title="读单词"
-          aria-label="读单词"
+          title={t("读单词")}
+          aria-label={t("读单词")}
           onClick={() => speak(entry?.lemma ?? target.token)}
         >
           <Volume2 size={15} />
         </button>
       </div>
       {entry?.ipa && <p className="wc-ipa">/{entry.ipa}/</p>}
-      {entry ? <Meaning text={entry.meaning} /> : <p className="wc-none muted small">词典里没有这个词</p>}
+      {entry ? <Meaning text={entry.meaning} /> : <p className="wc-none muted small">{t("词典里没有这个词")}</p>}
       {aiOn && ctxState !== "none" && (
         <div className="wc-ctx">
-          <span className="wc-ctx-h">在这句里</span>
+          <span className="wc-ctx-h">{t("在这句里")}</span>
           {ctx ? (
             ctx
           ) : ctxState === "loading" ? (
             <span className="skeleton wc-skel" />
           ) : ctxState === "error" ? (
-            <span className="muted">暂时没能解释，稍后再试</span>
+            <span className="muted">{t("暂时没能解释，稍后再试")}</span>
           ) : null}
         </div>
       )}
       <div className="wc-foot">
         <button type="button" className="btn sm play" onClick={() => void listen()}>
-          <ClipLabel k={clipKey(ep.id, target.seg.start, target.seg.end)} label="原声" />
+          <ClipLabel k={clipKey(ep.id, target.seg.start, target.seg.end)} label={t("原声")} />
         </button>
         {saved ? (
           <button
@@ -318,13 +332,31 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
             }}
           >
             <Check size={13} />
-            已在生词本
+            {t("已在生词本")}
           </button>
         ) : (
-          <button type="button" className="btn sm primary" onClick={add}>
-            <Plus size={13} />
-            加入生词本
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={() => {
+                if (isKnown) {
+                  useWords.getState().unknow(id);
+                  useStore.getState().notify(t("已恢复标词：{word}", { word: entry?.lemma ?? target.token }));
+                } else {
+                  useWords.getState().know([id]);
+                  useStore.getState().notify(t("已标为认识，后续不再高亮：{word}", { word: entry?.lemma ?? target.token }));
+                  onClose();
+                }
+              }}
+            >
+              {isKnown ? t("恢复标词") : t("已认识")}
+            </button>
+            <button type="button" className="btn sm primary" onClick={add}>
+              <Plus size={13} />
+              {t("加入生词本")}
+            </button>
+          </>
         )}
       </div>
     </div>,
@@ -334,6 +366,7 @@ export function WordCard({ target, ep, onClose }: { target: CardTarget; ep: Epis
 
 /** 首次英文稿顶栏：是否打开学习模式。 */
 export function LearnTip() {
+  const t = useT();
   const { asked, on, save } = useStore(
     useShallow((s) => ({
       asked: s.settings.learnAsked,
@@ -348,22 +381,22 @@ export function LearnTip() {
         <GraduationCap size={16} />
       </span>
       <div className="learn-tip-text">
-        <p className="learn-tip-t">想顺便学英语吗？</p>
-        <p className="learn-tip-s">点字幕里的单词就能查，生词进生词本。</p>
+        <p className="learn-tip-t">{t("想顺便学英语吗？")}</p>
+        <p className="learn-tip-s">{t("点字幕里的单词就能查，生词进生词本。")}</p>
       </div>
       <div className="learn-tip-acts">
         <button type="button" className="btn sm ghost" onClick={() => void save({ learnAsked: true })}>
-          不用了
+          {t("不用了")}
         </button>
         <button
           type="button"
           className="btn sm primary"
           onClick={() => {
             void save({ learnAsked: true, learnOn: true });
-            useStore.getState().notify("已打开英语学习模式，可以在 设置 › 学英语 里调整");
+            useStore.getState().notify(t("已打开英语学习模式，可以在 设置 › 学英语 里调整"));
           }}
         >
-          打开
+          {t("打开")}
         </button>
       </div>
     </div>

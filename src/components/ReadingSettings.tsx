@@ -6,6 +6,7 @@
  */
 import { useShallow } from "zustand/react/shallow";
 import { SUB_FONT_DEFS } from "../lib/fonts";
+import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
 import { SUB_FONTS } from "../lib/reading";
 import type { Settings } from "../lib/settings";
@@ -32,6 +33,7 @@ export function Seg<T extends string | number>({
 }
 
 export function ReadingSettings() {
+  const t = useT();
   const { settings, saveSettings, current } = useStore(
     useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, current: s.current })),
   );
@@ -41,7 +43,7 @@ export function ReadingSettings() {
   const k = tr?.segments.findIndex((_, i) => !!items?.[i]) ?? -1;
   const orig = k >= 0 ? tr!.segments[k]!.text : "The most important thing is to keep learning faster than the world changes.";
   const zh = k >= 0 ? items![k]! : "最重要的是，学习的速度要比世界变化的速度更快。";
-  const fontName = (id: keyof typeof SUB_FONTS) => SUB_FONT_DEFS.find((f) => f.id === id)?.name ?? id;
+  const fontName = (id: keyof typeof SUB_FONTS) => t(SUB_FONT_DEFS.find((f) => f.id === id)?.name ?? id);
 
   return (
     <div className="reading">
@@ -55,24 +57,24 @@ export function ReadingSettings() {
       </div>
 
       <section className="setup-block">
-        <p className="setup-title">字幕</p>
+        <p className="setup-title">{t("字幕")}</p>
         <div className="reading-row">
-          <span>字号</span>
+          <span>{t("字号")}</span>
           <Seg
             value={settings.subtitleSize ?? "m"}
             options={
               [
-                ["s", "小"],
-                ["m", "标准"],
-                ["l", "大"],
-                ["xl", "特大"],
-              ] as const
+                ["s", t("小")],
+                ["m", t("标准")],
+                ["l", t("大")],
+                ["xl", t("特大")],
+              ]
             }
             onChange={(v) => save({ subtitleSize: v })}
           />
         </div>
         <div className="reading-row">
-          <span>字体</span>
+          <span>{t("字体")}</span>
           <Seg
             value={settings.subtitleFont ?? "sans"}
             options={(Object.keys(SUB_FONTS) as (keyof typeof SUB_FONTS)[]).map((id) => [id, fontName(id)])}
@@ -80,35 +82,35 @@ export function ReadingSettings() {
           />
         </div>
         <div className="reading-row">
-          <span>视频上的字幕</span>
+          <span>{t("视频上的字幕")}</span>
           <Seg
             value={settings.subtitleLook ?? "outline"}
             options={
               [
-                ["box", "半透明底"],
-                ["outline", "描边，无底"],
-              ] as const
+                ["box", t("半透明底")],
+                ["outline", t("描边，无底")],
+              ]
             }
             onChange={(v) => save({ subtitleLook: v })}
           />
         </div>
         <label className="check">
           <input type="checkbox" checked={settings.audioNextLine === true} onChange={(e) => save({ audioNextLine: e.target.checked })} />{" "}
-          音频节目提前显示下一句
+          {t("音频节目提前显示下一句")}
         </label>
       </section>
 
       <section className="setup-block">
-        <p className="setup-title">AI 问答</p>
+        <p className="setup-title">{t("AI 问答")}</p>
         <div className="reading-row">
-          <span>字号</span>
+          <span>{t("字号")}</span>
           <Seg
             value={settings.chatSize ?? "m"}
             options={
               [
-                ["m", "标准"],
-                ["l", "大"],
-              ] as const
+                ["m", t("标准")],
+                ["l", t("大")],
+              ]
             }
             onChange={(v) => save({ chatSize: v })}
           />
@@ -116,10 +118,10 @@ export function ReadingSettings() {
       </section>
 
       <section className="setup-block">
-        <p className="setup-title">播放</p>
+        <p className="setup-title">{t("播放")}</p>
         <label className="check">
           <input type="checkbox" checked={!!settings.autoNext} onChange={(e) => save({ autoNext: e.target.checked })} />{" "}
-          播完一集，自动接着播同一节目的下一集
+          {t("播完一集，自动接着播同一节目的下一集")}
         </label>
       </section>
     </div>

@@ -228,7 +228,12 @@ async fn read_json<T: for<'de> Deserialize<'de>>(p: &Path) -> Option<T> {
 
 async fn write_json<T: Serialize>(p: &Path, v: &T) {
     if let Ok(s) = serde_json::to_string(v) {
-        let _ = tokio::fs::write(p, s).await;
+        let tmp = p.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+        if tokio::fs::write(&tmp, s).await.is_ok() {
+            if tokio::fs::rename(&tmp, p).await.is_err() {
+                let _ = tokio::fs::remove_file(&tmp).await;
+            }
+        }
     }
 }
 
@@ -563,6 +568,7 @@ async fn ytdlp_section_once(
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill().await;
             tail.abort();
+            cleanup_tag_files(dir, &tag).await;
             bail!("已取消");
         }
         if let Some(status) = child.try_wait()? {
@@ -572,6 +578,7 @@ async fn ytdlp_section_once(
     };
     let last = tail.await.unwrap_or_default();
     if !status.success() {
+        cleanup_tag_files(dir, &tag).await;
         bail!("获取视频片段失败：{}", last.chars().take(240).collect::<String>());
     }
     let mut rd = tokio::fs::read_dir(dir).await?;
@@ -581,7 +588,18 @@ async fn ytdlp_section_once(
             return Ok(e.path());
         }
     }
+    cleanup_tag_files(dir, &tag).await;
     Err(anyhow!("没有找到下载的视频片段"))
+}
+
+async fn cleanup_tag_files(dir: &Path, tag: &str) {
+    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(e)) = rd.next_entry().await {
+            if e.file_name().to_string_lossy().starts_with(tag) {
+                let _ = tokio::fs::remove_file(e.path()).await;
+            }
+        }
+    }
 }
 
 /// 同一视频的几段按顺序拼成一条（蒙太奇）：每段单独取并缓存，再统一尺寸后一次编码。

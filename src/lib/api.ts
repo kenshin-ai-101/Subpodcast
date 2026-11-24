@@ -186,11 +186,13 @@ export const api = {
     maxTokens?: number;
     jsonMode?: boolean;
     quick?: boolean;
+    jobId?: string;
   }) => invoke<string>("llm_chat", { req }),
   translateBatch: (req: {
     texts: string[];
     target?: string;
     engine?: string;
+    quality?: "fast" | "best";
     provider?: string;
     baseUrl?: string;
     model?: string;

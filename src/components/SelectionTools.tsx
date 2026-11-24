@@ -9,11 +9,12 @@ import { Copy, Languages, Scissors } from "lucide-react";
 import { api, type Episode } from "../lib/api";
 import { writeClipboardText } from "../lib/clipboard";
 import { createManualClip } from "../lib/highlights";
+import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
 import { useStore } from "../store";
 import { openVideoClipDialog } from "./VideoClipDialog";
 
-const ZONES = ".deep-body, .lines, .notes-body, .chat-scroll, .summary, .hl-list";
+const ZONES = ".deep-body, .lines, .notes-body, .chat-scroll, .summary-pane, .hl-list";
 
 interface Sel {
   text: string;
@@ -27,6 +28,7 @@ interface Sel {
 
 /** 划词工具条：复制出处、翻译、剪视频（有 videoId 且落在字幕行时）。 */
 export function SelectionTools() {
+  const t = useT();
   const [sel, setSel] = useState<Sel | null>(null);
   const [tr, setTr] = useState<string | null>(null);
   const view = useStore((s) => s.view);
@@ -133,9 +135,9 @@ export function SelectionTools() {
       : "";
     try {
       await writeClipboardText(`“${sel.text}”\n${src}`);
-      useStore.getState().notify("已复制，带出处");
+      useStore.getState().notify(t("已复制，带出处"));
     } catch {
-      useStore.getState().notify("复制失败");
+      useStore.getState().notify(t("复制失败"));
     }
   };
 
@@ -145,9 +147,9 @@ export function SelectionTools() {
     const looksZh = /[\u4e00-\u9fff]/.test(sel.text) && !/[a-z]{4}/i.test(sel.text);
     try {
       const out = await api.translateTexts([sel.text], looksZh ? "en" : "zh-CN");
-      setTr(out[0] || "没有翻译结果");
+      setTr(out[0] || t("没有翻译结果"));
     } catch {
-      setTr("翻译服务暂时连不上，稍后再试");
+      setTr(t("翻译服务暂时连不上，稍后再试"));
     }
   };
 
@@ -170,19 +172,19 @@ export function SelectionTools() {
       className={`sel-bar ${sel.below ? "below" : ""}`}
       style={{ left: sel.x, top: sel.y }}
       role="toolbar"
-      aria-label="选中文字操作"
+      aria-label={t("选中文字操作")}
       onMouseDown={(e) => e.preventDefault()}
     >
       <div className="sel-actions">
         <button type="button" onClick={() => void copy()}>
-          <Copy size={13} /> 复制
+          <Copy size={13} /> {t("复制")}
         </button>
         <button type="button" onClick={() => void translate()}>
-          <Languages size={13} /> 翻译
+          <Languages size={13} /> {t("翻译")}
         </button>
         {hasVideo && sel.startIdx != null && (
           <button type="button" onClick={() => void clipVideo()}>
-            <Scissors size={13} /> 剪视频
+            <Scissors size={13} /> {t("剪视频")}
           </button>
         )}
       </div>

@@ -4,7 +4,7 @@
  * [POS]: 单集左栏播控；页 episode 与 store.current 正交
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { Episode } from "../lib/api";
 import { clock } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
 import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
@@ -46,6 +47,7 @@ export function toggleTheater(on?: boolean) {
 }
 
 function VolumeControl() {
+  const t = useT();
   const { level, muted } = useVolume(useShallow((s) => ({ level: s.level, muted: s.muted })));
   const shown = muted ? 0 : level;
   const Icon = shown === 0 ? VolumeX : shown < 0.5 ? Volume1 : Volume2;
@@ -61,8 +63,8 @@ function VolumeControl() {
         type="button"
         className="icon-btn"
         onClick={() => toggleMute()}
-        title={muted ? "取消静音（M）" : "静音（M）"}
-        aria-label={muted ? "取消静音" : "静音"}
+        title={muted ? t("取消静音（M）") : t("静音（M）")}
+        aria-label={muted ? t("取消静音") : t("静音")}
       >
         <Icon size={17} />
       </button>
@@ -76,9 +78,9 @@ function VolumeControl() {
           value={shown}
           onChange={(e) => setLevel(Number(e.target.value))}
           style={{ "--fill": `${pct}%` } as React.CSSProperties}
-          aria-label="音量"
+          aria-label={t("音量")}
           aria-valuetext={`${pct}%`}
-          title={`音量 ${pct}%`}
+          title={t("音量 {n}%", { n: pct })}
         />
       </div>
     </div>
@@ -86,6 +88,7 @@ function VolumeControl() {
 }
 
 export function PlayerBar({ episode }: { episode: Episode }) {
+  const t = useT();
   const { current, time, length, playing, rate, audioOnly, loadingSince, theater, set } = useStore(
     useShallow((s) => ({
       current: s.current,
@@ -201,7 +204,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
 
   const fill = `${shownLength ? Math.min(100, (shownTime / shownLength) * 100) : 0}%`;
   const segs = transcript?.segments ?? [];
-  const i = segs.length ? activeIndex(segs.map((s) => s.start), shownTime) : -1;
+  const starts = useMemo(() => segs.map((s) => s.start), [segs]);
+  const i = segs.length ? activeIndex(starts, shownTime) : -1;
   const showI = nextLine && i >= 0 && i + 1 < segs.length ? i + 1 : i;
   const seg = showI >= 0 ? segs[showI] : null;
   const zh = showI >= 0 ? items?.[showI] : null;
@@ -210,7 +214,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
     <>
       {canVideo && live && (
         <div className="media-switch-row">
-          <div className="media-switch seg-control" role="radiogroup" aria-label="播放方式">
+          <div className="media-switch seg-control" role="radiogroup" aria-label={t("播放方式")}>
             <button
               type="button"
               role="radio"
@@ -218,7 +222,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
               className={!audioOnly ? "on" : ""}
               onClick={() => audioOnly && switchTo(false)}
             >
-              视频
+              {t("视频")}
             </button>
             <button
               type="button"
@@ -227,7 +231,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
               className={audioOnly ? "on" : ""}
               onClick={() => !audioOnly && switchTo(true)}
             >
-              仅音频
+              {t("仅音频")}
             </button>
           </div>
         </div>
@@ -241,8 +245,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             <button
               type="button"
               className="yt-shield"
-              aria-label={shownPlaying ? "暂停" : "播放"}
-              title={shownPlaying ? "暂停" : "播放"}
+              aria-label={shownPlaying ? t("暂停") : t("播放")}
+              title={shownPlaying ? t("暂停") : t("播放")}
               onClick={playToggle}
               onDoubleClick={() => toggleTheater()}
             />
@@ -255,8 +259,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             <button
               type="button"
               className="yt-fs-btn"
-              title={theater ? "退出全屏（Esc）" : "全屏（双击或 F）"}
-              aria-label={theater ? "退出全屏" : "全屏"}
+              title={theater ? t("退出全屏（Esc）") : t("全屏（双击或 F）")}
+              aria-label={theater ? t("退出全屏") : t("全屏")}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleTheater();
@@ -279,8 +283,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             type="button"
             className="cover-play"
             onClick={playToggle}
-            title={shownPlaying ? "暂停（空格）" : live ? "播放（空格）" : "播放这一集"}
-            aria-label={shownPlaying ? "暂停" : "播放"}
+            title={shownPlaying ? t("暂停（空格）") : live ? t("播放（空格）") : t("播放这一集")}
+            aria-label={shownPlaying ? t("暂停") : t("播放")}
           >
             {source.cover ? <img src={source.cover} alt="" /> : <span className="cover-fallback" />}
             <span className={`cover-play-btn ${shownPlaying ? "playing" : ""}`}>
@@ -300,7 +304,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
         <button
           type="button"
           className="icon-btn"
-          title="后退 15 秒"
+          title={t("后退 15 秒")}
           disabled={!live}
           onClick={() => useStore.getState().player?.seek(Math.max(0, shownTime - 15))}
         >
@@ -310,7 +314,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
           type="button"
           className="play-btn"
           onClick={playToggle}
-          aria-label={busy ? "缓冲中" : shownPlaying ? "暂停" : "播放"}
+          aria-label={busy ? t("缓冲中") : shownPlaying ? t("暂停") : t("播放")}
           aria-busy={busy || undefined}
         >
           {busy ? (
@@ -324,7 +328,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
         <button
           type="button"
           className="icon-btn"
-          title="前进 30 秒"
+          title={t("前进 30 秒")}
           disabled={!live}
           onClick={() => useStore.getState().player?.seek(shownTime + 30)}
         >
@@ -356,7 +360,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
         <button
           type="button"
           className={`rate-btn${rate >= 2 ? " fast" : ""}`}
-          title="播放速度"
+          title={t("播放速度")}
           disabled={!live}
           onClick={() => {
             const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length] ?? 1;

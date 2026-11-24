@@ -13,11 +13,11 @@ scripts/ — macos-sign-setup / macos-release（Developer ID + notarytool；凭�
 </directory>
 
 <config>
-package.json — 前端依赖与脚本（含 ts-fsrs、canvas-confetti、plugin-dialog）
-src-tauri/Cargo.toml — Rust 依赖（tiny_http、symphonia、whisper-rs）
-src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；窗口在 setup 创建；assetProtocol=$DATA/Subpodcast/downloads·clips·work/clips·tts-cache；macOS 11.0 + hardenedRuntime + Entitlements.plist
+package.json — 前端依赖与脚本（v1.1.0；含 dompurify、@tanstack/react-virtual、vitest、biome、i18n 校验、ts-fsrs、canvas-confetti、plugin-dialog）
+src-tauri/Cargo.toml — Rust 依赖（v1.1.0；tiny_http、symphonia、whisper-rs）
+src-tauri/tauri.conf.json — 应用标识 app.subpodcast.desktop；v1.1.0；显式 CSP 白名单；窗口在 setup 创建（macOS TitleBarStyle::Overlay）；assetProtocol=$DATA/Subpodcast/downloads·clips·work/clips·tts-cache + $APPDATA；macOS 11.0 + hardenedRuntime + Entitlements.plist
 src-tauri/Entitlements.plist — 公证用 Hardened Runtime（JIT / unsigned-exec-mem / disable-library-validation）
-src-tauri/capabilities/default.json — 命令 ACL（含 video_clip_* / reveal_file）+ remote http://localhost:14427–14446
+src-tauri/capabilities/default.json — 命令 ACL（含 video_clip_* / reveal_file / file_exists / clipboard_write）+ dialog:allow-save|open + remote http://localhost:14427–14446
 </config>
 
 ## MVP 范围

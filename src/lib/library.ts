@@ -6,6 +6,7 @@
  */
 import { create } from "zustand";
 import { api, type Episode } from "./api";
+import { tNow } from "./i18n";
 import { useStore } from "../store";
 
 interface Fav {
@@ -39,5 +40,5 @@ export function toggleFavorite(ep: Episode) {
   const next = on ? favorites.filter((f) => f.id !== ep.id) : [{ id: ep.id, at: Date.now() }, ...favorites];
   useLibrary.setState({ favorites: next });
   void api.setBlob(BLOB_EP, BLOB_KIND, JSON.stringify(next));
-  useStore.getState().notify(on ? "已取消收藏" : "已收藏，在「接下来听」里能找到");
+  useStore.getState().notify(on ? tNow("已取消收藏") : tNow("已收藏，在「接下来听」里能找到"));
 }

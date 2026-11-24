@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { api, type Episode } from "./api";
+import { tNow } from "./i18n";
 import { useStore } from "../store";
 
 export const SAVE_EVERY = 10;
@@ -41,7 +42,14 @@ export function waiting(on: boolean) {
   window.clearTimeout(stuckTimer);
   if (!on) return;
   stuckTimer = window.setTimeout(() => {
-    if (!useStore.getState().loadingSince) return;
+    const st = useStore.getState();
+    if (!st.loadingSince) return;
+    // 纯音频引擎走 audioHost 恢复；YouTube 引擎若超 20s 仍在缓冲则解除无尽转圈并提示
+    if (!st.audioOnly && st.current?.videoId) {
+      st.set({ loadingSince: null });
+      st.notify(tNow("视频加载较慢，可切换「仅音频」或稍后重试"));
+      return;
+    }
     void import("./audioHost").then((m) => m.recoverStuckPlay());
   }, STUCK_MS);
 }
@@ -75,18 +83,41 @@ export function armPlayerIntentListener(): () => void {
   return useStore.subscribe((s, prev) => {
     if (!s.player || s.player === prev.player) return;
     const p = s.player;
-    if (s.seekWhenReady && s.current?.id === s.seekWhenReady.id) {
-      const { at } = s.seekWhenReady;
-      useStore.setState({ seekWhenReady: null, playWhenReady: null });
-      window.setTimeout(() => p.seek(at), 0);
+    const wantSeek = s.seekWhenReady && s.current?.id === s.seekWhenReady.id ? s.seekWhenReady.at : null;
+    const wantPlay = !!(s.playWhenReady && s.current?.id === s.playWhenReady);
+    if (wantSeek != null) {
+      useStore.setState({ seekWhenReady: null, ...(wantPlay ? { playWhenReady: null } : {}) });
+      window.setTimeout(() => {
+        p.seek(wantSeek);
+        if (wantPlay) p.play();
+      }, 0);
       return;
     }
-    if (s.playWhenReady && s.current?.id === s.playWhenReady) {
+    if (wantPlay) {
       useStore.setState({ playWhenReady: null });
       // waiting 由引擎 PLAYING / playing 事件清除，此处勿抢先 false
       window.setTimeout(() => p.play(), 0);
     }
   });
+}
+
+/** 跳转到指定单集的某秒：当前集直接 seek，非当前集先装载并排队 seek+play，避免跨集误跳正在播的另一集。 */
+export function seekEpisode(ep: Episode, seconds: number, autoPlay = true) {
+  const s = useStore.getState();
+  if (s.current?.id === ep.id && s.player && s.player.episodeId === ep.id) {
+    s.player.seek(seconds);
+    if (autoPlay && !s.playing) s.player.play();
+    return;
+  }
+  if (s.current?.id !== ep.id) {
+    s.load(ep);
+  }
+  useStore.setState({
+    time: seconds,
+    seekWhenReady: { id: ep.id, at: seconds },
+    ...(autoPlay ? { playWhenReady: ep.id } : {}),
+  });
+  if (autoPlay) waiting(true);
 }
 
 export function activeIndex(starts: number[], time: number) {

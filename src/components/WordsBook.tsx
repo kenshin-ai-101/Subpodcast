@@ -26,6 +26,7 @@ import { api, errText, type AnkiNote } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { clipKey, playClip, prefetchClip, prepareClip, speak, stopClip, toggleClip } from "../lib/clip";
 import { clock } from "../lib/format";
+import { resolveLocale, tNow, useT } from "../lib/i18n";
 import { playSoon } from "../lib/playback";
 import { doneSound, keySound, rightSound, wrongSound } from "../lib/sfx";
 import { Rating, intervals, isMastered, reviewQueue, toCsv, useWords, type Grade, type Word } from "../lib/words";
@@ -67,7 +68,7 @@ async function openSource(w: Pick<Word, "episodeId" | "start">) {
   } else {
     const ep = await api.getEpisode(w.episodeId).catch(() => null);
     if (!ep) {
-      s.notify("这一集已经不在了");
+      s.notify(tNow("这一集已经不在了"));
       return;
     }
     s.load({ ...ep, progress: at });
@@ -91,11 +92,12 @@ function Marked({ sentence, word }: { sentence: string; word: string }) {
 }
 
 function ExportButtons({ words }: { words: Word[] }) {
+  const t = useT();
   return (
     <>
       <button type="button" className="btn sm" onClick={() => void exportWords("anki", words)}>
         <Download size={13} />
-        导出 Anki
+        {t("导出 Anki")}
       </button>
       <button type="button" className="btn sm ghost" onClick={() => void exportWords("csv", words)}>
         CSV
@@ -113,7 +115,7 @@ let exporting = false;
 export async function exportWords(kind: "anki" | "csv", words: Word[]) {
   if (exporting || !words.length) return;
   const notify = useStore.getState().notify;
-  const name = "声译生词本";
+  const name = tNow("声译生词本");
   const path = await saveDialog({
     defaultPath: `${name}.${kind === "anki" ? "apkg" : "csv"}`,
     filters: [kind === "anki" ? { name: "Anki", extensions: ["apkg"] } : { name: "CSV", extensions: ["csv"] }],
@@ -121,21 +123,35 @@ export async function exportWords(kind: "anki" | "csv", words: Word[]) {
   if (!path) return;
   exporting = true;
   try {
+    const file = path.split(/[\\/]/).pop() ?? "";
     if (kind === "csv") {
       await api.saveText(
         path,
-        toCsv(words, ["单词", "音标", "释义", "在这句里", "原句", "译文", "节目", "单集", "时间", "加入日期"]),
+        toCsv(words, [
+          tNow("单词"),
+          tNow("音标"),
+          tNow("释义"),
+          tNow("在这句里"),
+          tNow("原句"),
+          tNow("译文"),
+          tNow("节目"),
+          tNow("单集"),
+          tNow("时间"),
+          tNow("加入日期"),
+        ]),
       );
     } else {
       const clips = new Map<string, string | null>();
       let done = 0;
       const todo = [...words];
-      notify(`正在准备 ${words.length} 个词的原声…`);
+      notify(tNow("正在准备 {n} 个词的原声…", { n: words.length }));
       await Promise.all(
         [0, 1, 2].map(async () => {
           for (let w = todo.shift(); w; w = todo.shift()) {
             clips.set(w.id, await prepareClip(w.episodeId, w.start, w.end));
-            if (++done % 10 === 0 && done < words.length) notify(`正在准备原声 ${done}/${words.length}…`);
+            if (++done % 10 === 0 && done < words.length) {
+              notify(tNow("正在准备原声 {done}/{total}…", { done, total: words.length }));
+            }
           }
         }),
       );
@@ -151,19 +167,19 @@ export async function exportWords(kind: "anki" | "csv", words: Word[]) {
         tags: ["subpodcast", w.tag].filter(Boolean).map((x) => x.replace(/\s+/g, "_")).join(" "),
         clip: clips.get(w.id) ?? null,
       }));
-      const withAudio = await api.exportAnki(path, name, "声译单词", notes);
+      const withAudio = await api.exportAnki(path, name, tNow("声译单词"), notes);
       notify(
         withAudio < words.length
-          ? `已导出 ${words.length} 个词（${withAudio} 个带原声）：${path.split(/[\\/]/).pop() ?? ""}`
-          : `已导出 ${words.length} 个词：${path.split(/[\\/]/).pop() ?? ""}`,
+          ? tNow("已导出 {n} 个词（{audio} 个带原声）：{file}", { n: words.length, audio: withAudio, file })
+          : tNow("已导出 {n} 个词：{file}", { n: words.length, file }),
       );
       void revealItemInDir(path).catch(() => {});
       return;
     }
-    notify(`已导出 ${words.length} 个词：${path.split(/[\\/]/).pop() ?? ""}`);
+    notify(tNow("已导出 {n} 个词：{file}", { n: words.length, file }));
     void revealItemInDir(path).catch(() => {});
   } catch (e) {
-    notify(`导出失败：${errText(e)}`);
+    notify(tNow("导出失败：{msg}", { msg: errText(e) }));
   } finally {
     exporting = false;
   }
@@ -280,6 +296,7 @@ function Spell({
   onCheck: (r: { ok: boolean; typed: string; hints: number }) => void;
   onExit: () => void;
 }) {
+  const t = useT();
   const [typed, setTyped] = useState("");
   const [hints, setHints] = useState(0);
   const [shake, setShake] = useState(0);
@@ -333,7 +350,7 @@ function Spell({
         spellCheck={false}
         autoCapitalize="off"
         autoComplete="off"
-        aria-label="拼写这个词"
+        aria-label={t("拼写这个词")}
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -349,15 +366,16 @@ function Spell({
         }}
       />
       <p className="sp-help">
-        {answer.length} 个字母 · <span className="kbd">Tab</span> 提示一个字母 · <span className="kbd">␣</span> 重听 ·{" "}
-        <span className="kbd">↵</span> 检查
+        {t("{n} 个字母", { n: answer.length })} · <span className="kbd">Tab</span> {t("提示一个字母")} ·{" "}
+        <span className="kbd">␣</span> {t("重听")} · <span className="kbd">↵</span> {t("检查")}
       </p>
     </div>
   );
 }
 
 function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
-  const [list] = useState(queue);
+  const t = useT();
+  const [list, setList] = useState<Word[]>(() => [...queue]);
   const [i, setI] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [mode, setModeState] = useState<Mode>(readMode);
@@ -392,12 +410,12 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
     (g: Grade) => {
       if (!w) return;
       useWords.getState().rate(w.id, g);
-      if (g === Rating.Again) list.push(w);
+      if (g === Rating.Again) setList((prev) => [...prev, w]);
       setFlipped(false);
       setSpelled(null);
       setI((x) => x + 1);
     },
-    [w, list],
+    [w],
   );
 
   useEffect(() => {
@@ -451,11 +469,11 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
               <Check size={28} />
             </span>
           }
-          title="今天的复习完成了"
-          note={`复习了 ${new Set(list.map((x) => x.id)).size} 个词，明天再来。`}
+          title={t("今天的复习完成了")}
+          note={t("复习了 {n} 个词，明天再来。", { n: new Set(list.map((x) => x.id)).size })}
         >
           <button type="button" className="btn primary" onClick={onDone}>
-            回到生词本
+            {t("回到生词本")}
           </button>
         </EmptyState>
       </div>
@@ -467,7 +485,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
   return (
     <div className="page review-page">
       <div className="rv-top">
-        <button type="button" className="icon-btn sm" onClick={onDone} title="结束复习（Esc）" aria-label="结束复习">
+        <button type="button" className="icon-btn sm" onClick={onDone} title={t("结束复习（Esc）")} aria-label={t("结束复习")}>
           <X size={16} />
         </button>
         <span className="rv-meter">
@@ -476,11 +494,11 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
         <span className="rv-num">
           {i + 1} / {list.length}
         </span>
-        <div className="seg-control" role="radiogroup" aria-label="复习方式">
+        <div className="seg-control" role="radiogroup" aria-label={t("复习方式")}>
           {(
             [
-              ["recall", "回想"],
-              ["spell", "拼写"],
+              ["recall", t("回想")],
+              ["spell", t("拼写")],
             ] as const
           ).map(([m, label]) => (
             <button
@@ -502,7 +520,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
             type="button"
             className="rv-src rv-src-link"
             onClick={() => void openSource(w)}
-            title="打开这一集，从这句开始播放"
+            title={t("打开这一集，从这句开始播放")}
           >
             <span className="clamp1">{sourceOf(w)}</span>
             <span className="wd-at">
@@ -523,18 +541,20 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
                   <span className="sp-tick">
                     <Check size={16} strokeWidth={3} />
                   </span>
-                  {spelled.hints ? `拼对了（用了 ${spelled.hints} 次提示）` : "拼对了！"}
+                  {spelled.hints ? t("拼对了（用了 {n} 次提示）", { n: spelled.hints }) : t("拼对了！")}
                 </p>
               ) : (
-                <p className="sp-result bad">{spelled.typed ? <Diff typed={spelled.typed} answer={w.word} /> : "没拼出来"}</p>
+                <p className="sp-result bad">
+                  {spelled.typed ? <Diff typed={spelled.typed} answer={w.word} /> : t("没拼出来")}
+                </p>
               ))}
             <p className="rv-word">
               {w.id}
               <button
                 type="button"
                 className="icon-btn sm rv-say"
-                title="读单词（W）"
-                aria-label="读单词"
+                title={t("读单词（W）")}
+                aria-label={t("读单词")}
                 onClick={() => speak(w.id)}
               >
                 <Volume2 size={16} />
@@ -546,7 +566,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
             </div>
             {w.ctx && (
               <p className="rv-ctx">
-                <span className="wc-ctx-h">在这句里</span>
+                <span className="wc-ctx-h">{t("在这句里")}</span>
                 {w.ctx}
               </p>
             )}
@@ -557,7 +577,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
           </>
         ) : (
           <>
-            <p className="rv-q">{mode === "spell" ? "听原句，拼出空着的词" : "这句话里空着的是哪个词？"}</p>
+            <p className="rv-q">{mode === "spell" ? t("听原句，拼出空着的词") : t("这句话里空着的是哪个词？")}</p>
             <p className="rv-sent front">{blank}</p>
             {mode === "spell" && (
               <>
@@ -576,12 +596,12 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
           </>
         )}
         <button type="button" className="btn sm play rv-listen" onClick={() => void playWord(w, true)}>
-          <ClipLabel k={clipKey(w.episodeId, w.start, w.end)} label="再听原句" />
+          <ClipLabel k={clipKey(w.episodeId, w.start, w.end)} label={t("再听原句")} />
           <span className="kbd">R</span>
         </button>
         {flipped ? (
           <div className="rv-rating">
-            <p className="rv-rate-q">记得怎么样？选一个，决定下次什么时候再考</p>
+            <p className="rv-rate-q">{t("记得怎么样？选一个，决定下次什么时候再考")}</p>
             <div className="rv-rate">
               {GRADES.map(([g, cls, label], ki) => (
                 <button
@@ -589,15 +609,15 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
                   type="button"
                   className={`btn ${cls}${g === suggest ? " suggested" : ""}`}
                   onClick={() => rate(g)}
-                  title={`按 ${ki + 1}`}
+                  title={t("按 {n}", { n: ki + 1 })}
                 >
-                  <span className="t">{label}</span>
-                  <span className="s">{gaps ? `${fmtWait(gaps[g])}后再考` : ""}</span>
+                  <span className="t">{t(label)}</span>
+                  <span className="s">{gaps ? t("{wait}后再考", { wait: fmtWait(gaps[g]) }) : ""}</span>
                 </button>
               ))}
             </div>
             <p className="rv-keys">
-              键盘 1–4 选择，空格选「{GRADES.find(([g]) => g === suggest)![2]}」
+              {t("键盘 1–4 选择，空格选「{label}」", { label: t(GRADES.find(([g]) => g === suggest)![2]) })}
             </p>
           </div>
         ) : mode === "spell" ? (
@@ -609,11 +629,11 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
               setFlipped(true);
             }}
           >
-            不会，看答案
+            {t("不会，看答案")}
           </button>
         ) : (
           <button type="button" className="btn primary rv-show" onClick={() => setFlipped(true)}>
-            显示答案
+            {t("显示答案")}
             <span className="kbd">␣</span>
           </button>
         )}
@@ -623,6 +643,7 @@ function Review({ queue, onDone }: { queue: Word[]; onDone: () => void }) {
 }
 
 function WordRow({ w, now }: { w: Word; now: number }) {
+  const t = useT();
   const due = dueLabel(w, now);
   const open = () => useWordDetail.setState({ id: w.id });
   return (
@@ -639,7 +660,7 @@ function WordRow({ w, now }: { w: Word; now: number }) {
         <div className="wb-l1">
           <span className="wb-w">{w.id}</span>
           {w.ipa && <span className="wb-ipa">/{w.ipa}/</span>}
-          {w.tag && <span className="pill">{w.tag}</span>}
+          {w.tag && <span className="pill">{t(w.tag)}</span>}
         </div>
         <p className="wb-d">{w.ctx || w.meaning.split("\n")[0]}</p>
         <p className="wb-src">
@@ -650,7 +671,7 @@ function WordRow({ w, now }: { w: Word; now: number }) {
               e.stopPropagation();
               void playWord(w, true);
             }}
-            title="播放原句"
+            title={t("播放原句")}
           >
             <ClipIcon k={clipKey(w.episodeId, w.start, w.end)} size={10} />
             {clock(w.start)}
@@ -665,6 +686,8 @@ function WordRow({ w, now }: { w: Word; now: number }) {
 }
 
 function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: () => void }) {
+  const t = useT();
+  const uiLang = useStore((s) => s.settings.uiLang);
   const w = useWords((s) => s.words[id]);
   const idx = list.findIndex((x) => x.id === id);
   const step = useCallback(
@@ -708,7 +731,7 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
   const k = clipKey(w.episodeId, w.start, w.end);
 
   const remove = async () => {
-    if (!(await ask(`从生词本删除「${w.id}」？复习记录会一起删除。`))) return;
+    if (!(await ask(t("从生词本删除「{word}」？复习记录会一起删除。", { word: w.id })))) return;
     const next = list[idx + 1] ?? list[idx - 1];
     stopClip();
     useWords.getState().remove(w.id);
@@ -726,8 +749,8 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
             className="icon-btn sm"
             disabled={idx <= 0}
             onClick={() => step(-1)}
-            title="上一个（←）"
-            aria-label="上一个"
+            title={t("上一个（←）")}
+            aria-label={t("上一个")}
           >
             <ChevronLeft size={16} />
           </button>
@@ -737,8 +760,8 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
             className="icon-btn sm"
             disabled={idx < 0 || idx >= list.length - 1}
             onClick={() => step(1)}
-            title="下一个（→）"
-            aria-label="下一个"
+            title={t("下一个（→）")}
+            aria-label={t("下一个")}
           >
             <ChevronRight size={16} />
           </button>
@@ -751,38 +774,38 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
           <button
             type="button"
             className="icon-btn sm rv-say"
-            title="读单词（W）"
-            aria-label="读单词"
+            title={t("读单词（W）")}
+            aria-label={t("读单词")}
             onClick={() => speak(w.id)}
           >
             <Volume2 size={16} />
           </button>
-          {w.tag && <span className="pill">{w.tag}</span>}
+          {w.tag && <span className="pill">{t(w.tag)}</span>}
         </div>
         {w.ipa && <p className="wc-ipa">/{w.ipa}/</p>}
-        {w.meaning ? <Meaning text={w.meaning} /> : <p className="wc-none muted small">词典里没有这个词</p>}
+        {w.meaning ? <Meaning text={w.meaning} /> : <p className="wc-none muted small">{t("词典里没有这个词")}</p>}
         {w.ctx && (
           <div className="wc-ctx">
-            <span className="wc-ctx-h">在这句里</span>
+            <span className="wc-ctx-h">{t("在这句里")}</span>
             {w.ctx}
           </div>
         )}
         <div className="wd-ex">
-          <span className="wd-h">原句</span>
+          <span className="wd-h">{t("原句")}</span>
           <p className="wd-sent">
             <Marked sentence={w.sentence} word={w.word} />
           </p>
           {w.sentenceZh && <p className="wd-zh">{w.sentenceZh}</p>}
           <div className="wd-ex-foot">
             <button type="button" className="btn sm play" onClick={() => void playWord(w, true)}>
-              <ClipLabel k={k} label="听原声" />
+              <ClipLabel k={k} label={t("听原声")} />
               <span className="kbd">␣</span>
             </button>
             <button
               type="button"
               className="wd-src"
               onClick={() => void openSource(w)}
-              title="打开这一集，从这句开始播放"
+              title={t("打开这一集，从这句开始播放")}
             >
               <span className="clamp1">{sourceOf(w)}</span>
               <span className="wd-at">
@@ -794,16 +817,20 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
         </div>
         <div className="wd-foot">
           <span className="muted small">
-            {w.card.reps ? `复习 ${w.card.reps} 次` : "还没复习过"}
-            {w.card.lapses > 0 && <> · 忘记 {w.card.lapses} 次</>}
+            {w.card.reps ? t("复习 {n} 次", { n: w.card.reps }) : t("还没复习过")}
+            {w.card.lapses > 0 && <> · {t("忘记 {n} 次", { n: w.card.lapses })}</>}
             {" · "}
-            {w.card.state === 0 ? "新词" : due.now ? "今天要复习" : `${fmtWait(w.card.due - Date.now())}后复习`}
+            {w.card.state === 0
+              ? t("新词")
+              : due.now
+                ? t("今天要复习")
+                : t("{wait}后复习", { wait: fmtWait(w.card.due - Date.now()) })}
             {" · "}
-            {new Date(w.added).toLocaleDateString()} 加入
+            {t("{date} 加入", { date: new Date(w.added).toLocaleDateString(resolveLocale(uiLang)) })}
           </span>
           <button type="button" className="btn sm ghost danger" onClick={() => void remove()}>
             <Trash2 size={13} />
-            删除
+            {t("删除")}
           </button>
         </div>
       </div>
@@ -812,6 +839,7 @@ function WordDetail({ id, list, onClose }: { id: string; list: Word[]; onClose: 
 }
 
 export function WordsView() {
+  const t = useT();
   useLearnOn();
   const { words, loaded, day, newToday } = useWords(
     useShallow((s) => ({ words: s.words, loaded: s.loaded, day: s.day, newToday: s.newToday })),
@@ -862,24 +890,24 @@ export function WordsView() {
   return (
     <div className="page words-page">
       <div className="wb-head">
-        <h1 className="page-title">生词本</h1>
-        {all.length > 0 && <span className="muted wb-count">{all.length} 个词</span>}
+        <h1 className="page-title">{t("生词本")}</h1>
+        {all.length > 0 && <span className="muted wb-count">{t("{n} 个词", { n: all.length })}</span>}
         <div className="wb-acts">
           {all.length > 0 && <ExportButtons words={all} />}
           <button type="button" className="btn sm primary" disabled={!queue.length} onClick={() => setReviewing(true)}>
-            {queue.length ? `复习 ${queue.length} 个` : "今天复习完了"}
+            {queue.length ? t("复习 {n} 个", { n: queue.length }) : t("今天复习完了")}
           </button>
         </div>
       </div>
       {!on && (
         <p className="wb-off muted small">
-          英语学习模式已关闭，生词本仍然保留。{" "}
+          {t("英语学习模式已关闭，生词本仍然保留。")}{" "}
           <button
             type="button"
             className="link-btn small"
             onClick={() => set({ settingsOpen: true, settingsSection: "learn" })}
           >
-            去打开
+            {t("去打开")}
           </button>
         </p>
       )}
@@ -890,8 +918,8 @@ export function WordsView() {
               <BookMarked size={28} />
             </span>
           }
-          title="生词本还是空的"
-          note="在英文节目的字幕里点一个单词，再点「加入生词本」。"
+          title={t("生词本还是空的")}
+          note={t("在英文节目的字幕里点一个单词，再点「加入生词本」。")}
         />
       ) : (
         <>
@@ -900,9 +928,9 @@ export function WordsView() {
             <div className="chips left">
               {(
                 [
-                  ["due", "待复习", queue.length],
-                  ["all", "全部", all.length],
-                  ["mastered", "已掌握", mastered.length],
+                  ["due", t("待复习"), queue.length],
+                  ["all", t("全部"), all.length],
+                  ["mastered", t("已掌握"), mastered.length],
                 ] as const
               ).map(([k, label, n]) => (
                 <button
@@ -922,8 +950,8 @@ export function WordsView() {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索单词、释义或例句"
-                  aria-label="搜索生词本"
+                  placeholder={t("搜索单词、释义或例句")}
+                  aria-label={t("搜索生词本")}
                 />
               </label>
             )}
@@ -931,10 +959,10 @@ export function WordsView() {
           {!shown.length ? (
             <p className="muted small wb-none">
               {q
-                ? `没有找到「${query.trim()}」`
+                ? t("没有找到「{q}」", { q: query.trim() })
                 : filter === "due"
-                  ? "今天没有要复习的词了。"
-                  : "还没有掌握的词。连续答对，间隔超过 3 周就算掌握。"}
+                  ? t("今天没有要复习的词了。")
+                  : t("还没有掌握的词。连续答对，间隔超过 3 周就算掌握。")}
             </p>
           ) : (
             <div className="wb-list">
@@ -986,5 +1014,5 @@ export async function remindReview() {
   } catch {
     /* ignore */
   }
-  useStore.getState().notify(`生词本里有 ${n} 个词等你复习`);
+  useStore.getState().notify(tNow("生词本里有 {n} 个词等你复习", { n }));
 }

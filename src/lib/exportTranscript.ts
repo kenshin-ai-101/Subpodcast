@@ -6,6 +6,7 @@
  */
 import { api, type Episode, type Segment } from "./api";
 import { clock, date } from "./format";
+import { tNow } from "./i18n";
 
 export type ExportMode = "bilingual" | "translation" | "original";
 export type ExportFormat = "srt" | "vtt" | "ass" | "lrc" | "txt" | "md";
@@ -169,9 +170,9 @@ export function renderTranscript(input: {
         .join("\n\n")}\n`;
     case "md": {
       const out: string[] = [`# ${ep.title}`, ""];
-      if (ep.showTitle) out.push(`节目：${ep.showTitle}`);
-      if (ep.published) out.push(`日期：${date(ep.published)}`);
-      if (sourceLabel) out.push(`字幕：${sourceLabel}`);
+      if (ep.showTitle) out.push(`${tNow("节目")}：${ep.showTitle}`);
+      if (ep.published) out.push(`${tNow("日期")}：${date(ep.published)}`);
+      if (sourceLabel) out.push(`${tNow("字幕")}：${sourceLabel}`);
       if (ep.showTitle || ep.published || sourceLabel) out.push("");
       out.push("---", "");
       for (const c of cues) {

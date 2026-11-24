@@ -4,6 +4,8 @@
  * [POS]: components 视觉小品；GenCard / 导读空态消费，与业务逻辑解耦
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+import { useT } from "../lib/i18n";
+
 type Art = { className?: string };
 
 function svg(w: number, h: number, name: string, className?: string) {
@@ -141,11 +143,12 @@ export function MoonArt({ className }: Art) {
 
 /** 午夜到清晨：空态底部一句轻声叮嘱。 */
 export function NightNote() {
+  const t = useT();
   if (new Date().getHours() >= 5) return null;
   return (
     <p className="night-note">
       <MoonArt />
-      夜深了，听完这期早点休息
+      {t("夜深了，听完这期早点休息")}
     </p>
   );
 }

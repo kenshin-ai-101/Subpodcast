@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { Episode } from "../lib/api";
 import { monthLabel, monthName } from "../lib/format";
+import { useT } from "../lib/i18n";
 
 function monthKey(sec: number): string {
   const d = new Date(sec * 1000);
@@ -37,6 +38,7 @@ export function MonthFilter({
   month: string | null;
   onChange: (m: string | null) => void;
 }) {
+  const t = useT();
   const counts = useMemo(() => {
     const map = new Map<string, number>();
     for (const e of episodes ?? []) {
@@ -64,7 +66,7 @@ export function MonthFilter({
   const idx = years.indexOf(y);
 
   return (
-    <div className="month-filter" role="group" aria-label="按月份筛选">
+    <div className="month-filter" role="group" aria-label={t("按月份筛选")}>
       <div className="mf-head">
         <CalendarDays size={14} />
         <button
@@ -72,7 +74,7 @@ export function MonthFilter({
           className="icon-btn sm"
           disabled={idx < 0 || idx >= years.length - 1}
           onClick={() => setYear(years[idx + 1])}
-          aria-label="上一年"
+          aria-label={t("上一年")}
         >
           <ChevronLeft size={14} />
         </button>
@@ -82,11 +84,11 @@ export function MonthFilter({
           className="icon-btn sm"
           disabled={idx <= 0}
           onClick={() => setYear(years[idx - 1])}
-          aria-label="下一年"
+          aria-label={t("下一年")}
         >
           <ChevronRight size={14} />
         </button>
-        <span className="muted small">{yearTotal} 期</span>
+        <span className="muted small">{t("{n} 期", { n: yearTotal })}</span>
         <span className="spacer" />
         {month && (
           <button type="button" className="chip sm on" onClick={() => onChange(null)}>
@@ -107,7 +109,11 @@ export function MonthFilter({
               disabled={!n}
               onClick={() => onChange(month === k ? null : k)}
               style={{ "--heat": heat } as React.CSSProperties}
-              title={n ? `${monthLabel(i + 1, y)} · ${n} 期` : `${monthLabel(i + 1)}没有节目`}
+              title={
+                n
+                  ? `${monthLabel(i + 1, y)} · ${t("{n} 期", { n })}`
+                  : t("{month}没有节目", { month: monthLabel(i + 1) })
+              }
             >
               <span className="mf-m">{monthName(i + 1)}</span>
               <span className="mf-n">{n || "·"}</span>

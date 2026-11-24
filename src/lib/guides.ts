@@ -8,8 +8,9 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { qaSystem, summaryPrompt, transcriptForModel } from "./ai";
 import { api, errText, type Episode } from "./api";
+import { tNow } from "./i18n";
 import { useJobs } from "./jobs";
-import { acquireLlm, releaseLlm } from "./llmGate";
+import { resolveChatModel } from "./modelResolve";
 import { useStore } from "../store";
 
 export interface GuideJob {
@@ -38,7 +39,7 @@ function put(id: string, p: Partial<GuideJob>) {
   useGuides.setState((s) => ({ [id]: { ...(s[id] ?? empty()), ...p } }));
 }
 
-const aborts = new Map<string, { stop: boolean; unlisten: () => void }>();
+const aborts = new Map<string, { stop: boolean; unlisten: () => void; jobId: string }>();
 
 export async function ensureGuide(ep: Episode) {
   if (useGuides.getState()[ep.id]?.streaming != null) return;
@@ -72,33 +73,36 @@ export async function runGuide(ep: Episode) {
   const translation = useJobs.getState().translations[ep.id];
 
   if (!transcript?.segments.length) {
-    put(ep.id, { error: "需要先有字幕才能生成导读", needsSetup: false });
+    put(ep.id, { error: tNow("需要先有字幕才能生成导读"), needsSetup: false });
     return;
   }
-  if (!provider?.model) {
-    put(ep.id, { error: "请先在设置里选择模型", needsSetup: true });
+  const modelName = resolveChatModel(settings, provider);
+  if (!provider || !modelName) {
+    put(ep.id, { error: tNow("请先在设置里选择模型"), needsSetup: true });
     return;
   }
   if (provider.needsKey && !(await api.hasApiKey(provider.id))) {
-    put(ep.id, { error: `请先在设置里填写「${provider.name}」的 API Key`, needsSetup: true });
+    put(ep.id, { error: tNow("请先在设置里填写「{name}」的 API Key", { name: provider.name }), needsSetup: true });
     return;
   }
 
   put(ep.id, { error: null, needsSetup: false, streaming: "", shared: false, checking: false });
-  try {
-    acquireLlm("guide");
-  } catch (e) {
-    put(ep.id, { error: errText(e), streaming: null });
-    return;
-  }
   let unlisten = () => {};
-  const handle = { stop: false, unlisten };
+  const jobId = `guide:${ep.id}:${Date.now()}`;
+  const handle = { stop: false, unlisten, jobId };
   aborts.set(ep.id, handle);
   try {
-    unlisten = await listen<string>("llm-delta", ({ payload }) => {
+    unlisten = await listen<string | { requestId?: string; delta?: string }>("llm-delta", ({ payload }) => {
       if (handle.stop) return;
+      const chunk =
+        typeof payload === "string"
+          ? payload
+          : !payload?.requestId || payload.requestId === jobId
+            ? (payload?.delta ?? "")
+            : "";
+      if (!chunk) return;
       const prev = useGuides.getState()[ep.id]?.streaming ?? "";
-      put(ep.id, { streaming: prev + payload });
+      put(ep.id, { streaming: prev + chunk });
     });
     handle.unlisten = unlisten;
     const context = transcriptForModel(transcript.segments, translation?.items);
@@ -106,9 +110,10 @@ export async function runGuide(ep: Episode) {
     const full = await api.llmChat({
       provider: provider.id,
       baseUrl: provider.baseUrl,
-      model: provider.model,
+      model: modelName,
       protocol: provider.protocol,
       stream: true,
+      jobId,
       messages: [
         {
           role: "system",
@@ -120,16 +125,15 @@ export async function runGuide(ep: Episode) {
     if (handle.stop) return;
     const streamed = useGuides.getState()[ep.id]?.streaming ?? "";
     const out = (full.trim() || streamed).trim();
-    if (!out) throw new Error("模型没有返回内容，请重试或换一个模型");
+    if (!out) throw new Error(tNow("模型没有返回内容，请重试或换一个模型"));
     put(ep.id, { summary: out, loaded: true, shared: false });
     await api.setBlob(ep.id, "summary", out);
-    void api.shareGuide(ep.id, out, `${provider.name} · ${provider.model}`).catch(() => {});
+    void api.shareGuide(ep.id, out, `${provider.name} · ${modelName}`).catch(() => {});
   } catch (e) {
-    if (!handle.stop) put(ep.id, { error: errText(e), needsSetup: /设置|API Key|模型/.test(errText(e)) });
+    if (!handle.stop) put(ep.id, { error: errText(e), needsSetup: /设置|API Key|模型|Settings|model/i.test(errText(e)) });
   } finally {
     unlisten();
     aborts.delete(ep.id);
-    releaseLlm();
     put(ep.id, { streaming: null });
   }
 }
@@ -139,6 +143,7 @@ export function stopGuide(episodeId: string) {
   if (!h) return;
   h.stop = true;
   h.unlisten();
+  void api.cancelJob(h.jobId).catch(() => {});
   const partial = useGuides.getState()[episodeId]?.streaming?.trim();
   if (partial) {
     put(episodeId, { summary: partial, streaming: null, loaded: true });

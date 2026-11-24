@@ -15,6 +15,7 @@ import {
   type ExportFormat,
   type ExportMode,
 } from "../lib/exportTranscript";
+import { useT } from "../lib/i18n";
 import { useStore } from "../store";
 import { LearnModal } from "./LearnModal";
 import { Seg } from "./ReadingSettings";
@@ -51,6 +52,7 @@ export function SubtitleExport({
   sourceLabel?: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const notify = useStore((s) => s.notify);
   const translated = translations ? segments.filter((_, i) => !!translations[i]?.trim()).length : 0;
   const last = useMemo(remembered, []);
@@ -97,7 +99,7 @@ export function SubtitleExport({
       } catch {
         /* ignore */
       }
-      notify(`已导出到「下载」：${path.split(/[\\/]/).pop() ?? ""}`);
+      notify(t("已导出到「下载」：{file}", { file: path.split(/[\\/]/).pop() ?? "" }));
       void revealItemInDir(path).catch(() => {});
       onClose();
     } catch (e) {
@@ -109,49 +111,49 @@ export function SubtitleExport({
 
   return (
     <LearnModal
-      title="导出字幕"
+      title={t("导出字幕")}
       onClose={onClose}
       foot={
         <>
           <button type="button" className="btn ghost sm" onClick={onClose}>
-            取消
+            {t("取消")}
           </button>
           <button type="button" className="btn primary sm" disabled={busy || !segments.length} onClick={() => void save()}>
-            {busy ? "导出中…" : "导出…"}
+            {busy ? t("导出中…") : t("导出…")}
           </button>
         </>
       }
     >
       <div className="sub-export">
         <div className="reading-row">
-          <span>格式</span>
+          <span>{t("格式")}</span>
           <Seg value={format} options={FORMATS.map((f) => [f.id, f.name])} onChange={setFormat} />
         </div>
         {foreign && (
           <div className="reading-row">
-            <span>内容</span>
+            <span>{t("内容")}</span>
             <Seg
               value={content}
               options={
                 translated
                   ? [
-                      ["bilingual", "双语"],
-                      ["translation", "中文"],
-                      ["original", "原文"],
+                      ["bilingual", t("双语")],
+                      ["translation", t("中文")],
+                      ["original", t("原文")],
                     ]
-                  : [["original", "原文"]]
+                  : [["original", t("原文")]]
               }
               onChange={setContent}
             />
           </div>
         )}
         {missing > 0 && (
-          <p className="muted small">还有 {missing} 句没有翻译，这些句子只导出原文。</p>
+          <p className="muted small">{t("还有 {n} 句没有翻译，这些句子只导出原文。", { n: missing })}</p>
         )}
         {(format === "txt" || format === "md") && (
-          <p className="muted small">文字稿按段落导出，每段带开始时间。</p>
+          <p className="muted small">{t("文字稿按段落导出，每段带开始时间。")}</p>
         )}
-        <pre className="sub-export-preview" aria-label="预览">
+        <pre className="sub-export-preview" aria-label={t("预览")}>
           {preview}
         </pre>
       </div>

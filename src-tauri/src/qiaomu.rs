@@ -382,22 +382,28 @@ pub async fn podscribe_transcript(url: &str) -> Result<Vec<Segment>> {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn inline_md(s: &str) -> String {
-    let s = Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap().replace_all(s, "");
+    static RE_IMG: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)").expect("img regex"));
+    static RE_BOLD: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"\*\*(.+?)\*\*").expect("bold regex"));
+    static RE_LINK: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"\[([^\]]+)\]\((https?://[^)\s&quot;]+)\)").expect("link regex")
+    });
+    static RE_CODE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"`([^`]+)`").expect("code regex"));
+
+    let s = RE_IMG.replace_all(s, "");
     let s = esc(&s);
-    let s = Regex::new(r"\*\*(.+?)\*\*")
-        .unwrap()
-        .replace_all(&s, "<strong>$1</strong>");
-    let s = Regex::new(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
-        .unwrap()
-        .replace_all(&s, r#"<a href="$2">$1</a>"#);
-    Regex::new(r"`([^`]+)`")
-        .unwrap()
-        .replace_all(&s, "<code>$1</code>")
-        .into_owned()
+    let s = RE_BOLD.replace_all(&s, "<strong>$1</strong>");
+    let s = RE_LINK.replace_all(&s, r#"<a href="$2">$1</a>"#);
+    RE_CODE.replace_all(&s, "<code>$1</code>").into_owned()
 }
 
 /// 改写 Markdown → 简易 HTML（标题/列表/引用/段落）。

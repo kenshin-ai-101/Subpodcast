@@ -55,6 +55,15 @@ pub fn open(path: &Path) -> Result<Connection> {
     if !has_heard {
         conn.execute_batch("ALTER TABLE episodes ADD COLUMN heard_at INTEGER NOT NULL DEFAULT 0;")?;
     }
+    // schema 版本化迁移：补足高频排序索引，加速首页最近收听与全库按时间拉取
+    let user_ver: i64 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0))?;
+    if user_ver < 1 {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS episodes_heard ON episodes(heard_at DESC);
+             CREATE INDEX IF NOT EXISTS episodes_pub ON episodes(published DESC);
+             PRAGMA user_version = 1;",
+        )?;
+    }
     Ok(conn)
 }
 
@@ -98,7 +107,27 @@ pub fn upsert_episodes(conn: &mut Connection, eps: &[Episode]) -> Result<()> {
 
 /// 写入本批单集后删掉同节目下被换 guid 的旧行（先按标题把进度/字幕吸到新行）。
 pub fn sync_episodes(conn: &mut Connection, show_id: &str, eps: &[Episode]) -> Result<()> {
-    upsert_episodes(conn, eps)?;
+    let tx = conn.transaction()?;
+    {
+        let mut st = tx.prepare(
+            "INSERT INTO episodes(id,show_id,guid,title,published,duration,audio_url,video_id,link,cover,notes,transcript_url,transcript_type,deep)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+             ON CONFLICT(id) DO UPDATE SET title=excluded.title, published=excluded.published,
+             duration=COALESCE(excluded.duration, episodes.duration),
+             audio_url=COALESCE(excluded.audio_url, episodes.audio_url),
+             video_id=COALESCE(NULLIF(episodes.video_id, ''), excluded.video_id),
+             link=excluded.link, cover=COALESCE(excluded.cover, episodes.cover),
+             notes=COALESCE(excluded.notes, episodes.notes),
+             transcript_url=excluded.transcript_url, transcript_type=excluded.transcript_type,
+             deep=excluded.deep",
+        )?;
+        for e in eps {
+            st.execute(params![
+                e.id, e.show_id, e.guid, e.title, e.published, e.duration, e.audio_url, e.video_id,
+                e.link, e.cover, e.notes, e.transcript_url, e.transcript_type, e.deep as i64
+            ])?;
+        }
+    }
     let keep: std::collections::HashSet<&str> = eps.iter().map(|e| e.id.as_str()).collect();
     let by_key: std::collections::HashMap<String, &Episode> = {
         let mut m = std::collections::HashMap::new();
@@ -109,12 +138,12 @@ pub fn sync_episodes(conn: &mut Connection, show_id: &str, eps: &[Episode]) -> R
         m
     };
     let orphans: Vec<(String, String, f64, bool)> = {
-        let mut st = conn.prepare(
+        let mut st = tx.prepare(
             "SELECT e.id, e.title, e.progress,
                     EXISTS(SELECT 1 FROM transcripts t WHERE t.episode_id=e.id)
              FROM episodes e WHERE e.show_id=?1",
         )?;
-        let mapped: Vec<_> = st
+        let rows = st
             .query_map([show_id], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -123,25 +152,24 @@ pub fn sync_episodes(conn: &mut Connection, show_id: &str, eps: &[Episode]) -> R
                     r.get::<_, i64>(3)? != 0,
                 ))
             })?
-            .collect();
-        mapped
-            .into_iter()
-            .filter_map(|r| r.ok())
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
             .filter(|(id, _, _, _)| !keep.contains(id.as_str()))
             .collect()
     };
     for (id, title, progress, has_tr) in orphans {
         let key = crate::feeds::episode_dedupe_key(&title);
         if let Some(keeper) = by_key.get(&key) {
-            absorb_episode(conn, &keeper.id, &id)?;
+            absorb_episode(&tx, &keeper.id, &id)?;
         } else if progress > 0.01 || has_tr {
             // 已听/已有字幕但不在本批（窗口外）：保留，避免误删
             continue;
         } else {
-            delete_episode_cascade(conn, &id)?;
+            delete_episode_cascade(&tx, &id)?;
         }
     }
-    dedupe_show_episodes(conn, show_id)?;
+    dedupe_show_episodes(&tx, show_id)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -193,10 +221,10 @@ fn absorb_episode(conn: &Connection, keeper_id: &str, loser_id: &str) -> Result<
     }
     let kinds: Vec<(String, String)> = {
         let mut st = conn.prepare("SELECT kind, data FROM blobs WHERE episode_id=?1")?;
-        let rows: Vec<_> = st
+        let rows = st
             .query_map([loser_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-            .collect();
-        rows.into_iter().filter_map(|r| r.ok()).collect()
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
     };
     for (kind, data) in kinds {
         let exists: bool = conn.query_row(
@@ -211,6 +239,16 @@ fn absorb_episode(conn: &Connection, keeper_id: &str, loser_id: &str) -> Result<
             )?;
         }
     }
+    // 合并收听记录，避免 loser 被删后统计孤立
+    conn.execute(
+        "INSERT INTO listens(day,hour,episode_id,show_id,seconds,translated)
+         SELECT day, hour, ?1, show_id, seconds, translated FROM listens WHERE episode_id=?2
+         ON CONFLICT(day,hour,episode_id) DO UPDATE SET
+           seconds = listens.seconds + excluded.seconds,
+           translated = MAX(listens.translated, excluded.translated)",
+        params![keeper_id, loser_id],
+    )?;
+    conn.execute("DELETE FROM listens WHERE episode_id=?1", [loser_id])?;
     delete_episode_cascade(conn, loser_id)?;
     Ok(())
 }
@@ -320,12 +358,31 @@ pub fn get_show(conn: &Connection, id: &str) -> Result<Option<Show>> {
 }
 
 pub fn delete_show(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM episodes WHERE show_id=?1 AND id NOT IN (SELECT episode_id FROM transcripts)",
-        [id],
-    )?;
-    conn.execute("DELETE FROM shows WHERE id=?1", [id])?;
-    Ok(())
+    conn.execute_batch("SAVEPOINT delete_show_sp;")?;
+    let res = (|| -> Result<()> {
+        conn.execute(
+            "DELETE FROM blobs WHERE episode_id IN (
+                SELECT id FROM episodes WHERE show_id=?1 AND id NOT IN (SELECT episode_id FROM transcripts)
+             )",
+            [id],
+        )?;
+        conn.execute(
+            "DELETE FROM episodes WHERE show_id=?1 AND id NOT IN (SELECT episode_id FROM transcripts)",
+            [id],
+        )?;
+        conn.execute("DELETE FROM shows WHERE id=?1", [id])?;
+        Ok(())
+    })();
+    match res {
+        Ok(()) => {
+            conn.execute_batch("RELEASE SAVEPOINT delete_show_sp;")?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK TO SAVEPOINT delete_show_sp; RELEASE SAVEPOINT delete_show_sp;");
+            Err(err)
+        }
+    }
 }
 
 fn episode_from(r: &rusqlite::Row) -> rusqlite::Result<Episode> {
@@ -363,8 +420,6 @@ pub fn count_episodes(conn: &Connection, show_id: &str) -> Result<i64> {
 
 pub fn list_episodes(conn: &Connection, show_id: Option<&str>, limit: i64) -> Result<Vec<Episode>> {
     if let Some(sid) = show_id {
-        // 详情页打开即清掉跨源重复行（Anchor/小宇宙/乔木 guid 不同）
-        let _ = dedupe_show_episodes(conn, sid);
         let mut st = conn.prepare(&format!(
             "SELECT {EP_COLS} FROM episodes e LEFT JOIN shows s ON s.id=e.show_id WHERE e.show_id=?1 ORDER BY e.published DESC LIMIT ?2"
         ))?;
@@ -401,9 +456,10 @@ pub fn get_episode(conn: &Connection, id: &str) -> Result<Option<Episode>> {
 }
 
 pub fn set_progress(conn: &Connection, id: &str, progress: f64) -> Result<()> {
+    let val = if progress <= 0.0 { 0.0 } else { progress.max(0.01) };
     conn.execute(
         "UPDATE episodes SET progress=?1, heard_at=?2 WHERE id=?3",
-        params![progress.max(0.01), now_ms(), id],
+        params![val, now_ms(), id],
     )?;
     Ok(())
 }
@@ -479,11 +535,17 @@ pub fn tr_get(conn: &Connection, key: &str) -> Result<Option<String>> {
         .optional()?)
 }
 
-pub fn tr_put(conn: &Connection, key: &str, value: &str) -> Result<()> {
-    conn.execute(
-        "INSERT INTO tr_cache(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        params![key, value],
-    )?;
+pub fn tr_put_batch(conn: &mut Connection, pairs: &[(String, String)]) -> Result<()> {
+    let tx = conn.transaction()?;
+    {
+        let mut st = tx.prepare(
+            "INSERT INTO tr_cache(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )?;
+        for (k, v) in pairs {
+            st.execute(params![k, v])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 

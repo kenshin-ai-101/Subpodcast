@@ -30,8 +30,9 @@ fn cookie_header(file: &str, domain: &str) -> (String, Option<String>) {
         if f.len() < 7 {
             continue;
         }
-        let host = f[0].trim_start_matches('.');
-        if host != domain && !domain.ends_with(&format!(".{host}")) && !host.ends_with(domain) {
+        let host = f[0].trim_start_matches('.').to_ascii_lowercase();
+        let dom = domain.to_ascii_lowercase();
+        if host != dom && !dom.ends_with(&format!(".{host}")) {
             continue;
         }
         if f[5] == "SAPISID" || (f[5] == "__Secure-3PAPISID" && sapisid.is_none()) {
@@ -204,17 +205,39 @@ pub fn open_privacy_settings() -> Result<()> {
     Ok(())
 }
 
+const ALLOWED_BROWSERS: &[&str] = &[
+    "chrome",
+    "chromium",
+    "brave",
+    "edge",
+    "firefox",
+    "safari",
+    "opera",
+    "vivaldi",
+    "arc",
+];
+
 pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Channel>> {
+    let browser_clean = browser.trim().to_ascii_lowercase();
+    if !ALLOWED_BROWSERS.contains(&browser_clean.as_str()) {
+        return Err(anyhow!("不支持的浏览器：{browser}"));
+    }
     {
-        let b = browser.to_string();
+        let b = browser_clean.clone();
         tokio::task::spawn_blocking(move || ensure_browser_access(&b)).await??;
     }
-    let dir = std::env::temp_dir().join(format!("subpodcast-cookies-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir)?;
-    let jar = dir.join("cookies.txt");
+    let tmp = tempfile::Builder::new()
+        .prefix("subpodcast-cookies-")
+        .tempdir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700));
+    }
+    let jar = tmp.path().join("cookies.txt");
     let result = async {
         let mut cmd = tokio::process::Command::new(ytdlp);
-        cmd.args(["--cookies-from-browser", browser, "--cookies"])
+        cmd.args(["--cookies-from-browser", &browser_clean, "--cookies"])
             .arg(&jar)
             .args([
                 "--skip-download",
@@ -322,7 +345,7 @@ pub async fn youtube_subscriptions(ytdlp: &Path, browser: &str) -> Result<Vec<Ch
         Ok(all)
     }
     .await;
-    let _ = std::fs::remove_dir_all(&dir);
+    drop(tmp);
     result
 }
 

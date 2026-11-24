@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useRef } from "react";
+import { useT } from "../lib/i18n";
 
 /** 可拖列边。edge 相对被改宽的那一列：朝列内拖则变窄；松手时宽 < snap 收起；双击恢复 def。 */
 export function Splitter({
@@ -28,6 +29,7 @@ export function Splitter({
   onCollapse: () => void;
   label: string;
 }) {
+  const t = useT();
   const start = useRef<{ x: number; w: number } | null>(null);
   const clamp = (w: number) => Math.round(Math.min(max, Math.max(min, w)));
   const widthAt = (x: number) => {
@@ -46,7 +48,7 @@ export function Splitter({
       aria-valuemax={max}
       aria-valuenow={value}
       tabIndex={0}
-      title="拖动调整宽度 · 双击恢复默认"
+      title={t("拖动调整宽度 · 双击恢复默认")}
       onPointerDown={(e) => {
         e.preventDefault();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);

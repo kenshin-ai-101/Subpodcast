@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import type { Episode } from "./api";
+import { tNow } from "./i18n";
 import { noteListening } from "./listening";
 import { audioSrc, isLocalAssetSrc, isSaved, remoteAudioSrc } from "./offline";
 import { flushProgress, resetTrackSave, track, waiting } from "./playback";
@@ -157,7 +158,7 @@ function wire(a: HTMLAudioElement) {
   a.addEventListener("error", () => {
     if (!epId || useStore.getState().current?.id !== epId) return;
     if (fallbackToRemote(a)) return;
-    failPlay("音频加载失败，可能是网络问题或地址已失效");
+    failPlay(tNow("音频加载失败，可能是网络问题或地址已失效"));
   });
 }
 
@@ -175,7 +176,7 @@ function playNow(a: HTMLAudioElement) {
     if (gen !== playGen) return;
     if (err?.name === "AbortError") return;
     if (fallbackToRemote(a)) return;
-    failPlay("音频暂时播不了，请再点一次或检查网络");
+    failPlay(tNow("音频暂时播不了，请再点一次或检查网络"));
   });
 }
 
@@ -305,7 +306,7 @@ export function recoverStuckPlay() {
   }
   playNow(a);
   if (recoverCount >= 2) {
-    s.notify("超长单集仍在缓冲，马上就好");
+    s.notify(tNow("超长单集仍在缓冲，马上就好"));
   }
 }
 

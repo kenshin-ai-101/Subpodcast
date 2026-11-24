@@ -40,6 +40,9 @@ lib/llmGate.ts: 串行化 llm-delta
 lib/listening.ts: 墙钟收听累计 noteListening / flushListening
 lib/youtube.ts: YouTube IFrame API + loadVideoById 换片 + 关自带 CC
 lib/format.ts: 日期/时长/clock/parseClock/月份文案
+lib/safeUrl.ts: openExternalUrl / isSafeHttpUrl（仅放行 http/https 外部链接）
+lib/modelResolve.ts: resolveChatModel（统一消费 settings.chatModel || provider.model）
+lib/i18n.ts: resolveLocale / translate / useT / tNow（简体/繁體/English 词典 locales/{zh-TW,en}.json）
 lib/confirm.ts: 应用内确认替代 window.confirm
 lib/queue.ts: start=load+openEpisode+playSoon；连播 / autoNext
 lib/volume.ts: 全局音量
@@ -95,5 +98,7 @@ components/RatePicker.tsx: 语速分段控件与紧凑弹层
 components/Markdown.tsx: 轻量 Markdown（时间戳区间 + timeline 竖脊）
 components/ChatTools.tsx: 模型/提示词菜单（fixed 上弹，避 overflow 裁切）
 components/ChatPane.tsx: 问答
+components/ErrorBoundary.tsx: 主视图与复杂弹窗渲染错误兜底
+components/ShortcutsHelpModal.tsx: ⌘/ 唤出的全站 19 项快捷键速查浮层
 
 [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md

@@ -105,12 +105,14 @@ const snapshot = () => {
 function persist() {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
+    saveTimer = undefined;
     void api.setBlob(BLOB[0], BLOB[1], snapshot()).catch(() => {});
   }, 300);
 }
 window.addEventListener("beforeunload", () => {
   if (!saveTimer) return;
   window.clearTimeout(saveTimer);
+  saveTimer = undefined;
   void api.setBlob(BLOB[0], BLOB[1], snapshot());
 });
 

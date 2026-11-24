@@ -71,24 +71,26 @@ check() {
     ok=0
   fi
   [ "$ok" = 1 ] && echo && echo "就绪：可运行 scripts/macos-release.sh"
+  return 0
 }
 
 write_env() {
   local identity="$1" team="${2:-}" auth="$3"
   umask 077
-  cat >"${ENV_FILE}" <<EOF
-# 本机签名配置 — 勿提交（release/ 已在 .gitignore）
-APPLE_SIGNING_IDENTITY=$identity
-APPLE_TEAM_ID=$team
-NOTARY_PROFILE=${PROFILE}
-NOTARY_AUTH=$auth
-EOF
+  {
+    echo "# 本机签名配置 — 勿提交（release/ 已在 .gitignore）"
+    printf 'APPLE_SIGNING_IDENTITY=%q\n' "$identity"
+    printf 'APPLE_TEAM_ID=%q\n' "$team"
+    printf 'NOTARY_PROFILE=%q\n' "${PROFILE}"
+    printf 'NOTARY_AUTH=%q\n' "$auth"
+  } >"${ENV_FILE}"
   echo "已写入 ${ENV_FILE}"
 }
 
 pick_identity() {
-  local line id
-  line=$(security find-identity -v -p codesigning 2>/dev/null | grep 'Developer ID Application' | head -1) || return 1
+  local identities line id
+  identities=$(security find-identity -v -p codesigning 2>/dev/null) || return 1
+  line=$(grep 'Developer ID Application' <<<"$identities" | head -1) || return 1
   # 行形如: 1) AABBCC "Developer ID Application: Name (TEAM)"
   id=$(sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' <<<"$line")
   [ -n "$id" ] || return 1
@@ -118,16 +120,16 @@ store_notary_api() {
   write_env "$identity" "${team:-}" "api"
   # Tauri 内建公证也可读这些变量；写一份本机旁路文件（仍在 release/）
   umask 077
-  cat >release/apple-api.env <<EOF
-APPLE_API_KEY=$key_id
-APPLE_API_ISSUER=$issuer
-APPLE_API_KEY_PATH=$key_path
-EOF
+  {
+    printf 'APPLE_API_KEY=%q\n' "$key_id"
+    printf 'APPLE_API_ISSUER=%q\n' "$issuer"
+    printf 'APPLE_API_KEY_PATH=%q\n' "$key_path"
+  } >release/apple-api.env
   echo "notary profile「${PROFILE}」已保存；Tauri 环境见 release/apple-api.env"
 }
 
 store_notary_apple_id() {
-  local apple_id team password identity
+  local apple_id team identity
   identity=$(pick_identity) || { echo "先导入 Developer ID Application 证书" >&2; exit 1; }
   team=$(team_from_identity "$identity")
   echo "签名身份: $identity"
@@ -136,12 +138,10 @@ store_notary_apple_id() {
   read -r -p "APPLE_TEAM_ID [${team:-必填}]: " team_in
   team="${team_in:-$team}"
   [ -n "$team" ] || { echo "需要 Team ID" >&2; exit 1; }
-  read -r -s -p "APPLE_PASSWORD (App 专用密码): " password
-  echo
+  echo "接下来由 notarytool 交互提示输入 App 专用密码（不经命令行参数传递）："
   xcrun notarytool store-credentials "${PROFILE}" \
     --apple-id "$apple_id" \
-    --team-id "$team" \
-    --password "$password"
+    --team-id "$team"
   write_env "$identity" "$team" "apple-id"
   echo "notary profile「${PROFILE}」已保存（密码只在钥匙串，不落盘）"
 }

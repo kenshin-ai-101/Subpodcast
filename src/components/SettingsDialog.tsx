@@ -28,6 +28,7 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errText, type StorageInfo } from "../lib/api";
 import { ask } from "../lib/confirm";
+import { useT } from "../lib/i18n";
 import { bytes, clearDownloads, useOffline } from "../lib/offline";
 import { stopSpeaking } from "../lib/tts";
 import {
@@ -38,6 +39,7 @@ import {
   type LangSetting,
   type Provider,
   type SettingsSection,
+  type ThemeSetting,
 } from "../lib/settings";
 import { IS_MAC, kbd } from "../lib/shortcuts";
 import { useStore } from "../store";
@@ -74,11 +76,12 @@ function systemLangName() {
 
 /** 翻译默认模型按钮。 */
 export function DefaultButton({ id, isDefault }: { id: string; isDefault: boolean }) {
+  const t = useT();
   const saveSettings = useStore((s) => s.saveSettings);
   const mode = useStore((s) => s.settings.translateMode);
   return isDefault ? (
     <p className="default-on small">
-      <Check size={13} /> 当前默认模型
+      <Check size={13} /> {t("当前默认模型")}
     </p>
   ) : (
     <button
@@ -92,7 +95,7 @@ export function DefaultButton({ id, isDefault }: { id: string; isDefault: boolea
         })
       }
     >
-      设为默认模型
+      {t("设为默认模型")}
     </button>
   );
 }
@@ -139,21 +142,22 @@ function KeyRow({
   onDelete: () => Promise<void>;
   placeholder?: string;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   if (has && !editing) {
     return (
-      <div className="key-row key-saved" title="已保存在本机（正式签名版用钥匙串；开发/未签名用本机文件）">
+      <div className="key-row key-saved" title={t("已保存在本机（正式签名版用钥匙串；开发/未签名用本机文件）")}>
         <span className="key-state">
           <Check size={14} />
-          <span>已保存</span>
+          <span>{t("已保存")}</span>
           <span className="key-dots" aria-hidden>
             ••••••••
           </span>
         </span>
         <button type="button" className="btn sm" onClick={() => setEditing(true)}>
-          更换
+          {t("更换")}
         </button>
-        <button type="button" className="icon-btn" title="删除 Key" aria-label="删除 Key" onClick={() => void onDelete()}>
+        <button type="button" className="icon-btn" title={t("删除 Key")} aria-label={t("删除 Key")} onClick={() => void onDelete()}>
           <Trash2 size={14} />
         </button>
       </div>
@@ -167,10 +171,10 @@ function KeyRow({
         autoFocus={editing}
         value={value}
         onChange={(e) => onValue(e.target.value)}
-        placeholder={placeholder ?? "粘贴 API Key"}
+        placeholder={placeholder ?? t("粘贴 API Key")}
       />
       <button type="button" className="btn sm" onClick={() => void onSave().then(() => setEditing(false))} disabled={!value.trim()}>
-        保存
+        {t("保存")}
       </button>
       {has && (
         <button
@@ -181,7 +185,7 @@ function KeyRow({
             setEditing(false);
           }}
         >
-          取消
+          {t("取消")}
         </button>
       )}
     </div>
@@ -189,6 +193,7 @@ function KeyRow({
 }
 
 export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Provider) => void }) {
+  const t = useT();
   const settings = useStore((s) => s.settings);
   const [key, setKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
@@ -223,7 +228,7 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
         protocol: p.protocol,
       });
       setLive(ids);
-      if (!ids.length) setTesting("这个服务没有返回模型列表，请手动填写");
+      if (!ids.length) setTesting(t("这个服务没有返回模型列表，请手动填写"));
     } catch (e) {
       setTesting(errText(e));
     } finally {
@@ -247,7 +252,7 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
         ],
         stream: false,
       });
-      setTesting(`可用 ✓ ${r.slice(0, 20)}`);
+      setTesting(`${t("可用")} ✓ ${r.slice(0, 20)}`);
       setTestOk(true);
     } catch (e) {
       setTesting(errText(e));
@@ -264,7 +269,7 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
             <p className="setup-title">API Key</p>
             {p.keyUrl && (
               <button type="button" className="link-btn" onClick={() => void openUrl(p.keyUrl!)}>
-                去官网申请 <ExternalLink size={11} />
+                {t("去官网申请")} <ExternalLink size={11} />
               </button>
             )}
           </div>
@@ -286,35 +291,35 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
       </div>
       <div className="row-actions">
         <button type="button" className="btn sm" onClick={() => void test()} disabled={testing === "…"}>
-          {testing === "…" && <Loader2 size={13} className="spin" />} 测试连接
+          {testing === "…" && <Loader2 size={13} className="spin" />} {t("测试连接")}
         </button>
         {testing && testing !== "…" && <span className={testOk ? "ok-text small" : "error-text small"}>{testing}</span>}
         <span className="spacer" />
         <button type="button" className="adv-toggle" onClick={() => setAdvanced(!advanced)}>
-          <ChevronDown size={12} className={advanced ? "flip" : ""} /> 高级设置
+          <ChevronDown size={12} className={advanced ? "flip" : ""} /> {t("高级设置")}
         </button>
       </div>
       {advanced && (
         <div className="adv-body">
           <label>
-            <span>接口类型</span>
+            <span>{t("接口类型")}</span>
             <select value={p.protocol} onChange={(e) => onChange({ ...p, protocol: e.target.value as Provider["protocol"] })}>
-              <option value="openai">OpenAI 兼容</option>
+              <option value="openai">{t("OpenAI 兼容")}</option>
               <option value="anthropic">Anthropic</option>
             </select>
           </label>
           <label>
-            <span>接口地址</span>
+            <span>{t("接口地址")}</span>
             <input {...NO_AUTO} value={p.baseUrl} onChange={(e) => onChange({ ...p, baseUrl: e.target.value })} placeholder="https://…/v1" />
           </label>
           <label>
-            <span>模型</span>
+            <span>{t("模型")}</span>
             <input
               {...NO_AUTO}
               value={p.model}
               list={`models-${p.id}`}
               onChange={(e) => onChange({ ...p, model: e.target.value })}
-              placeholder="模型名"
+              placeholder={t("模型名")}
             />
             <datalist id={`models-${p.id}`}>
               {[...new Set([...(live ?? []), ...(p.models ?? [])])].map((m) => (
@@ -333,7 +338,7 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
           ) : null}
           <div className="row-actions">
             <button type="button" className="btn ghost sm" onClick={() => void fetchModels()} disabled={fetching}>
-              {fetching ? <Loader2 size={13} className="spin" /> : null} 获取模型列表
+              {fetching ? <Loader2 size={13} className="spin" /> : null} {t("获取模型列表")}
             </button>
           </div>
         </div>
@@ -343,17 +348,18 @@ export function ProviderEditor({ p, onChange }: { p: Provider; onChange: (p: Pro
 }
 
 function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) => void }) {
+  const t = useT();
   return (
     <div className="provider-form">
       <p className="muted small">
-        {a.note}。识别时音频会发送到 {a.name}。
+        {t("{note}。识别时音频会发送到 {name}。", { note: t(a.note), name: t(a.name) })}
       </p>
       <label>
-        <span>接口地址</span>
+        <span>{t("接口地址")}</span>
         <input {...NO_AUTO} value={a.baseUrl} onChange={(e) => onChange({ ...a, baseUrl: e.target.value })} />
       </label>
       <label>
-        <span>模型</span>
+        <span>{t("模型")}</span>
         <input {...NO_AUTO} value={a.model} list={`asr-${a.id}`} onChange={(e) => onChange({ ...a, model: e.target.value })} />
         <datalist id={`asr-${a.id}`}>
           {a.models.map((m) => (
@@ -380,7 +386,7 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
         <span className="spacer" />
         {a.keyUrl && (
           <button type="button" className="btn ghost sm" onClick={() => void openUrl(a.keyUrl!)}>
-            <ExternalLink size={13} /> 获取 Key
+            <ExternalLink size={13} /> {t("获取 Key")}
           </button>
         )}
       </div>
@@ -391,6 +397,7 @@ function CloudAsrEditor({ a, onChange }: { a: CloudAsr; onChange: (a: CloudAsr) 
 function StorageSettings({ expanded, toggle, onAsr, onTts }: {
   expanded: boolean; toggle: () => void; onAsr: () => void; onTts: () => void;
 }) {
+  const t = useT();
   const saved = useOffline((s) => s.saved);
   const [info, setInfo] = useState<StorageInfo | null>(null);
   const reload = () => void api.storageInfo().then(setInfo).catch(() => {});
@@ -404,8 +411,8 @@ function StorageSettings({ expanded, toggle, onAsr, onTts }: {
   return (
     <>
       <button type="button" className="setting-row" aria-expanded={expanded} onClick={toggle}>
-        <HardDrive size={15} /> <span>存储</span>
-        {total != null && <span className="muted small">占用 {bytes(total)}</span>}
+        <HardDrive size={15} /> <span>{t("存储")}</span>
+        {total != null && <span className="muted small">{t("占用 {size}", { size: bytes(total) })}</span>}
         <ChevronDown size={14} className={expanded ? "flip" : ""} />
       </button>
       {expanded && <Storage info={info} reload={reload} onAsr={onAsr} onTts={onTts} />}
@@ -415,6 +422,8 @@ function StorageSettings({ expanded, toggle, onAsr, onTts }: {
 
 /** 高光剪辑默认落到系统「下载」，可改到自选目录。 */
 function ClipExportRow() {
+  const t = useT();
+  const notify = useStore((s) => s.notify);
   const { clipExportDir, saveSettings } = useStore(
     useShallow((s) => ({
       clipExportDir: s.settings.clipExportDir ?? "",
@@ -422,37 +431,44 @@ function ClipExportRow() {
     })),
   );
   const pick = async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const dir = await open({
-      directory: true,
-      multiple: false,
-      defaultPath: clipExportDir || undefined,
-    });
-    if (typeof dir === "string" && dir) void saveSettings({ clipExportDir: dir });
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const dir = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: clipExportDir || undefined,
+      });
+      if (typeof dir === "string" && dir) void saveSettings({ clipExportDir: dir });
+    } catch (e) {
+      notify(errText(e));
+    }
+  };
+  const openDir = async () => {
+    try {
+      await api.revealFile(clipExportDir);
+    } catch (e) {
+      notify(errText(e));
+    }
   };
   return (
     <div className="storage-row">
       <div className="storage-row-text">
-        <p className="storage-row-name">高光剪辑导出到</p>
+        <p className="storage-row-name">{t("高光剪辑导出到")}</p>
         <p className="muted small clamp1" title={clipExportDir || undefined}>
-          {clipExportDir || "「下载」文件夹"}
+          {clipExportDir || t("「下载」文件夹")}
         </p>
       </div>
       <button type="button" className="btn sm" onClick={() => void pick()}>
-        <FolderOpen size={13} /> 选择文件夹
+        <FolderOpen size={13} /> {t("选择文件夹")}
       </button>
       {!!clipExportDir && (
-        <button
-          type="button"
-          className="btn ghost sm"
-          onClick={() => void api.revealFile(clipExportDir).catch(() => {})}
-        >
-          打开
+        <button type="button" className="btn ghost sm" onClick={() => void openDir()}>
+          {t("打开")}
         </button>
       )}
       {!!clipExportDir && (
         <button type="button" className="btn ghost sm" onClick={() => void saveSettings({ clipExportDir: "" })}>
-          恢复默认
+          {t("恢复默认")}
         </button>
       )}
     </div>
@@ -462,17 +478,18 @@ function ClipExportRow() {
 function Storage({ info, reload, onAsr, onTts }: {
   info: StorageInfo | null; reload: () => void; onAsr: () => void; onTts: () => void;
 }) {
+  const t = useT();
   const saved = useOffline((s) => s.saved);
   const notify = useStore((s) => s.notify);
   const n = Object.keys(saved).length;
   const size = (b?: number) => (info ? (b ? bytes(b) : "0 MB") : "…");
   const clearAll = async () => {
-    if (!(await ask("删除全部已下载的音频？字幕、精读和收听进度都会保留。"))) return;
+    if (!(await ask(t("删除全部已下载的音频？字幕、精读和收听进度都会保留。")))) return;
     await clearDownloads();
     reload();
   };
   const clearTts = async () => {
-    if (!(await ask("清理朗读缓存？下次朗读会重新合成，字幕与精读内容不受影响。"))) return;
+    if (!(await ask(t("清理朗读缓存？下次朗读会重新合成，字幕与精读内容不受影响。")))) return;
     stopSpeaking();
     await api.clearTtsCache();
     reload();
@@ -481,17 +498,17 @@ function Storage({ info, reload, onAsr, onTts }: {
     <div className="storage-list">
       <div className="storage-row">
         <div className="storage-row-text">
-          <p className="storage-row-name">离线下载</p>
+          <p className="storage-row-name">{t("离线下载")}</p>
           <p className="muted small">
-            {n ? `${n} 集音频，没有网络也能听` : "在单集页点下载按钮，就能离线收听"}
+            {n ? t("{n} 集音频，没有网络也能听", { n }) : t("在单集页点下载按钮，就能离线收听")}
           </p>
         </div>
         <span className="storage-size">{size(info?.downloads)}</span>
         <button type="button" className="btn sm" onClick={() => void api.openDataFolder("downloads")}>
-          <FolderOpen size={13} /> 打开文件夹
+          <FolderOpen size={13} /> {t("打开文件夹")}
         </button>
         {n > 0 && (
-          <button type="button" className="icon-btn" title="全部删除" onClick={() => void clearAll().catch((e) => notify(errText(e)))}>
+          <button type="button" className="icon-btn" title={t("全部删除")} onClick={() => void clearAll().catch((e) => notify(errText(e)))}>
             <Trash2 size={14} />
           </button>
         )}
@@ -499,72 +516,76 @@ function Storage({ info, reload, onAsr, onTts }: {
       <ClipExportRow />
       <div className="storage-row">
         <div className="storage-row-text">
-          <p className="storage-row-name">语音识别模型</p>
-          <p className="muted small">本机识别用的模型，在「字幕」里下载或删除</p>
+          <p className="storage-row-name">{t("语音识别模型")}</p>
+          <p className="muted small">{t("本机识别用的模型，在「字幕」里下载或删除")}</p>
         </div>
         <span className="storage-size">{size(info?.models)}</span>
         <button type="button" className="btn sm" onClick={() => void api.openDataFolder("models")}>
-          <FolderOpen size={13} /> 打开文件夹
+          <FolderOpen size={13} /> {t("打开文件夹")}
         </button>
         <button type="button" className="btn ghost sm" onClick={onAsr}>
-          管理
+          {t("管理")}
         </button>
       </div>
       <div className="storage-row">
         <div className="storage-row-text">
-          <p className="storage-row-name">节目库</p>
-          <p className="muted small">订阅、字幕、翻译、精读和收听进度</p>
+          <p className="storage-row-name">{t("节目库")}</p>
+          <p className="muted small">{t("订阅、字幕、翻译、精读和收听进度")}</p>
         </div>
         <span className="storage-size">{size(info?.library)}</span>
         <button type="button" className="btn ghost sm" onClick={() => void api.openDataFolder("data")}>
-          <FolderOpen size={13} /> 打开文件夹
+          <FolderOpen size={13} /> {t("打开文件夹")}
         </button>
       </div>
       {!!info?.ttsModels && (
         <div className="storage-row">
           <div className="storage-row-text">
-            <p className="storage-row-name">本地语音模型</p>
-            <p className="muted small">Melo、Kokoro 离线朗读用的模型，在「朗读」里下载或删除</p>
+            <p className="storage-row-name">{t("本地语音模型")}</p>
+            <p className="muted small">{t("Melo、Kokoro 离线朗读用的模型，在「朗读」里下载或删除")}</p>
           </div>
           <span className="storage-size">{size(info.ttsModels)}</span>
           <button type="button" className="btn sm" onClick={() => void api.openDataFolder("tts-models")}>
-            <FolderOpen size={13} /> 打开文件夹
+            <FolderOpen size={13} /> {t("打开文件夹")}
           </button>
           <button type="button" className="btn ghost sm" onClick={onTts}>
-            管理
+            {t("管理")}
           </button>
         </div>
       )}
       {!!info?.ttsCache && (
         <div className="storage-row">
           <div className="storage-row-text">
-            <p className="storage-row-name">朗读缓存</p>
+            <p className="storage-row-name">{t("朗读缓存")}</p>
             <p className="muted small">
-              朗读精读和字幕中文翻译生成的语音缓存；最多占 500 MB，久不用的先删
+              {t("朗读精读和字幕中文翻译生成的语音缓存；最多占 500 MB，久不用的先删")}
             </p>
           </div>
           <span className="storage-size">{size(info.ttsCache)}</span>
           <button type="button" className="btn ghost sm" onClick={() => void api.openDataFolder("tts-cache")}>
-            <FolderOpen size={13} /> 打开文件夹
+            <FolderOpen size={13} /> {t("打开文件夹")}
           </button>
           <button
             type="button"
             className="btn sm"
             onClick={() => void clearTts().catch((e) => notify(errText(e)))}
           >
-            清理
+            {t("清理")}
           </button>
         </div>
       )}
       {!!info?.temp && (
         <div className="storage-row">
           <div className="storage-row-text">
-            <p className="storage-row-name">临时文件</p>
-            <p className="muted small">中断的识别留下的音频，可以放心清理</p>
+            <p className="storage-row-name">{t("临时文件")}</p>
+            <p className="muted small">{t("中断的识别留下的音频，可以放心清理")}</p>
           </div>
           <span className="storage-size">{size(info.temp)}</span>
-          <button type="button" className="btn sm" onClick={() => void api.clearTemp().then(reload)}>
-            清理
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => void api.clearTemp().then(reload).catch((e) => notify(errText(e)))}
+          >
+            {t("清理")}
           </button>
         </div>
       )}
@@ -573,6 +594,7 @@ function Storage({ info, reload, onAsr, onTts }: {
 }
 
 export function SettingsDialog() {
+  const t = useT();
   const { settingsOpen, settingsSection, settings, saveSettings, set, notify } = useStore(
     useShallow((s) => ({
       settingsOpen: s.settingsOpen,
@@ -600,6 +622,18 @@ export function SettingsDialog() {
     if (settingsOpen) return stopSpeaking;
   }, [settingsOpen]);
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        set({ settingsOpen: false, settingsSection: null });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsOpen, set]);
+
   if (!settingsOpen) return null;
   const close = () => set({ settingsOpen: false, settingsSection: null });
   const cloud = activeCloudAsr(settings);
@@ -607,11 +641,11 @@ export function SettingsDialog() {
 
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="modal wide settings-modal" role="dialog" aria-modal="true" aria-label="设置">
+      <div className="modal wide settings-modal" role="dialog" aria-modal="true" aria-label={t("设置")}>
         <div className="modal-head">
-          <h3>设置</h3>
-          <button type="button" className="icon-btn" onClick={close} aria-label="关闭">
-            <X size={18} />
+          <h3>{t("设置")}</h3>
+          <button type="button" className="icon-btn" onClick={close} aria-label={t("关闭")}>
+            <X size={16} />
           </button>
         </div>
         <div className="modal-body settings-modal-body">
@@ -620,7 +654,7 @@ export function SettingsDialog() {
               {NAV.map(([k, label, Icon]) => (
                 <button key={k} type="button" className={section === k ? "on" : ""} onClick={() => setSection(k)}>
                   <Icon size={15} aria-hidden />
-                  {label}
+                  {t(label)}
                 </button>
               ))}
             </nav>
@@ -629,8 +663,8 @@ export function SettingsDialog() {
                 <>
                   <ReadingSettings />
                   <section className="setup-block">
-                    <p className="setup-title">如果没有字幕时</p>
-                    <p className="muted small">先查节目自带的字幕；没有时才听写。</p>
+                    <p className="setup-title">{t("如果没有字幕时")}</p>
+                    <p className="muted small">{t("先查节目自带的字幕；没有时才听写。")}</p>
                     <div className="engine-switch">
                       <button
                         type="button"
@@ -644,8 +678,8 @@ export function SettingsDialog() {
                       >
                         <Cpu size={18} />
                         <div>
-                          <p>本机模型</p>
-                          <p className="muted small">免费，音频不出本机</p>
+                          <p>{t("本机模型")}</p>
+                          <p className="muted small">{t("免费，音频不出本机")}</p>
                         </div>
                       </button>
                       <button
@@ -655,8 +689,8 @@ export function SettingsDialog() {
                       >
                         <Cloud size={18} />
                         <div>
-                          <p>云端服务</p>
-                          <p className="muted small">更快，需要 Key，按量付费</p>
+                          <p>{t("云端服务")}</p>
+                          <p className="muted small">{t("更快，需要 Key，按量付费")}</p>
                         </div>
                       </button>
                     </div>
@@ -672,12 +706,12 @@ export function SettingsDialog() {
                               className={`chip ${settings.asrEngine === a.id ? "on" : ""}`}
                               onClick={() => void saveSettings({ asrEngine: a.id, asrModel: settings.cloudAsr[a.id]?.model ?? a.model })}
                             >
-                              {a.name}
+                              {t(a.name)}
                             </button>
                           ))}
                           {!moreCloud && (
                             <button type="button" className="chip" onClick={() => setMoreCloud(true)}>
-                              更多
+                              {t("更多")}
                             </button>
                           )}
                         </div>
@@ -708,11 +742,22 @@ export function SettingsDialog() {
               {section === "general" && (
                 <>
                   <section className="setup-block">
-                    <p className="setup-title">界面</p>
+                    <p className="setup-title">{t("界面")}</p>
                     <label>
-                      <span>界面语言</span>
+                      <span>{t("外观")}</span>
+                      <select
+                        value={settings.theme ?? "system"}
+                        onChange={(e) => void saveSettings({ theme: e.target.value as ThemeSetting })}
+                      >
+                        <option value="system">{t("跟随系统")}</option>
+                        <option value="light">{t("浅色")}</option>
+                        <option value="dark">{t("深色")}</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>{t("界面语言")}</span>
                       <select value={settings.uiLang} onChange={(e) => void saveSettings({ uiLang: e.target.value as LangSetting })}>
-                        <option value="auto">跟随系统（{systemLangName()}）</option>
+                        <option value="auto">{t("跟随系统")}（{systemLangName()}）</option>
                         {LANGS.map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.name}
@@ -726,7 +771,7 @@ export function SettingsDialog() {
                         checked={settings.youtubePromo}
                         onChange={(e) => void saveSettings({ youtubePromo: e.target.checked })}
                       />{" "}
-                      显示节目的 YouTube 订阅按钮
+                      {t("显示节目的 YouTube 订阅按钮")}
                     </label>
                     {settings.youtubePromo && (
                       <label className="check">
@@ -735,15 +780,15 @@ export function SettingsDialog() {
                           checked={!settings.homeBannerHidden}
                           onChange={(e) => void saveSettings({ homeBannerHidden: !e.target.checked })}
                         />{" "}
-                        在发现页顶部显示推荐横幅
+                        {t("在发现页顶部显示推荐横幅")}
                       </label>
                     )}
                   </section>
                   <section className="setup-block">
-                    <p className="setup-title">订阅</p>
+                    <p className="setup-title">{t("订阅")}</p>
                     <div className="row-actions">
                       <button type="button" className="btn sm" onClick={() => set({ settingsOpen: false, addOpen: true, addTab: "import" })}>
-                        导入订阅…
+                        {t("导入订阅…")}
                       </button>
                       <button
                         type="button"
@@ -751,70 +796,70 @@ export function SettingsDialog() {
                         onClick={async () => {
                           try {
                             const path = await api.exportOpml();
-                            notify(`已导出到「下载」：${path.split(/[\\/]/).pop() ?? ""}`);
+                            notify(t("已导出到「下载」：{file}", { file: path.split(/[\\/]/).pop() ?? "" }));
                             void revealItemInDir(path).catch(() => {});
                           } catch (e) {
                             notify(errText(e));
                           }
                         }}
                       >
-                        导出 OPML
+                        {t("导出 OPML")}
                       </button>
                     </div>
                   </section>
                   <section className="setup-block">
-                    <p className="setup-title">网络</p>
+                    <p className="setup-title">{t("网络")}</p>
                     <label>
-                      <span>代理</span>
+                      <span>{t("代理")}</span>
                       <div className="key-row">
-                        <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="留空则直连；连不上再试系统代理" />
+                        <input {...NO_AUTO} value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder={t("留空则直连；连不上再试系统代理")} />
                         <button
                           type="button"
                           className="btn sm"
                           onClick={async () => {
                             try {
                               await saveSettings({ proxy });
-                              notify("代理已保存");
+                              notify(t("代理已保存"));
                             } catch (e) {
                               notify(errText(e));
                             }
                           }}
                         >
-                          保存
+                          {t("保存")}
                         </button>
                       </div>
                     </label>
                     <label>
-                      <span>YouTube 要求验证时</span>
+                      <span>{t("YouTube 要求验证时")}</span>
                       <select
                         value={settings.ytCookiesBrowser ?? ""}
                         onChange={(e) => void saveSettings({ ytCookiesBrowser: e.target.value })}
                       >
-                        <option value="">先问我</option>
+                        <option value="">{t("先问我")}</option>
                         {(IS_MAC ? ["chrome", "safari", "edge", "firefox", "brave"] : ["chrome", "edge", "firefox", "brave"]).map((b) => (
                           <option key={b} value={b}>
-                            借用 {b[0]!.toUpperCase() + b.slice(1)} 的 YouTube 登录
+                            {t("借用 {browser} 的 YouTube 登录", { browser: b[0]!.toUpperCase() + b.slice(1) })}
                           </option>
                         ))}
                       </select>
                     </label>
                   </section>
                   <section className="setup-block">
-                    <p className="setup-title">共享</p>
+                    <p className="setup-title">{t("共享")}</p>
                     <label className="check">
                       <input
                         type="checkbox"
                         checked={settings.shareTranscripts}
                         onChange={(e) => void saveSettings({ shareTranscripts: e.target.checked })}
                       />{" "}
-                      匿名分享我生成的字幕、译文和导读
+                      {t("匿名分享我生成的字幕、译文和导读")}
                     </label>
-                    <p className="muted small">只分享文字与匿名安装标识，帮别人跳过识别、机翻与导读。</p>
+                    <p className="muted small">{t("只分享文字与匿名安装标识，默认关闭；含鉴权或内网的私有源永不上传。")}</p>
                   </section>
                   <section className="setup-block">
                     <button type="button" className="setting-row" aria-expanded={showKeys} onClick={() => setShowKeys(!showKeys)}>
-                      <Keyboard size={15} /> <span>快捷键</span>
-                      <span className="muted small">{kbd("⌘/")} 随时查看</span>
+                      <Keyboard size={15} /> <span>{t("快捷键")}</span>
+                      <span className="muted small">{kbd("⌘/")} {t("随时查看")}</span>
                       <ChevronDown size={14} className={showKeys ? "flip" : ""} />
                     </button>
                     {showKeys && <ShortcutSettings />}

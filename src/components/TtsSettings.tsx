@@ -11,6 +11,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { api, errText, type LocalModelId, type SystemVoice } from "../lib/api";
 import { ask } from "../lib/confirm";
+import { useT } from "../lib/i18n";
 import { cancelLocalTts, deleteLocalTts, installLocalTts, localInstalled, refreshLocalTts, useLocalTts } from "../lib/localTts";
 import { bytes } from "../lib/offline";
 import { TTS_CLOUD_MAIN, TTS_SERVICES, type TtsService, type TtsVoice } from "../lib/settings";
@@ -53,12 +54,13 @@ export function useSystemVoices(enabled: boolean): SystemVoice[] {
 }
 
 export function PreviewButton({ service, disabled }: { service: TtsService; disabled?: boolean }) {
+  const t = useT();
   const active = useTtsPreview((s) => s.active);
   const playing = active === `${service.id}:${service.model ?? ""}:${service.voice}`;
   return (
     <button className="btn sm" type="button" disabled={disabled} onClick={() => void previewVoice(service.id, service.voice)}>
       {playing ? <Square size={12} /> : <Volume2 size={13} />}
-      {playing ? "停止试听" : "试听"}
+      {playing ? t("停止试听") : t("试听")}
     </button>
   );
 }
@@ -72,6 +74,7 @@ function updateService(id: string, patch: Partial<TtsService>, activate = false)
 }
 
 function VoicePicker({ service, voices, children }: { service: TtsService; voices: TtsVoice[]; children?: React.ReactNode }) {
+  const t = useT();
   const id = useId();
   const hasCustom = !voices.some((option) => option.id === service.voice) && !!service.voice;
   const [customMode, setCustom] = useState<boolean | null>(null);
@@ -80,7 +83,7 @@ function VoicePicker({ service, voices, children }: { service: TtsService; voice
   return (
     <>
       <div className="tts-field">
-        <label htmlFor={id}>音色</label>
+        <label htmlFor={id}>{t("音色")}</label>
         <div className="row-actions">
           {voices.length > 0 && (
             <select id={id} value={custom ? "__custom__" : service.voice} onChange={(event) => {
@@ -88,23 +91,24 @@ function VoicePicker({ service, voices, children }: { service: TtsService; voice
               setCustom(value === "__custom__");
               if (value !== "__custom__") updateService(service.id, { voice: value });
             }}>
-              {service.id === "system" && <option value="">按语言自动选择</option>}
-              {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
-              <option value="__custom__">自定义音色</option>
+              {service.id === "system" && <option value="">{t("按语言自动选择")}</option>}
+              {voices.map((voice) => <option key={voice.id} value={voice.id}>{t(voice.name)}</option>)}
+              <option value="__custom__">{t("自定义音色")}</option>
             </select>
           )}
           {children}
         </div>
       </div>
       {(custom || (!voices.length && service.id !== "system")) && (
-        <input {...NO_AUTO} aria-label="音色 ID" value={service.voice} onChange={(event) =>
-          updateService(service.id, { voice: event.target.value })} placeholder="音色 ID" />
+        <input {...NO_AUTO} aria-label={t("音色 ID")} value={service.voice} onChange={(event) =>
+          updateService(service.id, { voice: event.target.value })} placeholder={t("音色 ID")} />
       )}
     </>
   );
 }
 
 function ModelCard({ id, name, description }: (typeof LOCAL_TTS_MODELS)[number]) {
+  const t = useT();
   const { state, downloading, busy, supported } = useLocalTts(useShallow((s) => ({
     state: s.status?.models.find((model) => model.id === id),
     downloading: s.downloading?.id === id ? s.downloading : null,
@@ -120,7 +124,7 @@ function ModelCard({ id, name, description }: (typeof LOCAL_TTS_MODELS)[number])
     if (!state?.installed && !busy) void installLocalTts(id);
   };
   const remove = async () => {
-    if (!(await ask(`删除「${name}」本地语音模型？下次使用时需要重新下载。`))) return;
+    if (!(await ask(t("删除「{name}」本地语音模型？下次使用时需要重新下载。", { name })))) return;
     stopSpeaking();
     await deleteLocalTts(id);
     const store = useStore.getState();
@@ -133,34 +137,35 @@ function ModelCard({ id, name, description }: (typeof LOCAL_TTS_MODELS)[number])
     <div className={`voice-card${selected ? " on" : ""}`}>
       <button type="button" className="voice-card-pick" aria-pressed={selected} disabled={!supported || (busy && !state?.installed)} onClick={select}>
         <span>{name}</span>
-        <small className="muted">{description}</small>
+        <small className="muted">{t(description)}</small>
       </button>
       <div className="voice-card-actions">
         {downloading ? (
           <>
-            <progress aria-label={`${name} 下载进度`} max={100} value={percent ?? undefined} />
-            <span className="small" aria-live="polite">{percent == null ? "下载中" : `${percent}%`}</span>
-            <button type="button" className="btn ghost sm" onClick={() => void cancelLocalTts(id).catch((e) => notify(errText(e)))}>取消</button>
+            <progress aria-label={t("{name} 下载进度", { name })} max={100} value={percent ?? undefined} />
+            <span className="small" aria-live="polite">{percent == null ? t("下载中") : `${percent}%`}</span>
+            <button type="button" className="btn ghost sm" onClick={() => void cancelLocalTts(id).catch((e) => notify(errText(e)))}>{t("取消")}</button>
           </>
         ) : state?.installed ? (
           <>
-            <span className="voice-card-ok"><Check size={13} /> 已下载</span>
-            <button type="button" className="icon-btn sm" aria-label={`删除 ${name}`} title={`删除 ${name}`} onClick={() => void remove().catch((e) => notify(errText(e)))}>
+            <span className="voice-card-ok"><Check size={13} /> {t("已下载")}</span>
+            <button type="button" className="icon-btn sm" aria-label={t("删除 {name}", { name })} title={t("删除 {name}", { name })} onClick={() => void remove().catch((e) => notify(errText(e)))}>
               <Trash2 size={14} />
             </button>
           </>
         ) : supported ? (
           <>
-            <span className="muted small">{state ? bytes(state.bytes) : "首次使用需下载"}</span>
-            <button type="button" className="btn sm" disabled={busy} onClick={select}><Download size={13} /> 下载</button>
+            <span className="muted small">{state ? bytes(state.bytes) : t("首次使用需下载")}</span>
+            <button type="button" className="btn sm" disabled={busy} onClick={select}><Download size={13} /> {t("下载")}</button>
           </>
-        ) : <span className="muted small">{supported === false ? "此平台暂不支持" : "正在检查"}</span>}
+        ) : <span className="muted small">{supported === false ? t("此平台暂不支持") : t("正在检查")}</span>}
       </div>
     </div>
   );
 }
 
 function TtsKey({ service }: { service: TtsService }) {
+  const t = useT();
   const [shared, setShared] = useState(false);
   useEffect(() => {
     let active = true;
@@ -170,32 +175,33 @@ function TtsKey({ service }: { service: TtsService }) {
     return () => { active = false; };
   }, [service.sharedAccounts]);
   if (!service.needsKey && service.id !== "custom") return null;
-  const placeholder = service.id === "custom" ? "API Key（可选）" : shared ? "已配置共享 Key，专用 Key 可留空" : "输入 API Key";
+  const placeholder = service.id === "custom" ? t("API Key（可选）") : shared ? t("已配置共享 Key，专用 Key 可留空") : t("输入 API Key");
   return (
     <div className="setup-block">
       <div className="row-actions">
         <p className="setup-title">API Key</p>
-        {service.keyUrl && <button className="btn ghost sm" type="button" onClick={() => void openUrl(service.keyUrl!)}><ExternalLink size={13} /> 获取 Key</button>}
+        {service.keyUrl && <button className="btn ghost sm" type="button" onClick={() => void openUrl(service.keyUrl!)}><ExternalLink size={13} /> {t("获取 Key")}</button>}
       </div>
       <KeyField account={`tts.${service.id}`} placeholder={placeholder} />
-      {!!service.sharedAccounts?.length && <p className="muted small">{shared ? "留空会使用已配置的共享 Key。" : "配置该服务的 AI 或字幕 Key 后，可以在这里共用。"}</p>}
+      {!!service.sharedAccounts?.length && <p className="muted small">{shared ? t("留空会使用已配置的共享 Key。") : t("配置该服务的 AI 或字幕 Key 后，可以在这里共用。")}</p>}
     </div>
   );
 }
 
 function CloudSettings({ service }: { service: TtsService }) {
+  const t = useT();
   const modelList = useId();
   return (
     <>
       {service.id === "custom" && (
         <label className="tts-field">
-          接口地址
+          {t("接口地址")}
           <input {...NO_AUTO} value={service.baseUrl ?? ""} onChange={(e) => updateService(service.id, { baseUrl: e.target.value })} placeholder="http://127.0.0.1:8880/v1" />
         </label>
       )}
       {!!service.models?.length && (
         <label className="tts-field">
-          模型
+          {t("模型")}
           <input {...NO_AUTO} list={modelList} value={service.model ?? ""} onChange={(e) => updateService(service.id, { model: e.target.value })} />
           <datalist id={modelList}>
             {service.models.map((model) => <option key={model} value={model} />)}
@@ -207,7 +213,7 @@ function CloudSettings({ service }: { service: TtsService }) {
         <label className="check">
           <input type="checkbox" checked={service.resource === "seed-icl-2.0"} onChange={(e) =>
             updateService(service.id, { resource: e.target.checked ? "seed-icl-2.0" : "seed-tts-2.0" })} />
-          使用复刻音色
+          {t("使用复刻音色")}
         </label>
       )}
       <TtsKey service={service} />
@@ -216,6 +222,7 @@ function CloudSettings({ service }: { service: TtsService }) {
 }
 
 export function TtsSettings() {
+  const t = useT();
   const { service, save, notify } = useStore(useShallow((s) => ({
     service: currentTtsService(s.settings), save: s.saveSettings, notify: s.notify,
   })));
@@ -235,19 +242,19 @@ export function TtsSettings() {
   return (
     <div className="tts-settings">
       <section className="setup-block">
-        <p className="setup-title">朗读引擎</p>
-        <div className="model-chips" role="group" aria-label="朗读引擎类型">
-          <button className={`chip${local ? " on" : ""}`} type="button" aria-pressed={local} onClick={() => { if (!local) choose("system"); }}><Cpu size={14} /> 本地</button>
-          <button className={`chip${local ? "" : " on"}`} type="button" aria-pressed={!local} onClick={() => { if (local) choose("doubao"); }}><Cloud size={14} /> 云端</button>
+        <p className="setup-title">{t("朗读引擎")}</p>
+        <div className="model-chips" role="group" aria-label={t("朗读引擎类型")}>
+          <button className={`chip${local ? " on" : ""}`} type="button" aria-pressed={local} onClick={() => { if (!local) choose("system"); }}><Cpu size={14} /> {t("本地")}</button>
+          <button className={`chip${local ? "" : " on"}`} type="button" aria-pressed={!local} onClick={() => { if (local) choose("doubao"); }}><Cloud size={14} /> {t("云端")}</button>
         </div>
         {local ? (
           <>
             <div className={`voice-card${service.id === "system" ? " on" : ""}`}>
               <button className="voice-card-pick" type="button" aria-pressed={service.id === "system"} onClick={() => choose("system")}>
-                <span>系统增强语音</span>
-                <small className="muted">优先使用设备已安装的增强音色</small>
+                <span>{t("系统增强语音")}</span>
+                <small className="muted">{t("优先使用设备已安装的增强音色")}</small>
               </button>
-              <span className="voice-card-ok"><Check size={13} /> 无需下载</span>
+              <span className="voice-card-ok"><Check size={13} /> {t("无需下载")}</span>
             </div>
             {LOCAL_TTS_MODELS.map((model) => <ModelCard key={model.id} {...model} />)}
             {service.id === "system" ? (
@@ -264,23 +271,29 @@ export function TtsSettings() {
           </>
         ) : (
           <>
-            <div className="model-chips" role="group" aria-label="云端朗读服务">
+            <div className="model-chips" role="group" aria-label={t("云端朗读服务")}>
               {TTS_SERVICES.filter((item) => item.group === "cloud" && (more || TTS_CLOUD_MAIN.includes(item.id) || item.id === service.id))
                 .map((item) => (
                   <button key={item.id} className={`chip${service.id === item.id ? " on" : ""}`} type="button" aria-pressed={service.id === item.id} onClick={() => choose(item.id)}>
-                    {item.name}
+                    {t(item.name)}
                   </button>
                 ))}
-              <button className="link-btn small" type="button" aria-expanded={more} onClick={() => setMore(!more)}>{more ? "收起其他服务" : "更多服务"}</button>
+              <button className="link-btn small" type="button" aria-expanded={more} onClick={() => setMore(!more)}>{more ? t("收起其他服务") : t("更多服务")}</button>
             </div>
             <CloudSettings key={service.id} service={service} />
           </>
         )}
-        <p className="privacy-note">{local ? "朗读在本机处理，文字留在此设备。" : `朗读和试听的文字会发送到${service.id === "custom" ? "配置的服务地址" : ` ${service.name}`}。`}</p>
+        <p className="privacy-note">
+          {local
+            ? t("朗读在本机处理，文字留在此设备。")
+            : t("朗读和试听的文字会发送到 {target}。", {
+                target: service.id === "custom" ? t("配置的服务地址") : t(service.name),
+              })}
+        </p>
       </section>
 
       <section className="setup-block">
-        <p className="setup-title">语速</p>
+        <p className="setup-title">{t("语速")}</p>
         <RateControl />
       </section>
     </div>

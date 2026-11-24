@@ -10,6 +10,7 @@ import { type Episode, type Segment } from "../lib/api";
 import { playClip, prefetchClip, stopClip } from "../lib/clip";
 import { WORD_RE, isNew, lookup, tagLabel, useDict, type Entry } from "../lib/dict";
 import { clock } from "../lib/format";
+import { useT } from "../lib/i18n";
 import type { LearnLevel } from "../lib/settings";
 import { useWords } from "../lib/words";
 import { useStore } from "../store";
@@ -53,6 +54,7 @@ export function EpisodeWords({
   zh: (number | string | null | undefined)[] | undefined;
   onClose: () => void;
 }) {
+  const t = useT();
   const data = useDict((s) => s.data);
   const level = useStore((s) => s.settings.learnLevel);
   const words = useWords((s) => s.words);
@@ -94,7 +96,7 @@ export function EpisodeWords({
       });
       n++;
     }
-    useStore.getState().notify(`已加入 ${n} 个词到生词本`);
+    useStore.getState().notify(t("已加入 {n} 个词到生词本", { n }));
     onClose();
   };
 
@@ -103,16 +105,16 @@ export function EpisodeWords({
 
   return (
     <LearnModal
-      title="本期生词"
+      title={t("本期生词")}
       onClose={onClose}
       foot={
         ready ? (
           <>
             <button type="button" className="btn" onClick={onClose}>
-              取消
+              {t("取消")}
             </button>
             <button type="button" className="btn primary" disabled={!picked.size} onClick={addPicked}>
-              加入 {addCount} 个词
+              {t("加入 {n} 个词", { n: addCount })}
             </button>
           </>
         ) : undefined
@@ -123,10 +125,10 @@ export function EpisodeWords({
           <Loader2 className="spin" size={18} />
         </div>
       ) : !list.length ? (
-        <EmptyState title="这一期没有超出你水平的词" note="可以在 设置 › 学英语 里调高水平" />
+        <EmptyState title={t("这一期没有超出你水平的词")} note={t("可以在 设置 › 学英语 里调高水平")} />
       ) : (
         <>
-          <p className="muted small ew-note">按难度从高到低排列，默认勾选前 15 个还没收藏的词。</p>
+          <p className="muted small ew-note">{t("按难度从高到低排列，默认勾选前 15 个还没收藏的词。")}</p>
           <div className="ew-list">
             {list.map((f) => {
               const have = !!words[f.entry.lemma];
@@ -220,6 +222,7 @@ export function Dictation({
   from: number;
   onClose: () => void;
 }) {
+  const t = useT();
   const usable = useMemo(
     () => segments.map((_, i) => i).filter((i) => (segments[i].text.match(/\S+/g)?.length ?? 0) >= 3),
     [segments],
@@ -247,8 +250,8 @@ export function Dictation({
 
   if (!seg) {
     return (
-      <LearnModal title="听写练习" onClose={onClose}>
-        <EmptyState title="这一期没有适合听写的句子" />
+      <LearnModal title={t("听写练习")} onClose={onClose}>
+        <EmptyState title={t("这一期没有适合听写的句子")} />
       </LearnModal>
     );
   }
@@ -261,19 +264,19 @@ export function Dictation({
   const next = () => setK((x) => Math.min(usable.length - 1, x + 1));
 
   return (
-    <LearnModal title="听写练习" onClose={onClose}>
+    <LearnModal title={t("听写练习")} onClose={onClose}>
       <div className="dict">
         <div className="dict-top">
           <span className="muted small">
-            第 {k + 1} 句 · {clock(seg.start)}
+            {t("第 {n} 句", { n: k + 1 })} · {clock(seg.start)}
           </span>
           {score.total > 0 && (
-            <span className="muted small">正确率 {Math.round((score.right / score.total) * 100)}%</span>
+            <span className="muted small">{t("正确率 {pct}%", { pct: Math.round((score.right / score.total) * 100) })}</span>
           )}
         </div>
         <button type="button" className="btn play dict-play" onClick={play}>
           <Play size={13} className="fill-ico" />
-          再听一遍
+          {t("再听一遍")}
         </button>
         <textarea
           ref={input}
@@ -281,7 +284,7 @@ export function Dictation({
           rows={3}
           spellCheck={false}
           value={typed}
-          placeholder="听到什么就写什么，按 Enter 检查"
+          placeholder={t("听到什么就写什么，按 Enter 检查")}
           disabled={!!result}
           onChange={(e) => setTyped(e.target.value)}
           onKeyDown={(e) => {
@@ -301,7 +304,7 @@ export function Dictation({
               ))}
             </p>
             <p className="muted small">
-              听出 {result.filter((x) => x.ok).length}/{result.length} 个词
+              {t("听出 {ok}/{total} 个词", { ok: result.filter((x) => x.ok).length, total: result.length })}
             </p>
           </div>
         )}
@@ -312,16 +315,16 @@ export function Dictation({
             onClick={() => setResult(compare(seg.text, ""))}
             disabled={!!result}
           >
-            看答案
+            {t("看答案")}
           </button>
           <span className="spacer" />
           {result ? (
             <button type="button" className="btn primary" onClick={next} disabled={k >= usable.length - 1} autoFocus>
-              下一句
+              {t("下一句")}
             </button>
           ) : (
             <button type="button" className="btn primary" onClick={check} disabled={!typed.trim()}>
-              检查
+              {t("检查")}
             </button>
           )}
         </div>
