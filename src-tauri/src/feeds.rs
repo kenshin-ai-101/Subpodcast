@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源；iTunes lookup 单集
- * [OUTPUT]: 解析任意订阅输入为 Show+Episodes（源有多少入多少）；YouTube twin；iTunes 目录兜底；LIST_EPISODES_CAP；xiaoyuzhou_podcast_id
- * [POS]: 订阅归一层——xyz RSS 被 ACL 时走 iTunes≤200 + 精读合并，避免 SSR 仅 15 集假成功
+ * [OUTPUT]: 解析任意订阅输入为 Show+Episodes（源有多少入多少）；YouTube twin；search_podcasts=YouTube 频道∪Apple；LIST_EPISODES_CAP
+ * [POS]: 订阅归一层——xyz RSS 被 ACL 时走 iTunes≤200 + 精读合并；目录搜索与 SubCast 同序（频道优先）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::model::{now_ms, short_hash, Episode, Show};
@@ -83,16 +83,12 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     Err(anyhow!("无法识别：请粘贴 YouTube / Apple Podcasts / 小宇宙 / RSS 链接"))
 }
 
+/// 目录搜索：YouTube 频道优先，再拼 Apple Podcasts；任一源失败时仍返回另一源（两边都失败才报错）。
+/// 与 SubCast 对齐，供 Discover / MCP `search_podcasts` / `find_show` 共用。
 pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
-    let q = urlencoding::encode(term);
-    let cc = if country.is_empty() { "US" } else { country };
-    let url = format!(
-        "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=25&country={cc}&term={q}"
-    );
-    let body = net::get_text(&url).await?;
-    let v: serde_json::Value = serde_json::from_str(&body)?;
+    let (yt, pods) = tokio::join!(search_youtube_channels(term), search_apple_podcasts(term, country));
     let mut out = Vec::new();
-    // 精读目录命中时置顶（SubCast Discover 默认走乔木精读，而非 iTunes 英文原版）。
+    // 精读目录命中时置顶。
     if let Some((feed, title)) = qiaomu::curated_feed_for_query(term) {
         out.push(Show {
             id: short_hash(&feed, 16),
@@ -107,12 +103,38 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
             episode_count: 0,
         });
     }
+    match yt {
+        Ok(list) => out.extend(list),
+        Err(e) if pods.as_ref().map(|p| p.is_empty()).unwrap_or(true) && out.is_empty() => return Err(e),
+        Err(_) => {}
+    }
+    match pods {
+        Ok(list) => {
+            for s in list {
+                if out.iter().any(|x| x.feed_url == s.feed_url) {
+                    continue;
+                }
+                out.push(s);
+            }
+        }
+        Err(e) if out.is_empty() => return Err(e),
+        Err(_) => {}
+    }
+    Ok(out)
+}
+
+async fn search_apple_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
+    let q = urlencoding::encode(term);
+    let cc = if country.is_empty() { "US" } else { country };
+    let url = format!(
+        "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=25&country={cc}&term={q}"
+    );
+    let body = net::get_text(&url).await?;
+    let v: serde_json::Value = serde_json::from_str(&body)?;
+    let mut out = Vec::new();
     for item in v["results"].as_array().into_iter().flatten() {
         let feed = item["feedUrl"].as_str().unwrap_or("");
         if feed.is_empty() {
-            continue;
-        }
-        if out.iter().any(|s| s.feed_url == feed) {
             continue;
         }
         let kind = if is_xyzfm(feed) { "xiaoyuzhou" } else { "podcast" };
@@ -121,7 +143,10 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
             kind: kind.into(),
             title: item["collectionName"].as_str().unwrap_or("Untitled").into(),
             author: item["artistName"].as_str().map(str::to_string),
-            cover: item["artworkUrl600"].as_str().or(item["artworkUrl100"].as_str()).map(str::to_string),
+            cover: item["artworkUrl600"]
+                .as_str()
+                .or(item["artworkUrl100"].as_str())
+                .map(str::to_string),
             feed_url: feed.into(),
             link: item["collectionViewUrl"].as_str().map(str::to_string),
             description: None,
@@ -130,6 +155,85 @@ pub async fn search_podcasts(term: &str, country: &str) -> Result<Vec<Show>> {
         });
     }
     Ok(out)
+}
+
+/// YouTube 频道搜索页（频道筛选）里读 ytInitialData，最多 3 条。
+async fn search_youtube_channels(term: &str) -> Result<Vec<Show>> {
+    const MAX: usize = 3;
+    let mut found = Vec::new();
+    for attempt in 0..3 {
+        let url = format!(
+            "https://www.youtube.com/results?search_query={}&sp=EgIQAg%253D%253D",
+            urlencoding::encode(term)
+        );
+        let html = net::get_text(&url).await?;
+        if let Some(caps) = Regex::new(r"var ytInitialData = (\{.*?\});</script>")
+            .ok()
+            .and_then(|re| re.captures(&html))
+        {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+                collect_youtube_channels(&data, &mut found, MAX);
+            }
+        }
+        if !found.is_empty() || attempt == 2 {
+            break;
+        }
+    }
+    Ok(found)
+}
+
+fn collect_youtube_channels(v: &serde_json::Value, out: &mut Vec<Show>, max: usize) {
+    if out.len() >= max {
+        return;
+    }
+    match v {
+        serde_json::Value::Object(m) => {
+            if let Some(c) = m.get("channelRenderer") {
+                if let (Some(id), Some(title)) = (c["channelId"].as_str(), c["title"]["simpleText"].as_str()) {
+                    if id.starts_with("UC") && id.len() == 24 {
+                        let cover = c["thumbnail"]["thumbnails"]
+                            .as_array()
+                            .and_then(|t| t.last())
+                            .and_then(|t| t["url"].as_str())
+                            .map(|u| {
+                                if u.starts_with("//") {
+                                    format!("https:{u}")
+                                } else {
+                                    u.to_string()
+                                }
+                            });
+                        let handle = c["subscriberCountText"]["simpleText"]
+                            .as_str()
+                            .filter(|h| h.starts_with('@'))
+                            .unwrap_or("YouTube");
+                        let feed = format!("https://www.youtube.com/feeds/videos.xml?channel_id={id}");
+                        out.push(Show {
+                            id: short_hash(&feed, 16),
+                            kind: "youtube".into(),
+                            title: title.into(),
+                            author: Some(handle.into()),
+                            cover,
+                            feed_url: feed,
+                            link: Some(format!("https://www.youtube.com/channel/{id}")),
+                            description: Some("YouTube 频道".into()),
+                            updated_at: now_ms(),
+                            episode_count: 0,
+                        });
+                    }
+                }
+                return;
+            }
+            for x in m.values() {
+                collect_youtube_channels(x, out, max);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for x in a {
+                collect_youtube_channels(x, out, max);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// 无标题时的刷新入口；有节目标题时请用 `refresh_with_title`。
@@ -1424,6 +1528,24 @@ fn parse_any_date(s: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn youtube_channel_results_from_yt_initial_data() {
+        let data: serde_json::Value = serde_json::from_str(
+            r#"{"contents":[{"itemSectionRenderer":{"contents":[
+            {"channelRenderer":{"channelId":"UC33VP_gIBzCVcEvaGKBocZA","title":{"simpleText":"罗永浩的十字路口"},"subscriberCountText":{"simpleText":"@罗永浩的十字路口"},"thumbnail":{"thumbnails":[{"url":"//yt3.ggpht.com/a=s88"},{"url":"//yt3.ggpht.com/a=s176"}]}}},
+            {"channelRenderer":{"channelId":"UC3Ilesza14SKQBwCTCmhj4w","title":{"simpleText":"二号"},"thumbnail":{"thumbnails":[]}}},
+            {"channelRenderer":{"channelId":"UCvtFgYy1WF1sJvgcAAj1VIw","title":{"simpleText":"三号"}}},
+            {"channelRenderer":{"channelId":"UCA6enTYxSFdTtUsHFZOFmZg","title":{"simpleText":"四号"}}}]}}]}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        collect_youtube_channels(&data, &mut out, 3);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].kind, "youtube");
+        assert_eq!(out[0].author.as_deref(), Some("@罗永浩的十字路口"));
+        assert!(out[0].feed_url.contains("channel_id=UC33VP_gIBzCVcEvaGKBocZA"));
+        assert!(out[0].cover.as_deref().unwrap().starts_with("https://"));
+    }
 
     #[test]
     fn parse_basic_rss() {

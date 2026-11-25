@@ -96,8 +96,8 @@ lib/videoClipCanvas.ts: 正片叠层与水印（assets/logo.png +「声译」）
 lib/videoCoverCanvas.ts: 封面模板画布（8 款 + 高亮/字号/字间距）
 lib/quotePoster.ts: 摘句「分享海报」画布引擎（1080×≥1350 五款主题版式 × 五款开源字体 × 扫码回跳二维码）
 components/QuotePosterDialog.tsx: 分享海报弹窗（整图自适应无滚动预览 + 主题色卡 + 字体选择；App 挂 QuotePosterDialogHost）
-components/AgentConnectDialog.tsx: 启动接入提示卡与设置中的 AI 助手列表（agent-connect 行表 + 品牌标，对齐原站）；支持一键接入、逐项更新及移除。
-lib/agentMarks.ts: 本机助手 id → LobeHub Icons SVG（MIT；缺标回退首字母）
+components/AgentConnectDialog.tsx: 启动接入提示卡（agentsOffered）与设置中的 AI 助手列表（agent-connect 行表 + 品牌标）；后端走官方 mcp add。
+lib/agentMarks.ts: 助手 icon/id → LobeHub Icons SVG（MIT；缺标回退首字母）
 components/SelectionTools.tsx: 划词条（单行排列：复制出处 / 翻译 / 生成海报 / 剪成视频；稳健解析跨行与三击字幕索引）
 components/SubtitleExport.tsx: 字幕导出弹窗（格式 SRT·VTT·ASS·LRC·TXT·MD + 内容模式 + 预览）
 components/EpisodeView.tsx: 打开不抢播；后台配对/字幕；右栏拖宽/收起

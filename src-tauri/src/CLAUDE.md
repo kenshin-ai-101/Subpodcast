@@ -6,7 +6,7 @@ lib.rs: Tauri 命令面与启动（含 video_clip_* / fetch_cover_data_url / db_
 main.rs: 桌面端 GUI 二进制入口
 bin/subpodcast-cli.rs: 独立无头 CLI 二进制入口（`subpodcast mcp` / `shows` / `episodes` / `doctor` / `--asr-worker`）
 mcp.rs: MCP over stdio（JSON-RPC 2.0，2024-11-05；13 工具 + 3 资源 + progressToken 进度通知 + 无订阅直达与歧义消解）
-mcp_connect.rs: 本机外部 AI 工具探测与无损写入/移除 MCP 配置（JSON + Codex TOML）
+mcp_connect.rs: 本机 AI 助手接入（优先官方 mcp add/remove，JSON/TOML 兜底 + backup + 启动 repair；保留 Windsurf）
 cli_install.rs: 跨平台 `subpodcast-cli` 软链探测、一键安装与过期自动更新
 model.rs: Show/Episode/Segment/Transcript 契约
 db.rs: SQLite WAL；tr_cache；sync_episodes / dedupe_show_episodes；data_version（跨连接同步）；count_episodes / list_shows.episode_count；listens / recent

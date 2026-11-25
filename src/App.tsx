@@ -35,7 +35,7 @@ import { Splitter } from "./components/Splitter";
 import { remindReview } from "./components/WordsBook";
 import { SelectionTools } from "./components/SelectionTools";
 import { useWords } from "./lib/words";
-import { AgentConnectDialogHost, maybePromptAgentConnect } from "./components/AgentConnectDialog";
+import { AgentConnectDialogHost } from "./components/AgentConnectDialog";
 import { QuotePosterDialogHost } from "./components/QuotePosterDialog";
 import { VideoClipDialogHost } from "./components/VideoClipDialog";
 import { YtEngine } from "./components/YtEngine";
@@ -64,7 +64,6 @@ export default function App() {
       loadFavorites();
       // 预热 iframe API，视频首点少等一轮脚本
       void loadYouTube().catch(() => {});
-      window.setTimeout(() => void maybePromptAgentConnect(), 1200);
       window.setTimeout(() => void remindReview(), 4000);
     });
   }, [init]);

@@ -156,6 +156,19 @@ fn fmt_lrc_time(sec: f64) -> String {
     format!("{m:02}:{s:02}.{rem:02}")
 }
 
+fn ass_text(s: &str) -> String {
+    s.replace(['{', '}'], "").replace("\r\n", "\\N").replace('\n', "\\N")
+}
+
+fn ass_time(t: f64) -> String {
+    let cs = (t.max(0.0) * 100.0).round() as u64;
+    let h = cs / 360_000;
+    let m = (cs / 6_000) % 60;
+    let s = (cs / 100) % 60;
+    let f = cs % 100;
+    format!("{h}:{m:02}:{s:02}.{f:02}")
+}
+
 pub fn render_transcript_text(
     ep: &Episode,
     segs: &[Segment],
@@ -177,6 +190,20 @@ pub fn render_transcript_text(
                 Some(t) if t != orig => vec![t.to_string(), orig.to_string()],
                 _ => vec![orig.to_string()],
             },
+        }
+    };
+    let pick_zh_orig = |i: usize, s: &Segment| -> (Option<String>, String) {
+        let orig = s.text.trim().to_string();
+        let tr = zh
+            .and_then(|arr| arr.get(i))
+            .and_then(|x| x.as_deref())
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .map(str::to_string);
+        match content {
+            "original" => (None, orig),
+            "translation" => (tr.clone().or(Some(orig.clone())), String::new()),
+            _ => (tr, orig),
         }
     };
 
@@ -207,12 +234,55 @@ pub fn render_transcript_text(
             }
             out
         }
-        "lrc" => segs
-            .iter()
-            .enumerate()
-            .map(|(i, s)| format!("[{}]{}", fmt_lrc_time(s.start), pick_lines(i, s).join(" / ")))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        "ass" => {
+            let mut lines = vec![
+                "[Script Info]".into(),
+                format!("Title: {}", ass_text(&ep.title)),
+                "ScriptType: v4.00+".into(),
+                "PlayResX: 1920".into(),
+                "PlayResY: 1080".into(),
+                "WrapStyle: 0".into(),
+                "ScaledBorderAndShadow: yes".into(),
+                String::new(),
+                "[V4+ Styles]".into(),
+                "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding".into(),
+                "Style: Default,PingFang SC,60,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,1,2,80,80,60,1".into(),
+                "Style: Original,Arial,42,&H00E6E6E6,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2.5,1,2,80,80,60,1".into(),
+                String::new(),
+                "[Events]".into(),
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text".into(),
+            ];
+            for (i, s) in segs.iter().enumerate() {
+                let (tr, orig) = pick_zh_orig(i, s);
+                let text = match tr.as_deref().filter(|t| !t.is_empty()) {
+                    Some(zh) if !orig.is_empty() => format!("{}\\N{{\\rOriginal}}{}", ass_text(zh), ass_text(&orig)),
+                    Some(zh) => ass_text(zh),
+                    None => ass_text(&orig),
+                };
+                let style = if tr.as_deref().is_some_and(|t| !t.is_empty()) {
+                    "Default"
+                } else {
+                    "Original"
+                };
+                lines.push(format!(
+                    "Dialogue: 0,{},{},{style},,0,0,0,,{text}",
+                    ass_time(s.start),
+                    ass_time(s.end.max(s.start + 0.5))
+                ));
+            }
+            format!("{}\n", lines.join("\n"))
+        }
+        "lrc" => {
+            let mut lines = vec![format!("[ti:{}]", ep.title)];
+            if let Some(ref show) = ep.show_title {
+                lines.push(format!("[ar:{show}]"));
+            }
+            lines.push("[by:Subpodcast]".into());
+            for (i, s) in segs.iter().enumerate() {
+                lines.push(format!("[{}]{}", fmt_lrc_time(s.start), pick_lines(i, s).join(" / ")));
+            }
+            lines.join("\n")
+        }
         "md" | "markdown" => {
             let mut out = format!("# {}\n", ep.title);
             if let Some(ref show) = ep.show_title {
@@ -335,12 +405,14 @@ async fn find_show_candidates(ctx: &McpCtx, name: &str, limit: usize) -> Result<
             if s.title.to_ascii_lowercase().contains(&ql) {
                 seen_feeds.insert(s.feed_url.clone());
                 let newest = db::list_episodes(&conn, Some(&s.id), 1)?.into_iter().next();
+                let source = if s.kind == "youtube" { "youtube" } else { "podcast" };
                 out.push(json!({
                     "subscribed": true,
                     "id": s.id,
                     "title": s.title,
                     "author": s.author,
                     "kind": s.kind,
+                    "source": source,
                     "feedUrl": s.feed_url,
                     "episodeCount": s.episode_count,
                     "latestEpisode": newest.map(|e| json!({ "id": e.id, "title": e.title, "published": e.published })),
@@ -349,7 +421,7 @@ async fn find_show_candidates(ctx: &McpCtx, name: &str, limit: usize) -> Result<
         }
     }
 
-    // 2. 搜索播客目录（中文查询走 CN，英文走 US）
+    // 2. 目录搜索（YouTube 频道 ∪ Apple 播客；中文查 CN，英文查 US）
     let country = if looks_chinese("", q) { "CN" } else { "US" };
     if let Ok(found) = feeds::search_podcasts(q, country).await {
         for s in found {
@@ -357,12 +429,14 @@ async fn find_show_candidates(ctx: &McpCtx, name: &str, limit: usize) -> Result<
                 continue;
             }
             seen_feeds.insert(s.feed_url.clone());
+            let source = if s.kind == "youtube" { "youtube" } else { "podcast" };
             out.push(json!({
                 "subscribed": false,
                 "id": s.id,
                 "title": s.title,
                 "author": s.author,
                 "kind": s.kind,
+                "source": source,
                 "feedUrl": s.feed_url,
             }));
             if out.len() >= limit {
@@ -1282,7 +1356,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "search_podcasts",
-            "description": "Search the podcast directory by country.",
+            "description": "Search YouTube channels and the Apple Podcasts directory by name. Returns feed URLs (YouTube channel feeds first) to use with preview_show.",
             "inputSchema": {"type": "object", "properties": {"term": {"type": "string"}, "country": {"type": "string", "default": "cn"}}, "required": ["term"]}
         }),
         json!({
@@ -1333,7 +1407,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "find_show",
-            "description": "Find shows by name across subscribed library and podcast directory. If multiple matches could fit, ask the user to choose using the returned details and pass the chosen feedUrl to preview_show or as `reference`.",
+            "description": "Find shows by name (YouTube channels and podcasts), each with source, channel/author, episode count and newest episode. When more than one could fit (look-alike names, or the same show as both a podcast and a YouTube channel), ASK THE USER to choose, showing those details, before going on; then pass the chosen feedUrl to preview_show or as a reference.",
             "inputSchema": {
                 "type": "object",
                 "required": ["name"],
@@ -1375,13 +1449,13 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "get_transcript",
-            "description": "Export episode subtitles as txt, srt, vtt, md, or lrc in bilingual, translation, or original mode.",
+            "description": "Export episode subtitles as txt, srt, vtt, ass, md, or lrc in bilingual, translation, or original mode.",
             "inputSchema": {
                 "type": "object",
                 "required": ["reference"],
                 "properties": {
                     "reference": { "type": "string", "description": REF_DESC },
-                    "format": { "type": "string", "enum": ["txt", "srt", "vtt", "md", "lrc"], "default": "txt" },
+                    "format": { "type": "string", "enum": ["txt", "srt", "vtt", "ass", "md", "lrc"], "default": "txt" },
                     "content": { "type": "string", "enum": ["bilingual", "translation", "original"], "default": "bilingual" }
                 }
             }
@@ -1859,6 +1933,10 @@ mod tests {
         assert!(vtt.starts_with("WEBVTT") && vtt.contains("你好世界") && !vtt.contains("Hello world"));
         let lrc = render_transcript_text(&ep, &segs, None, "lrc", "original");
         assert!(lrc.contains("[00:01.50]Hello world"));
+        let ass = render_transcript_text(&ep, &segs, Some(&zh), "ass", "bilingual");
+        assert!(ass.contains("[V4+ Styles]"));
+        assert!(ass.contains("Dialogue:"));
+        assert!(ass.contains("你好世界"));
     }
 
     #[tokio::test]

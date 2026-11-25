@@ -308,7 +308,10 @@ export const api = {
   cliInstall: () => invoke<CliStatus>("cli_install"),
   mcpAgentsDetect: () => invoke<AgentClientInfo[]>("mcp_agents_detect"),
   mcpAgentsConnect: (ids: string[]) => invoke<AgentClientInfo[]>("mcp_agents_connect", { ids }),
-  mcpAgentDisconnect: (id: string) => invoke<AgentClientInfo[]>("mcp_agent_disconnect", { id }),
+  /** 接入单个助手，返回该助手最新状态（对齐原站 mcp_connect）。 */
+  mcpAgentConnect: (id: string) => invoke<AgentClientInfo>("mcp_agent_connect", { id }),
+  /** 移除单个助手上的声译条目，返回该助手最新状态。 */
+  mcpAgentDisconnect: (id: string) => invoke<AgentClientInfo>("mcp_agent_disconnect", { id }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   /** 本地文件是否仍在。 */
   fileExists: (path: string) => invoke<boolean>("file_exists", { path }),
@@ -331,6 +334,8 @@ export interface AgentClientInfo {
   id: string;
   name: string;
   vendor: string;
+  /** 品牌标 id（如 cli-claude）；缺省时前端按助手 id 映射 */
+  icon?: string;
   installed: boolean;
   connected: boolean;
   needsUpdate: boolean;

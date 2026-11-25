@@ -591,6 +591,12 @@
           "markdownDescription": "Enables the log_listen command without any pre-configured scope."
         },
         {
+          "description": "Enables the mcp_agent_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mcp-agent-connect",
+          "markdownDescription": "Enables the mcp_agent_connect command without any pre-configured scope."
+        },
+        {
           "description": "Enables the mcp_agent_disconnect command without any pre-configured scope.",
           "type": "string",
           "const": "allow-mcp-agent-disconnect",
@@ -1075,6 +1081,12 @@
           "type": "string",
           "const": "deny-log-listen",
           "markdownDescription": "Denies the log_listen command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mcp_agent_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mcp-agent-connect",
+          "markdownDescription": "Denies the mcp_agent_connect command without any pre-configured scope."
         },
         {
           "description": "Denies the mcp_agent_disconnect command without any pre-configured scope.",

@@ -7,7 +7,7 @@ Tauri 2 + React/TypeScript + Rust + SQLite
 
 <directory>
 src/ — WebView 前端（首页/发现/统计/生词本；view⊥current；playSoon 按集起播；MiniPlayer；字幕/ASR/导读/朗读/学英语/高光）
-src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、朗读合成与缓存、收听统计、频道预览、翻译、LLM、SQLite、learn_clip/export_anki、video_clip_*；发行版 localhost UI）
+src-tauri/ — Rust 宿主（订阅、官方字幕、本机 ASR、朗读合成与缓存、收听统计、频道预览、翻译、LLM、SQLite、learn_clip/export_anki、video_clip_*、MCP/CLI 接入；发行版 localhost UI）
 docs/ — PRD / 架构 / 发布说明（RELEASING：macOS 签名公证）
 scripts/ — macos-sign-setup / macos-release（Developer ID + notarytool；凭据在 release/）
 </directory>

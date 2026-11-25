@@ -2027,9 +2027,15 @@ fn mcp_agents_connect(ids: Vec<String>) -> Res<Vec<mcp_connect::AgentClientInfo>
     mcp_connect::connect_clients(&ids).map_err(e)
 }
 
-/// 从指定本机 AI 工具的配置中移除 `subpodcast` MCP 条目（保留其他配置）。
+/// 接入单个助手，返回该助手最新状态（对齐原站 mcp_connect）。
 #[tauri::command]
-fn mcp_agent_disconnect(id: String) -> Res<Vec<mcp_connect::AgentClientInfo>> {
+fn mcp_agent_connect(id: String) -> Res<mcp_connect::AgentClientInfo> {
+    mcp_connect::connect_client(&id).map_err(e)
+}
+
+/// 从指定本机 AI 工具的配置中移除 `subpodcast` MCP 条目，返回该助手最新状态。
+#[tauri::command]
+fn mcp_agent_disconnect(id: String) -> Res<mcp_connect::AgentClientInfo> {
     mcp_connect::disconnect_client(&id).map_err(e)
 }
 
@@ -2992,6 +2998,7 @@ pub fn run() {
             cli_install,
             mcp_agents_detect,
             mcp_agents_connect,
+            mcp_agent_connect,
             mcp_agent_disconnect,
             reveal_file,
             file_exists,
@@ -3019,7 +3026,11 @@ pub fn run() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true);
             builder.build()?;
-            tauri::async_runtime::spawn_blocking(cli_install::ensure_synced);
+            tauri::async_runtime::spawn_blocking(|| {
+                cli_install::ensure_synced();
+                // 应用搬家或 CLI 软链更新后，把各助手里过期的 subpodcast 条目指回当前路径
+                mcp_connect::repair();
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -87,6 +87,8 @@ export interface Settings {
   /** 匿名分享字幕、译文与导读（默认关，用户显式开启后生效；私有源永不上传）。 */
   shareTranscripts: boolean;
   shareTranscriptsAsked?: boolean;
+  /** 启动时是否已提示过「让 AI 助手调用声译」（对齐 SubCast agentsOffered）。 */
+  agentsOffered?: boolean;
   /** 当前使用的朗读引擎。 */
   ttsEngine: string;
   ttsServices: Record<string, TtsService>;
@@ -394,6 +396,7 @@ export const DEFAULTS: Settings = {
   homeBannerHidden: false,
   shareTranscripts: false,
   shareTranscriptsAsked: false,
+  agentsOffered: false,
   ttsEngine: "system",
   ttsServices: Object.fromEntries(TTS_SERVICES.map((service) => [service.id, service])),
   ttsRate: 1,

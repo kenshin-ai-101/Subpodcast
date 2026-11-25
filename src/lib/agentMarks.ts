@@ -13,16 +13,23 @@ const FILES = import.meta.glob("../assets/providers/*.svg", {
 
 const svg = (name: string) => FILES[`../assets/providers/${name}.svg`];
 
-/** 本机助手 id → LobeHub 文件名（无 Cursor / Windsurf 彩色标时回退首字母） */
+/** 后端 icon / 助手 id → LobeHub 文件名（Cursor / Windsurf 无彩色标时回退首字母） */
 const BY_ID: Record<string, string> = {
+  "cli-claude": "claude-color",
+  "cli-codex": "codex-color",
+  "cli-antigravity": "antigravity-color",
+  "cli-gemini": "gemini-color",
+  "cli-qwen": "qwen-color",
+  "cli-kimi": "kimi-color",
+  "cli-opencode": "opencode",
+  anthropic: "claude-color",
   "claude-code": "claude-color",
   "claude-desktop": "claude-color",
   codex: "codex-color",
   antigravity: "antigravity-color",
-  "antigravity-cli": "antigravity-color",
-  "gemini-cli": "gemini-color",
-  kimi: "kimi-color",
+  gemini: "gemini-color",
   qwen: "qwen-color",
+  kimi: "kimi-color",
   opencode: "opencode",
 };
 

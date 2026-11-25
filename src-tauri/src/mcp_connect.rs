@@ -1,7 +1,8 @@
 /**
- * [INPUT]: cli_install（CLI 软链状态与命令路径）、本机 PATH / /Applications / 用户主目录配置
- * [OUTPUT]: AgentClientInfo / detect_clients / connect_clients / disconnect_client — 本机 AI 工具探测与一键写入 MCP 配置
- * [POS]: 桌面首启弹窗与设置页「命令行与 MCP」的后端核心；无损合并 JSON/TOML 配置，永不覆盖用户已有项
+ * [INPUT]: cli_install（CLI 路径）；本机 PATH / 助手可执行文件；用户主目录下各助手配置
+ * [OUTPUT]: AgentClientInfo / detect_clients / connect_clients / disconnect_client / repair —
+ *           优先跑助手自带 `mcp add|remove`，失败再无损改 JSON/TOML；启动时可 repair 过期路径
+ * [POS]: 设置「让 AI 助手调用声译」与启动提示卡的后端；行为对齐 SubCast mcp_targets，保留 Windsurf
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::cli_install;
@@ -9,6 +10,10 @@ use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+const NAME: &str = "subpodcast";
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +21,8 @@ pub struct AgentClientInfo {
     pub id: String,
     pub name: String,
     pub vendor: String,
+    /// 前端品牌标 id（与 ModelSettings / agentMarks 共用映射）
+    pub icon: String,
     pub installed: bool,
     pub connected: bool,
     pub needs_update: bool,
@@ -23,125 +30,56 @@ pub struct AgentClientInfo {
     pub format: String,
 }
 
-#[derive(Clone, Copy)]
-enum ConfigKind {
-    /// 顶层 `mcpServers.subpodcast = { command, args: ["mcp"] }`
-    McpServersJson,
-    /// Claude Code: 顶层 `mcpServers.subpodcast = { type: "stdio", command, args: ["mcp"] }`
-    ClaudeCodeJson,
-    /// OpenCode: 顶层 `mcp.subpodcast = { type: "local", command: [cmd, "mcp"], enabled: true }`
-    OpenCodeJson,
-    /// Codex: `~/.codex/config.toml` 的 `[mcp_servers.subpodcast]` 段
-    CodexToml,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentKind {
+    Claude,
+    Codex,
+    Antigravity,
+    Gemini,
+    Qwen,
 }
 
-struct ClientSpec {
+#[derive(Clone, Copy)]
+enum How {
+    /// 助手自己的 `mcp add/remove`；配置文件只用来读回状态，部分种类失败时再写 JSON
+    Cli(AgentKind),
+    /// `mcpServers.subpodcast = { command, args }`
+    Json,
+    /// Claude Desktop / 手写 Claude：带 `type: "stdio"`
+    ClaudeJson,
+    /// OpenCode：`mcp.subpodcast = { type: local, command: [cmd, mcp] }`
+    OpenCode,
+}
+
+struct Def {
     id: &'static str,
     name: &'static str,
     vendor: &'static str,
-    exe: Option<&'static str>,
-    mac_app: Option<&'static str>,
-    kind: ConfigKind,
+    icon: &'static str,
+    how: How,
 }
 
-const CLIENTS: &[ClientSpec] = &[
-    ClientSpec {
-        id: "claude-code",
-        name: "Claude Code",
-        vendor: "Anthropic",
-        exe: Some("claude"),
-        mac_app: None,
-        kind: ConfigKind::ClaudeCodeJson,
-    },
-    ClientSpec {
-        id: "claude-desktop",
-        name: "Claude Desktop",
-        vendor: "Anthropic",
-        exe: None,
-        mac_app: Some("/Applications/Claude.app"),
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "codex",
-        name: "Codex",
-        vendor: "OpenAI",
-        exe: Some("codex"),
-        mac_app: Some("/Applications/Codex.app"),
-        kind: ConfigKind::CodexToml,
-    },
-    ClientSpec {
-        id: "cursor",
-        name: "Cursor",
-        vendor: "Cursor",
-        exe: Some("cursor"),
-        mac_app: Some("/Applications/Cursor.app"),
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "antigravity",
-        name: "Antigravity",
-        vendor: "Google",
-        exe: None,
-        mac_app: Some("/Applications/Antigravity.app"),
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "antigravity-cli",
-        name: "Antigravity CLI",
-        vendor: "Google",
-        exe: Some("agy"),
-        mac_app: None,
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "gemini-cli",
-        name: "Gemini CLI",
-        vendor: "Google",
-        exe: Some("gemini"),
-        mac_app: None,
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "kimi",
-        name: "Kimi Code",
-        vendor: "Moonshot",
-        exe: Some("kimi"),
-        mac_app: None,
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "qwen",
-        name: "Qwen Code",
-        vendor: "Alibaba",
-        exe: Some("qwen"),
-        mac_app: None,
-        kind: ConfigKind::McpServersJson,
-    },
-    ClientSpec {
-        id: "opencode",
-        name: "OpenCode",
-        vendor: "OpenCode",
-        exe: Some("opencode"),
-        mac_app: None,
-        kind: ConfigKind::OpenCodeJson,
-    },
-    ClientSpec {
-        id: "windsurf",
-        name: "Windsurf",
-        vendor: "Codeium",
-        exe: Some("windsurf"),
-        mac_app: Some("/Applications/Windsurf.app"),
-        kind: ConfigKind::McpServersJson,
-    },
+/// 与 SubCast 目标表对齐，额外保留 Windsurf。
+const DEFS: &[Def] = &[
+    Def { id: "claude-code", name: "Claude Code", vendor: "Anthropic", icon: "cli-claude", how: How::Cli(AgentKind::Claude) },
+    Def { id: "claude-desktop", name: "Claude 桌面版", vendor: "Anthropic", icon: "anthropic", how: How::ClaudeJson },
+    Def { id: "codex", name: "Codex", vendor: "OpenAI", icon: "cli-codex", how: How::Cli(AgentKind::Codex) },
+    Def { id: "antigravity", name: "Antigravity CLI", vendor: "Google", icon: "cli-antigravity", how: How::Cli(AgentKind::Antigravity) },
+    Def { id: "gemini", name: "Gemini CLI", vendor: "Google", icon: "cli-gemini", how: How::Cli(AgentKind::Gemini) },
+    Def { id: "qwen", name: "Qwen Code", vendor: "Alibaba", icon: "cli-qwen", how: How::Cli(AgentKind::Qwen) },
+    Def { id: "kimi", name: "Kimi Code", vendor: "Moonshot", icon: "cli-kimi", how: How::Json },
+    Def { id: "opencode", name: "OpenCode", vendor: "OpenCode", icon: "cli-opencode", how: How::OpenCode },
+    Def { id: "cursor", name: "Cursor", vendor: "Cursor", icon: "cursor", how: How::Json },
+    Def { id: "windsurf", name: "Windsurf", vendor: "Codeium", icon: "windsurf", how: How::Json },
 ];
 
-fn home_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+fn home() -> PathBuf {
+    dirs::home_dir().unwrap_or_default()
 }
 
 fn search_dirs() -> Vec<PathBuf> {
-    let h = home_dir();
-    let mut dirs_list: Vec<PathBuf> = std::env::var_os("PATH")
+    let h = home();
+    let mut v: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     for rel in [
@@ -151,153 +89,318 @@ fn search_dirs() -> Vec<PathBuf> {
         ".npm-global/bin",
         ".cargo/bin",
         ".opencode/bin",
+        ".kimi-code/bin",
         ".volta/bin",
         "bin",
     ] {
-        dirs_list.push(h.join(rel));
+        v.push(h.join(rel));
     }
-    for sys in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
-        dirs_list.push(PathBuf::from(sys));
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        v.push(PathBuf::from(d));
     }
-    dirs_list
+    for base in [h.join(".nvm/versions/node"), h.join(".volta/tools/image/node")] {
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            let mut vers: Vec<PathBuf> = rd.flatten().map(|e| e.path().join("bin")).collect();
+            vers.sort();
+            v.extend(vers.into_iter().rev());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|p| seen.insert(p.clone()));
+    v
 }
 
-fn exe_exists(name: &str) -> bool {
-    let bin = if cfg!(windows) {
-        format!("{name}.exe")
+fn child_path() -> std::ffi::OsString {
+    std::env::join_paths(search_dirs()).unwrap_or_default()
+}
+
+fn exe_name(kind: AgentKind) -> &'static str {
+    match kind {
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+        AgentKind::Antigravity => "agy",
+        AgentKind::Gemini => "gemini",
+        AgentKind::Qwen => "qwen",
+    }
+}
+
+fn find_exe(name: &str) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) {
+        ["exe", "cmd", "bat"].iter().map(|e| format!("{name}.{e}")).collect()
     } else {
-        name.to_string()
+        vec![name.to_string()]
     };
-    search_dirs().into_iter().any(|d| d.join(&bin).is_file())
+    for d in search_dirs() {
+        for n in &names {
+            let p = d.join(n);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
-fn config_path_for(id: &str) -> PathBuf {
-    let h = home_dir();
+fn path_of(kind: AgentKind) -> Option<PathBuf> {
+    find_exe(exe_name(kind))
+}
+
+fn config_path(id: &str) -> PathBuf {
+    let h = home();
     match id {
         "claude-code" => h.join(".claude.json"),
         "claude-desktop" => {
             #[cfg(target_os = "macos")]
             {
-                h.join("Library")
-                    .join("Application Support")
-                    .join("Claude")
-                    .join("claude_desktop_config.json")
+                h.join("Library/Application Support/Claude/claude_desktop_config.json")
             }
             #[cfg(target_os = "windows")]
             {
                 dirs::config_dir()
                     .unwrap_or_else(|| h.clone())
-                    .join("Claude")
-                    .join("claude_desktop_config.json")
+                    .join("Claude/claude_desktop_config.json")
             }
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             {
-                h.join(".config").join("Claude").join("claude_desktop_config.json")
+                h.join(".config/Claude/claude_desktop_config.json")
             }
         }
         "codex" => std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| h.join(".codex"))
             .join("config.toml"),
-        "cursor" => h.join(".cursor").join("mcp.json"),
-        "antigravity" => h.join(".gemini").join("antigravity").join("mcp_config.json"),
-        "kimi" => h.join(".kimi-code").join("mcp.json"),
-        "qwen" => h.join(".qwen").join("settings.json"),
-        "antigravity-cli" => h.join(".gemini").join("config").join("mcp_config.json"),
-        "gemini-cli" => h.join(".gemini").join("settings.json"),
-        "opencode" => h.join(".config").join("opencode").join("opencode.json"),
-        "windsurf" => h.join(".codeium").join("windsurf").join("mcp_config.json"),
-        _ => h.join(format!(".{id}.json")),
+        "antigravity" => h.join(".gemini/config/mcp_config.json"),
+        "gemini" => h.join(".gemini/settings.json"),
+        "qwen" => h.join(".qwen/settings.json"),
+        "kimi" => h.join(".kimi-code/mcp.json"),
+        "opencode" => h.join(".config/opencode/opencode.json"),
+        "cursor" => h.join(".cursor/mcp.json"),
+        "windsurf" => h.join(".codeium/windsurf/mcp_config.json"),
+        _ => PathBuf::new(),
     }
 }
 
-fn is_client_installed(spec: &ClientSpec, cfg_path: &Path) -> bool {
-    if spec.exe.is_some_and(exe_exists) {
-        return true;
-    }
-    #[cfg(target_os = "macos")]
-    if spec.mac_app.is_some_and(|p| Path::new(p).exists()) {
-        return true;
-    }
-    if cfg_path.is_file() {
-        return true;
-    }
-    match spec.id {
-        "claude-code" => home_dir().join(".claude").is_dir(),
-        "codex" => cfg_path.parent().is_some_and(|d| d.is_dir()),
-        "cursor" => home_dir().join(".cursor").is_dir(),
-        "antigravity" => home_dir().join(".gemini").join("antigravity").is_dir(),
-        "opencode" => home_dir().join(".config").join("opencode").is_dir(),
-        "windsurf" => home_dir().join(".codeium").join("windsurf").is_dir(),
-        _ => false,
+fn present(d: &Def) -> bool {
+    match d.how {
+        How::Cli(k) => path_of(k).is_some(),
+        How::Json | How::ClaudeJson | How::OpenCode => match d.id {
+            "claude-desktop" => {
+                (cfg!(target_os = "macos") || cfg!(target_os = "windows"))
+                    && config_path(d.id).parent().is_some_and(|p| p.exists())
+            }
+            "kimi" => find_exe("kimi").is_some(),
+            "opencode" => find_exe("opencode").is_some(),
+            "cursor" => home().join(".cursor").is_dir(),
+            "windsurf" => {
+                find_exe("windsurf").is_some()
+                    || Path::new("/Applications/Windsurf.app").exists()
+                    || home().join(".codeium/windsurf").is_dir()
+            }
+            _ => false,
+        },
     }
 }
 
-fn inspect_connection(kind: ConfigKind, path: &Path, expected_cmd: &str) -> (bool, bool) {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return (false, false);
+fn current_command(id: &str) -> Option<String> {
+    let path = config_path(id);
+    let text = std::fs::read_to_string(&path).ok()?;
+    if id == "codex" {
+        let start = text.find(&format!("[mcp_servers.{NAME}]"))?;
+        let rest = &text[start..];
+        let block = &rest[..rest[1..].find("\n[").map(|i| i + 1).unwrap_or(rest.len())];
+        let line = block.lines().find(|l| l.trim_start().starts_with("command"))?;
+        let raw = line.split_once('=')?.1.trim();
+        let val = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+            raw[1..raw.len() - 1].replace("\\\\", "\\")
+        } else {
+            raw.trim_matches('\'').to_string()
+        };
+        return Some(val);
+    }
+    let v: Value = serde_json::from_str(&text).ok()?;
+    if id == "opencode" {
+        let e = &v["mcp"][NAME];
+        return e["command"][0]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| e.is_object().then(String::new));
+    }
+    let e = &v["mcpServers"][NAME];
+    e["command"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| e.is_object().then(String::new))
+}
+
+/// 配置里写下的 command 是否就是当前这份 CLI（绝对路径 / 软链 / PATH 名 都算对上）。
+fn same_cli(stored: &str, expected: &Path) -> bool {
+    if stored.is_empty() {
+        return false;
+    }
+    let stored_path = Path::new(stored);
+    if stored_path == expected {
+        return true;
+    }
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(stored_path), std::fs::canonicalize(expected)) {
+        return a == b;
+    }
+    // 旧配置可能只写了 PATH 里的 `subpodcast`
+    if stored == "subpodcast" || stored == "subpodcast-cli" {
+        return expected
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "subpodcast" || n == "subpodcast-cli");
+    }
+    false
+}
+
+fn target(d: &Def, cli: &Path) -> AgentClientInfo {
+    let cmd = current_command(d.id);
+    let connected = cmd.is_some();
+    let outdated = cmd.as_deref().is_some_and(|c| !c.is_empty() && !same_cli(c, cli));
+    AgentClientInfo {
+        id: d.id.into(),
+        name: d.name.into(),
+        vendor: d.vendor.into(),
+        icon: d.icon.into(),
+        installed: true,
+        connected,
+        needs_update: outdated,
+        config_path: config_path(d.id).to_string_lossy().into(),
+        format: if d.id == "codex" { "toml".into() } else { "json".into() },
+    }
+}
+
+/// 只读解析当前 CLI 绝对路径（探测 / 比较 outdated 用，不触发安装）。
+fn resolve_cli_path(st: &cli_install::CliStatus) -> PathBuf {
+    if let Some(p) = st.target_path.as_ref().map(PathBuf::from).filter(|p| p.is_file()) {
+        return p;
+    }
+    if let Some(p) = st.link_path.as_ref().map(PathBuf::from) {
+        if let Ok(c) = std::fs::canonicalize(&p) {
+            return c;
+        }
+        if p.is_file() {
+            return p;
+        }
+    }
+    if let Some(p) = st.bundled_path.as_ref().map(PathBuf::from).filter(|p| p.is_file()) {
+        return p;
+    }
+    let cmd = PathBuf::from(&st.command);
+    if cmd.is_file() {
+        return cmd;
+    }
+    find_exe("subpodcast-cli")
+        .or_else(|| find_exe("subpodcast"))
+        .unwrap_or(cmd)
+}
+
+fn expected_cli() -> Result<PathBuf> {
+    let st = match cli_install::install() {
+        Ok(st) => st,
+        Err(_) => cli_install::inspect(),
     };
-    match kind {
-        ConfigKind::McpServersJson | ConfigKind::ClaudeCodeJson => {
-            let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-                return (false, false);
-            };
-            let entry = &v["mcpServers"]["subpodcast"];
-            let Some(cmd) = entry["command"].as_str() else {
-                return (false, false);
-            };
-            let has_mcp = entry["args"]
-                .as_array()
-                .is_some_and(|a| a.first().and_then(Value::as_str) == Some("mcp"));
-            if !has_mcp {
-                return (false, false);
+    if !st.bundled && !st.installed {
+        return Err(anyhow!(
+            "当前未找到 subpodcast-cli 二进制（开发态请先执行 cargo build --bin subpodcast-cli）"
+        ));
+    }
+    // MCP 配置里写入的路径必须是绝对路径，与 detect 用同一套解析，避免接入后误报「需要更新」。
+    Ok(resolve_cli_path(&st))
+}
+
+fn run_cli(exe: &Path, args: &[&str], secs: u64) -> Result<(bool, String)> {
+    let mut c = std::process::Command::new(exe);
+    c.args(args)
+        .env("PATH", child_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if exe.file_stem().is_some_and(|n| n.eq_ignore_ascii_case("agy")) {
+        c.env("AGY_CLI_DISABLE_AUTO_UPDATE", "1");
+    }
+    if let Some(h) = dirs::home_dir() {
+        c.current_dir(h);
+    }
+    let child = c.spawn().with_context(|| format!("无法启动 {}", exe.display()))?;
+    let output = wait_with_timeout(child, secs)?;
+    Ok((
+        output.status.success(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    ))
+}
+
+fn wait_with_timeout(mut child: std::process::Child, secs: u64) -> Result<std::process::Output> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(Into::into),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(anyhow!("助手命令超时（{secs}s）"));
             }
-            (true, cmd != expected_cmd)
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e.into()),
         }
-        ConfigKind::OpenCodeJson => {
-            let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-                return (false, false);
-            };
-            let entry = &v["mcp"]["subpodcast"];
-            let Some(arr) = entry["command"].as_array() else {
-                return (false, false);
-            };
-            let cmd = arr.first().and_then(Value::as_str).unwrap_or("");
-            let sub = arr.get(1).and_then(Value::as_str).unwrap_or("");
-            if cmd.is_empty() || sub != "mcp" {
-                return (false, false);
-            }
-            (true, cmd != expected_cmd)
-        }
-        ConfigKind::CodexToml => inspect_codex_toml(&raw, expected_cmd),
     }
 }
 
-fn inspect_codex_toml(raw: &str, expected_cmd: &str) -> (bool, bool) {
-    let mut in_section = false;
-    let mut found_cmd: Option<String> = None;
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_section = trimmed == "[mcp_servers.subpodcast]";
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("command") {
-            if let Some((_, rhs)) = rest.split_once('=') {
-                let val = rhs.trim().trim_matches('"').trim_matches('\'').to_string();
-                if !val.is_empty() {
-                    found_cmd = Some(val);
-                }
+fn add_args(kind: AgentKind, cli: &str) -> Vec<String> {
+    let v: Vec<&str> = match kind {
+        AgentKind::Claude => vec!["mcp", "add", "--scope", "user", NAME, "--", cli, "mcp"],
+        AgentKind::Codex => vec!["mcp", "add", NAME, "--", cli, "mcp"],
+        AgentKind::Gemini | AgentKind::Qwen => vec!["mcp", "add", "-s", "user", NAME, cli, "mcp"],
+        AgentKind::Antigravity => vec!["mcp", "add", NAME, cli, "mcp"],
+    };
+    v.into_iter().map(String::from).collect()
+}
+
+fn remove_args(kind: AgentKind) -> Vec<&'static str> {
+    match kind {
+        AgentKind::Claude => vec!["mcp", "remove", "--scope", "user", NAME],
+        AgentKind::Gemini | AgentKind::Qwen => vec!["mcp", "remove", "-s", "user", NAME],
+        _ => vec!["mcp", "remove", NAME],
+    }
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext.is_empty() {
+        path.with_extension("subpodcast-backup")
+    } else {
+        path.with_extension(format!("{ext}.subpodcast-backup"))
+    }
+}
+
+/// 改 JSON：坏文件拒写；首次改动留一份 backup；合并写入，不抹其它项。
+fn edit_json(path: &Path, change: impl FnOnce(&mut Value)) -> Result<()> {
+    let mut v: Value = match std::fs::read_to_string(path) {
+        Ok(t) if t.trim().is_empty() => json!({}),
+        Ok(t) => {
+            let parsed: Value = serde_json::from_str(&t)
+                .map_err(|e| anyhow!("{} 不是有效的 JSON，没有改动：{e}", path.display()))?;
+            let backup = backup_path(path);
+            if !backup.exists() {
+                let _ = std::fs::write(&backup, &t);
             }
+            parsed
         }
+        Err(_) => json!({}),
+    };
+    if !v.is_object() {
+        return Err(anyhow!("{} 的格式不认识，没有改动", path.display()));
     }
-    match found_cmd {
-        Some(cmd) => (true, cmd != expected_cmd),
-        None => (false, false),
+    change(&mut v);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
+    atomic_write(path, &(serde_json::to_string_pretty(&v)? + "\n"))
 }
 
 fn atomic_write(path: &Path, content: &str) -> Result<()> {
@@ -313,97 +416,53 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
     })
 }
 
-fn upsert_json_config(path: &Path, kind: ConfigKind, command: &str) -> Result<()> {
-    let mut root: Value = match std::fs::read_to_string(path) {
-        Ok(raw) if !raw.trim().is_empty() => {
-            serde_json::from_str(&raw).with_context(|| format!("配置文件 {} 不是有效的 JSON", path.display()))?
-        }
-        _ => json!({}),
-    };
-    let obj = root
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("配置文件 {} 顶层不是 JSON 对象", path.display()))?;
-
-    match kind {
-        ConfigKind::McpServersJson => {
-            let servers = obj
-                .entry("mcpServers")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("mcpServers 字段格式异常"))?;
-            servers.insert(
-                "subpodcast".into(),
-                json!({ "command": command, "args": ["mcp"] }),
-            );
-        }
-        ConfigKind::ClaudeCodeJson => {
-            let servers = obj
-                .entry("mcpServers")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("mcpServers 字段格式异常"))?;
-            servers.insert(
-                "subpodcast".into(),
-                json!({ "type": "stdio", "command": command, "args": ["mcp"] }),
-            );
-        }
-        ConfigKind::OpenCodeJson => {
-            let mcp = obj
-                .entry("mcp")
-                .or_insert_with(|| json!({}))
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("mcp 字段格式异常"))?;
-            mcp.insert(
-                "subpodcast".into(),
-                json!({ "type": "local", "command": [command, "mcp"], "enabled": true }),
-            );
-        }
-        ConfigKind::CodexToml => unreachable!(),
-    }
-
-    let formatted = format!("{}\n", serde_json::to_string_pretty(&root)?);
-    atomic_write(path, &formatted)
+fn write_mcp_servers(path: &Path, command: &str, with_stdio: bool) -> Result<()> {
+    edit_json(path, |v| {
+        let entry = if with_stdio {
+            json!({ "type": "stdio", "command": command, "args": ["mcp"] })
+        } else {
+            json!({ "command": command, "args": ["mcp"] })
+        };
+        v["mcpServers"][NAME] = entry;
+    })
 }
 
-fn remove_json_config(path: &Path, kind: ConfigKind) -> Result<()> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Ok(());
-    };
-    let Ok(mut root) = serde_json::from_str::<Value>(&raw) else {
-        return Ok(());
-    };
-    let Some(obj) = root.as_object_mut() else {
-        return Ok(());
-    };
-    match kind {
-        ConfigKind::McpServersJson | ConfigKind::ClaudeCodeJson => {
-            if let Some(servers) = obj.get_mut("mcpServers").and_then(Value::as_object_mut) {
-                servers.remove("subpodcast");
-            }
+fn write_opencode(path: &Path, command: &str) -> Result<()> {
+    edit_json(path, |v| {
+        v["mcp"][NAME] = json!({ "type": "local", "command": [command, "mcp"], "enabled": true });
+    })
+}
+
+fn remove_mcp_servers(path: &Path) -> Result<()> {
+    edit_json(path, |v| {
+        if let Some(m) = v["mcpServers"].as_object_mut() {
+            m.remove(NAME);
         }
-        ConfigKind::OpenCodeJson => {
-            if let Some(mcp) = obj.get_mut("mcp").and_then(Value::as_object_mut) {
-                mcp.remove("subpodcast");
-            }
+    })
+}
+
+fn remove_opencode(path: &Path) -> Result<()> {
+    edit_json(path, |v| {
+        if let Some(m) = v["mcp"].as_object_mut() {
+            m.remove(NAME);
         }
-        ConfigKind::CodexToml => unreachable!(),
-    }
-    let formatted = format!("{}\n", serde_json::to_string_pretty(&root)?);
-    atomic_write(path, &formatted)
+    })
 }
 
 fn escape_toml_str(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// 保留用户 `~/.codex/config.toml` 里原有注释与其它段，仅增改或移除 `[mcp_servers.subpodcast]`。
+/// 保留用户 `~/.codex/config.toml` 注释与其它段，仅增改或移除 `[mcp_servers.subpodcast]`。
 pub fn update_codex_toml_content(raw: &str, command: Option<&str>) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut skipping = false;
     for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if trimmed == "[mcp_servers.subpodcast]" || trimmed.starts_with("[mcp_servers.subpodcast.") {
+            if trimmed == format!("[mcp_servers.{NAME}]")
+                || trimmed.starts_with(&format!("[mcp_servers.{NAME}."))
+            {
                 skipping = true;
                 continue;
             }
@@ -422,7 +481,7 @@ pub fn update_codex_toml_content(raw: &str, command: Option<&str>) -> String {
             out.push_str("\n\n");
         }
         out.push_str(&format!(
-            "[mcp_servers.subpodcast]\ncommand = \"{}\"\nargs = [\"mcp\"]\n",
+            "[mcp_servers.{NAME}]\ncommand = \"{}\"\nargs = [\"mcp\"]\n",
             escape_toml_str(cmd)
         ));
     } else if !out.is_empty() {
@@ -433,86 +492,125 @@ pub fn update_codex_toml_content(raw: &str, command: Option<&str>) -> String {
 
 fn upsert_codex_toml(path: &Path, command: &str) -> Result<()> {
     let raw = std::fs::read_to_string(path).unwrap_or_default();
-    let next = update_codex_toml_content(&raw, Some(command));
-    atomic_write(path, &next)
+    if !raw.is_empty() {
+        let backup = backup_path(path);
+        if !backup.exists() {
+            let _ = std::fs::write(&backup, &raw);
+        }
+    }
+    atomic_write(path, &update_codex_toml_content(&raw, Some(command)))
 }
 
 fn remove_codex_toml(path: &Path) -> Result<()> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Ok(());
     };
-    let next = update_codex_toml_content(&raw, None);
-    atomic_write(path, &next)
+    atomic_write(path, &update_codex_toml_content(&raw, None))
 }
 
+/// 本机已装助手及其接入态（未安装的不返回，与原站 list 一致）。
 pub fn detect_clients() -> Vec<AgentClientInfo> {
-    let cli = cli_install::inspect();
-    let expected_cmd = cli.command;
-    CLIENTS
-        .iter()
-        .map(|spec| {
-            let path = config_path_for(spec.id);
-            let installed = is_client_installed(spec, &path);
-            let (connected, needs_update) = inspect_connection(spec.kind, &path, &expected_cmd);
-            AgentClientInfo {
-                id: spec.id.to_string(),
-                name: spec.name.to_string(),
-                vendor: spec.vendor.to_string(),
-                installed,
-                connected,
-                needs_update,
-                config_path: path.to_string_lossy().into_owned(),
-                format: match spec.kind {
-                    ConfigKind::CodexToml => "toml".into(),
-                    _ => "json".into(),
-                },
-            }
-        })
+    let cli_path = resolve_cli_path(&cli_install::inspect());
+    DEFS.iter()
+        .filter(|d| present(d))
+        .map(|d| target(d, &cli_path))
         .collect()
 }
 
-/// 一键连接所选本机 AI 工具：先确保 `subpodcast` CLI 软链已安装，再把 MCP 配置无损写入每个工具的配置。
+fn connect_one(id: &str, cli: &Path) -> Result<AgentClientInfo> {
+    let d = DEFS
+        .iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| anyhow!("未知的 AI 助手：{id}"))?;
+    let c = cli.to_string_lossy().to_string();
+    match d.how {
+        How::Cli(kind) => {
+            let exe = path_of(kind).ok_or_else(|| anyhow!("没有找到 {}", d.name))?;
+            let _ = run_cli(&exe, &remove_args(kind), 30);
+            let add = add_args(kind, &c);
+            let add_ref: Vec<&str> = add.iter().map(String::as_str).collect();
+            let (ok, out) = run_cli(&exe, &add_ref, 60)?;
+            if !ok || current_command(id).is_none() {
+                if matches!(kind, AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Qwen) {
+                    write_mcp_servers(&config_path(id), &c, false)?;
+                } else if matches!(kind, AgentKind::Codex) {
+                    // Codex CLI 失败时仍可直接改 TOML
+                    upsert_codex_toml(&config_path(id), &c)?;
+                } else {
+                    return Err(anyhow!(
+                        "{} 没有接受：{}",
+                        d.name,
+                        out.trim().lines().last().unwrap_or("")
+                    ));
+                }
+            }
+        }
+        How::Json => write_mcp_servers(&config_path(id), &c, false)?,
+        How::ClaudeJson => write_mcp_servers(&config_path(id), &c, true)?,
+        How::OpenCode => write_opencode(&config_path(id), &c)?,
+    }
+    Ok(target(d, cli))
+}
+
+fn disconnect_one(id: &str, cli: &Path) -> Result<AgentClientInfo> {
+    let d = DEFS
+        .iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| anyhow!("未知的 AI 助手：{id}"))?;
+    match d.how {
+        How::Cli(kind) => {
+            let exe = path_of(kind).ok_or_else(|| anyhow!("没有找到 {}", d.name))?;
+            let (ok, out) = run_cli(&exe, &remove_args(kind), 30)?;
+            if current_command(id).is_some() {
+                if matches!(kind, AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Qwen) {
+                    remove_mcp_servers(&config_path(id))?;
+                } else if matches!(kind, AgentKind::Codex) {
+                    remove_codex_toml(&config_path(id))?;
+                } else if !ok {
+                    return Err(anyhow!(
+                        "{} 没有移除：{}",
+                        d.name,
+                        out.trim().lines().last().unwrap_or("")
+                    ));
+                }
+            }
+        }
+        How::Json | How::ClaudeJson => remove_mcp_servers(&config_path(id))?,
+        How::OpenCode => remove_opencode(&config_path(id))?,
+    }
+    Ok(target(d, cli))
+}
+
+/// 接入单个助手，返回该助手最新状态（对齐 SubCast `mcp_connect`）。
+pub fn connect_client(id: &str) -> Result<AgentClientInfo> {
+    let cli = expected_cli()?;
+    connect_one(id, &cli)
+}
+
+/// 一键接入多个：先确保 CLI 软链，再按助手官方方式写入；返回全量列表。
 pub fn connect_clients(ids: &[String]) -> Result<Vec<AgentClientInfo>> {
     if ids.is_empty() {
         return Err(anyhow!("请至少选择一个要连接的 AI 工具"));
     }
-    // 优先尝试安装/更新 CLI 软链，让写入的命令尽量简短且长期有效
-    let cli = match cli_install::install() {
-        Ok(st) => st,
-        Err(_) => cli_install::inspect(),
-    };
-    if !cli.bundled && !cli.installed {
-        return Err(anyhow!(
-            "当前未找到 subpodcast-cli 二进制（开发态请先执行 cargo build --bin subpodcast-cli）"
-        ));
-    }
-    let cmd = cli.command;
-
+    let cli = expected_cli()?;
     for id in ids {
-        let spec = CLIENTS
-            .iter()
-            .find(|c| c.id == id.as_str())
-            .ok_or_else(|| anyhow!("不支持的 AI 工具：{id}"))?;
-        let path = config_path_for(spec.id);
-        match spec.kind {
-            ConfigKind::CodexToml => upsert_codex_toml(&path, &cmd)?,
-            kind => upsert_json_config(&path, kind, &cmd)?,
-        }
+        connect_one(id, &cli)?;
     }
     Ok(detect_clients())
 }
 
-pub fn disconnect_client(id: &str) -> Result<Vec<AgentClientInfo>> {
-    let spec = CLIENTS
-        .iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| anyhow!("不支持的 AI 工具：{id}"))?;
-    let path = config_path_for(spec.id);
-    match spec.kind {
-        ConfigKind::CodexToml => remove_codex_toml(&path)?,
-        kind => remove_json_config(&path, kind)?,
+/// 移除单个助手上的声译条目，返回该助手最新状态（对齐 SubCast `mcp_disconnect`）。
+pub fn disconnect_client(id: &str) -> Result<AgentClientInfo> {
+    let cli = resolve_cli_path(&cli_install::inspect());
+    disconnect_one(id, &cli)
+}
+
+/// 应用搬家或 CLI 路径变更后，把过期条目指回当前 CLI。
+pub fn repair() {
+    let Ok(cli) = expected_cli() else { return };
+    for t in detect_clients().into_iter().filter(|t| t.needs_update) {
+        let _ = connect_one(&t.id, &cli);
     }
-    Ok(detect_clients())
 }
 
 #[cfg(test)]
@@ -520,29 +618,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn json_merge_preserves_other_servers_and_disconnects_cleanly() {
+    fn json_merge_preserves_other_servers_and_backs_up() {
         let dir = std::env::temp_dir().join(format!("subpodcast-mcpc-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("claude.json");
+        let file = dir.join("mcp.json");
         std::fs::write(
             &file,
             r#"{"theme":"dark","mcpServers":{"other":{"command":"npx","args":["foo"]}}}"#,
         )
         .unwrap();
 
-        upsert_json_config(&file, ConfigKind::ClaudeCodeJson, "subpodcast").unwrap();
-        let (conn, outdated) = inspect_connection(ConfigKind::ClaudeCodeJson, &file, "subpodcast");
-        assert!(conn && !outdated);
+        write_mcp_servers(&file, "subpodcast", true).unwrap();
+        assert!(backup_path(&file).exists());
         let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(parsed["theme"], "dark");
         assert_eq!(parsed["mcpServers"]["other"]["command"], "npx");
-        assert_eq!(parsed["mcpServers"]["subpodcast"]["type"], "stdio");
+        assert_eq!(parsed["mcpServers"][NAME]["type"], "stdio");
 
-        remove_json_config(&file, ConfigKind::ClaudeCodeJson).unwrap();
-        let (conn2, _) = inspect_connection(ConfigKind::ClaudeCodeJson, &file, "subpodcast");
-        assert!(!conn2);
+        remove_mcp_servers(&file).unwrap();
         let parsed2: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(parsed2["mcpServers"].get(NAME).is_none());
         assert_eq!(parsed2["mcpServers"]["other"]["command"], "npx");
+
+        std::fs::write(&file, "{ not json").unwrap();
+        assert!(write_mcp_servers(&file, "x", false).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -555,11 +655,6 @@ mod tests {
         assert!(added.contains("[mcp_servers.other]"));
         assert!(added.contains("[mcp_servers.subpodcast]\ncommand = \"subpodcast\"\nargs = [\"mcp\"]"));
 
-        let (conn, outdated) = inspect_codex_toml(&added, "subpodcast");
-        assert!(conn && !outdated);
-        let (_, outdated2) = inspect_codex_toml(&added, "/usr/local/bin/subpodcast");
-        assert!(outdated2);
-
         let updated = update_codex_toml_content(&added, Some("/usr/local/bin/subpodcast"));
         assert_eq!(updated.matches("[mcp_servers.subpodcast]").count(), 1);
         assert!(updated.contains("/usr/local/bin/subpodcast"));
@@ -567,5 +662,33 @@ mod tests {
         let removed = update_codex_toml_content(&updated, None);
         assert!(!removed.contains("subpodcast"));
         assert!(removed.contains("[mcp_servers.other]"));
+    }
+
+    #[test]
+    fn defs_cover_subcast_ids_plus_windsurf() {
+        let ids: Vec<_> = DEFS.iter().map(|d| d.id).collect();
+        for need in [
+            "claude-code",
+            "claude-desktop",
+            "codex",
+            "antigravity",
+            "gemini",
+            "qwen",
+            "kimi",
+            "opencode",
+            "cursor",
+            "windsurf",
+        ] {
+            assert!(ids.contains(&need), "missing {need}");
+        }
+    }
+
+    #[test]
+    fn same_cli_accepts_path_name_and_absolute() {
+        let abs = PathBuf::from("/usr/local/bin/subpodcast");
+        assert!(same_cli("/usr/local/bin/subpodcast", &abs));
+        assert!(same_cli("subpodcast", &abs));
+        assert!(!same_cli("/old/path/subpodcast", &abs));
+        assert!(!same_cli("", &abs));
     }
 }

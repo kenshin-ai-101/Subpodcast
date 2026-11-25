@@ -88,7 +88,7 @@
   "不再显示": "Dismiss",
   "不压片头": "No intro cover",
   "不开中文字幕听的比例，从 {from}% 升到了 {to}%。耳朵在悄悄变好。": "Listening without Chinese subtitles rose from {from}% to {to}%. Your ears are leveling up.",
-  "不用了": "Not now",
+  "不用了": "No thanks",
   "个人成长": "Personal Growth",
   "中文": "Chinese",
   "中文播客": "Chinese Podcasts",
@@ -1261,5 +1261,12 @@
   "指向旧位置的声译，点「更新」修好": "Points at Subpodcast's old location. Click Update to fix",
   "声译只在对方的配置里加一条 subpodcast，原有设置不动；随时可以移除。": "Subpodcast only adds one “subpodcast” entry to their settings and leaves the rest alone. You can remove it anytime.",
   "已接入 {name}，重新打开它就能用": "Connected {name}. Reopen it to start using Subpodcast",
-  "已从 {name} 移除": "Removed from {name}"
+  "已从 {name} 移除": "Removed from {name}",
+  "「总结一下 Lex Fridman 最新一期」「找出这期的高光片段」": "“Summarize Lex Fridman’s latest episode” “Find the highlights”",
+  "接入后，可以直接对它们说：{example}": "Once connected, just tell them: {example}",
+  "发布版才能接入（开发版没有附带命令行程序）。": "Connecting requires a release build (dev builds don’t ship the CLI).",
+  "已接入 {n} 个 AI 助手，重新打开它们就能用": "Connected {n} AI assistants. Reopen them to start using Subpodcast",
+  "已接入 {n} 个，有一个没成功：{error}": "Connected {n}, but one failed: {error}",
+  "已接入 {n} 个。重新打开它们，就能让它们帮你总结、找高光、剪视频。": "Connected {n}. Reopen them to summarize, find highlights, and clip video.",
+  "Claude 桌面版": "Claude Desktop"
 }

@@ -81,6 +81,7 @@ const COMMANDS: &[&str] = &[
     "cli_install",
     "mcp_agents_detect",
     "mcp_agents_connect",
+    "mcp_agent_connect",
     "mcp_agent_disconnect",
     "reveal_file",
     "file_exists",

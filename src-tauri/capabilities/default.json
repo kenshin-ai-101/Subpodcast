@@ -86,6 +86,7 @@
     "allow-cli-install",
     "allow-mcp-agents-detect",
     "allow-mcp-agents-connect",
+    "allow-mcp-agent-connect",
     "allow-mcp-agent-disconnect",
     "allow-reveal-file",
     "allow-file-exists",
