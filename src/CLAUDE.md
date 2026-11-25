@@ -90,11 +90,13 @@ components/AlignBar.tsx: 自动声纹/语音探针对齐进度与手动对齐（
 components/Illustrations.tsx: 空态手绘（WaveToText / Tray / Cassette / Page / Plug / NightNote）
 components/TranscriptPane.tsx: GenCard/导出/学英语/对齐（跨源或时长错位提示条 + 手动滚动暂停跟随与回到当前位置）；panel-bar；按句订阅 active（消费 scrubTime ?? time，拖拽或大幅跳转即时居中定位）；高光
 components/HighlightViews.tsx: HighlightsPanel / SeekHighlights / useClipWarm
-components/VideoClipDialog.tsx: 剪视频工作室（左 WYSIWYG 预览 / 右正片·封面·文案；开窗 auto-prepare 一次、失败不空转重试；预热走 HighlightViews.useClipWarm）；App 挂 VideoClipDialogHost
-lib/webfonts.ts: 封面可选开源中文字体（ensureFont / familyOf）
+components/VideoClipDialog.tsx: 剪视频工作室（视频播客 + 纯音频播客全支持；左 WYSIWYG 预览 / 右正片·封面·文案；开窗 auto-prepare 一次、失败不空转重试；预热走 HighlightViews.useClipWarm）；App 挂 VideoClipDialogHost
+lib/webfonts.ts: 封面与海报可选开源中文字体（ensureFont / familyOf）
 lib/videoClipCanvas.ts: 正片叠层与水印（assets/logo.png +「声译」）
 lib/videoCoverCanvas.ts: 封面模板画布（8 款 + 高亮/字号/字间距）
-components/SelectionTools.tsx: 划词条（复制出处 / 翻译 / 剪视频；不做海报）
+lib/quotePoster.ts: 摘句「分享海报」画布引擎（1080×≥1350 五款主题版式 × 五款开源字体 × 扫码回跳二维码）
+components/QuotePosterDialog.tsx: 分享海报弹窗（整图自适应无滚动预览 + 主题色卡 + 字体选择；App 挂 QuotePosterDialogHost）
+components/SelectionTools.tsx: 划词条（单行排列：复制出处 / 翻译 / 生成海报 / 剪成视频；稳健解析跨行与三击字幕索引）
 components/SubtitleExport.tsx: 字幕导出弹窗（格式 SRT·VTT·ASS·LRC·TXT·MD + 内容模式 + 预览）
 components/EpisodeView.tsx: 打开不抢播；后台配对/字幕；右栏拖宽/收起
 components/DeepRead.tsx: 乔木精读 HTML（右栏精读 Tab）

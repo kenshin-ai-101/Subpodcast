@@ -70,6 +70,7 @@ import {
   type CoverTemplateId,
 } from "../lib/videoCoverCanvas";
 import { type CoverFontId } from "../lib/webfonts";
+import { currentMap, toPlay } from "../lib/timemap";
 import { pauseAudioHost } from "../lib/audioHost";
 import { pauseYoutubeHost } from "../lib/ytHost";
 import { useStore } from "../store";
@@ -675,8 +676,26 @@ function VideoClipDialogBody({
     };
   }, [addSubs, rangesKey, subLang, maxCjk, effectiveSegments, effectiveZh]);
 
-  const posterBackdrop =
+  const rawPosterBackdrop =
     ep.cover || (ep.videoId ? `https://i.ytimg.com/vi/${ep.videoId}/hqdefault.jpg` : undefined);
+  const [safeCoverUrl, setSafeCoverUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setSafeCoverUrl(null);
+    if (!rawPosterBackdrop) return;
+    let alive = true;
+    void api
+      .fetchCoverDataUrl(rawPosterBackdrop)
+      .then((u) => {
+        if (alive && u) setSafeCoverUrl(u);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [rawPosterBackdrop]);
+  const posterBackdrop = safeCoverUrl || rawPosterBackdrop;
+  const hasMediaSource = Boolean(ep.videoId || ep.audioUrl);
+  const audioOnlyClip = !ep.videoId && Boolean(ep.audioUrl);
   const activeFrameIdx =
     selectedFrame != null && prepared?.frames[selectedFrame] != null
       ? selectedFrame
@@ -866,8 +885,8 @@ function VideoClipDialogBody({
   const ensurePrepared = async (force = false): Promise<PreparedState | null> => {
     const cached = preparedRef.current;
     if (!force && cached && cached.key === rangesKey) return cached;
-    if (!ep.videoId) {
-      setError(t("当前单集没有可用视频源"));
+    if (!hasMediaSource) {
+      setError(t("当前单集没有可用音视频源"));
       setErrorKind("prep");
       return null;
     }
@@ -890,9 +909,29 @@ function VideoClipDialogBody({
       setError(null);
       setErrorKind(null);
       setNeedsSetup(false);
-      setBusyJob({ id: jobId, stage: "download", progress: 0.02, message: t("正在获取这一段原视频…") });
+      setBusyJob({
+        id: jobId,
+        stage: "download",
+        progress: 0.02,
+        message: audioOnlyClip ? t("正在获取这一段音频…") : t("正在获取这一段原视频…"),
+      });
       try {
-        const res = await api.videoClipPrepare(jobId, ep.videoId!, start, end, ranges);
+        let res;
+        if (ep.videoId) {
+          res = await api.videoClipPrepare(jobId, ep.videoId, start, end, ranges);
+        } else {
+          // 纯音频单集：若已启用时间对齐映射，把字幕时钟换算成播放音频时钟
+          const tmap = currentMap(ep.id);
+          const mapRange = (a: number, b: number): [number, number] => {
+            if (!tmap) return [a, b];
+            const pa = toPlay(tmap, a);
+            const pb = Math.max(pa + 0.5, toPlay(tmap, b));
+            return [pa, pb];
+          };
+          const [as, ae] = mapRange(start, end);
+          const mappedRanges = ranges?.map(([a, b]) => mapRange(a, b));
+          res = await api.videoClipPrepareAudio(jobId, ep.id, as, ae, mappedRanges);
+        }
         if (closeRequested.current) return null;
         const next: PreparedState = {
           key: jobKey,
@@ -940,13 +979,13 @@ function VideoClipDialogBody({
   useEffect(() => {
     // 已有导出文件：不自动重下原片；用户点「重新剪辑」后再 prepare。
     if (exportGate === "checking" || exportGate === "idle") return;
-    if (!ep.videoId || preparedValid || busyJob || autoPrepared.current === rangesKey) return;
+    if (!hasMediaSource || preparedValid || busyJob || autoPrepared.current === rangesKey) return;
     const timer = window.setTimeout(() => {
       void ensurePrepared();
     }, prepared ? 900 : 150);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangesKey, preparedValid, !!busyJob, ep.videoId, exportGate]);
+  }, [rangesKey, preparedValid, !!busyJob, hasMediaSource, exportGate]);
 
   const runAiPolish = async (fill = false, again = false) => {
     if (polishing) return;
@@ -1421,7 +1460,7 @@ function VideoClipDialogBody({
                   )}
                   {busyJob && busyJob.stage !== "render" && (
                     <div className="vclip-pv-progress" role="status">
-                      <span>{preparing ? t("正在准备高清画面") : busyJob.message}</span>
+                      <span>{preparing ? (audioOnlyClip ? t("正在准备音频画面") : t("正在准备高清画面")) : busyJob.message}</span>
                       <span className="num">{Math.round(busyJob.progress * 100)}%</span>
                       <i style={{ width: `${Math.max(3, busyJob.progress * 100)}%` }} />
                     </div>
@@ -2142,7 +2181,7 @@ function VideoClipDialogBody({
               {error && (
                 <div className="vclip-err-row">
                   <p className="error-text">{error}</p>
-                  {errorKind === "prep" && !needsSetup && !busyJob && !!ep.videoId && !preparedValid && sideTab !== "copy" && (
+                  {errorKind === "prep" && !needsSetup && !busyJob && hasMediaSource && !preparedValid && sideTab !== "copy" && (
                     <button
                       type="button"
                       className="btn sm"

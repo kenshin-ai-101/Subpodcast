@@ -1,9 +1,9 @@
 /**
- * [INPUT]: 依赖 ytdlp（ensure / ytdlp_command / with_bot_fallback）与子模块 ffmpeg / fastclip / inspect / render
+ * [INPUT]: 依赖 ytdlp（ensure / ytdlp_command / with_bot_fallback）、offline / asr / net 与子模块 ffmpeg / fastclip / inspect / render
  * [OUTPUT]: 命令契约 FfmpegStatus / PreparedClip / CueOverlay / Frame / RenderRequest / RenderResult；
- *           env_status、warm、prepare_segment、prepare_montage、render（re-export）
- * [POS]: 「高光」视频切片管线的编排层：取段（缓存 → 覆盖缓存截取 → 快速分片 → yt-dlp 兜底）→ 体检 → 交给 render 合成；
- *        缓存目录 <data>/work/clips/<video_id>/，文件名 <起ms>-<止ms>.mp4，旁路 .lead / .meta.json / .frames.json
+ *           env_status、warm、prepare_segment、prepare_montage、prepare_audio_segment、prepare_audio_montage、fetch_image_data_url、render（re-export）
+ * [POS]: 「高光」与选区视频切片管线的编排层：YouTube 取段与纯音频播客封面+音频成片 → 体检 → 交给 render 合成；
+ *        缓存目录 <data>/work/clips/<video_id|audio-ep>/，文件名 <起ms>-<止ms>.mp4，旁路 .lead / .meta.json / .frames.json
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 mod fastclip;
@@ -724,6 +724,385 @@ pub async fn warm(data: &Path, video_id: &str, ranges: &[(f64, f64)]) {
     for &(a, b) in ranges.iter().take(3) {
         let _ = prepare_segment(data, video_id, a, b, &never, |_, _, _| {}).await;
     }
+}
+
+// ============================================================================
+// 安全封面拉取 & 纯音频播客切片（封面/纯色底 + 音频 → 标准 MP4）
+// ============================================================================
+
+const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+
+fn is_public_http_url(raw: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(raw.trim()) else {
+        return false;
+    };
+    if !matches!(u.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    let h = host.to_ascii_lowercase();
+    if h == "localhost" || h.ends_with(".local") || h == "::1" || h == "[::1]" {
+        return false;
+    }
+    if let Ok(ip) = h.trim_matches(|c| c == '[' || c == ']').parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                !v4.is_private()
+                    && !v4.is_loopback()
+                    && !v4.is_link_local()
+                    && !v4.is_broadcast()
+                    && !v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => !v6.is_loopback() && !v6.is_unspecified(),
+        };
+    }
+    true
+}
+
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 12 {
+        return None;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else {
+        None
+    }
+}
+
+async fn fetch_safe_image(url: &str) -> Option<(Vec<u8>, &'static str)> {
+    let trimmed = url.trim();
+    if !is_public_http_url(trimmed) {
+        return None;
+    }
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        crate::net::get_bytes(trimmed),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+        return None;
+    }
+    let mime = sniff_image_mime(&bytes)?;
+    Some((bytes, mime))
+}
+
+/// 安全获取远程封面图片并转成 data URL，避免 WebView Canvas 跨域污染。
+pub async fn fetch_image_data_url(url: &str) -> Option<String> {
+    use base64::Engine;
+    let (bytes, mime) = fetch_safe_image(url).await?;
+    Some(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    ))
+}
+
+async fn cached_cover_file(dir: &Path, cover_url: Option<&str>) -> Option<PathBuf> {
+    let url = cover_url.map(str::trim).filter(|s| !s.is_empty())?;
+    let key = hex::encode(Sha1::digest(url.as_bytes()));
+    let dest = dir.join(format!("cover-{}.img", &key[..10]));
+    if std::fs::metadata(&dest).is_ok_and(|m| m.is_file() && m.len() > 256) {
+        return Some(dest);
+    }
+    let (bytes, _) = fetch_safe_image(url).await?;
+    let tmp = dest.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+    if tokio::fs::write(&tmp, &bytes).await.is_ok() {
+        if tokio::fs::rename(&tmp, &dest).await.is_ok() {
+            return Some(dest);
+        }
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    None
+}
+
+async fn finish_audio(
+    bin: &Path,
+    clip: &Path,
+    expected: f64,
+    cached: bool,
+    mut on_progress: impl FnMut(&str, f64, &str),
+) -> PreparedClip {
+    on_progress("inspect", 0.94, "正在整理封面画面…");
+    let meta_path = clip.with_extension("meta.json");
+    let frames_path = clip.with_extension("frames.json");
+    let meta = match read_json::<MetaCache>(&meta_path).await {
+        Some(m) => m,
+        None => {
+            let probed = ffmpeg::probe(bin, clip).await;
+            let m = MetaCache {
+                duration: probed.map(|x| x.duration).unwrap_or(expected),
+                width: probed.map_or(1080, |x| x.width),
+                height: probed.map_or(1080, |x| x.height),
+                has_burned_subtitles: false,
+            };
+            write_json(&meta_path, &m).await;
+            m
+        }
+    };
+    let span = meta.duration.max(0.1);
+    let (frames, best_frame) = match read_json::<FramesCache>(&frames_path).await {
+        Some(f) if !f.frames.is_empty() => (f.frames, 0),
+        _ => {
+            let (mut fs, _) = inspect::candidate_frames(bin, clip, 0.0, span.min(1.0)).await;
+            fs.truncate(1);
+            if !fs.is_empty() {
+                write_json(&frames_path, &FramesCache { frames: fs.clone(), best_frame: 0 }).await;
+            }
+            (fs, 0)
+        }
+    };
+    on_progress("done", 1.0, if cached { "已复用缓存片段" } else { "片段已就绪" });
+    PreparedClip {
+        path: clip.to_string_lossy().into_owned(),
+        duration: span,
+        lead: 0.0,
+        width: meta.width,
+        height: meta.height,
+        has_burned_subtitles: false,
+        cached,
+        frames,
+        best_frame,
+    }
+}
+
+fn push_audio_input(args: &mut Vec<String>, source: &str, remote: bool, start: f64, dur: f64) {
+    if remote {
+        args.extend([
+            "-reconnect".into(),
+            "1".into(),
+            "-reconnect_streamed".into(),
+            "1".into(),
+            "-reconnect_on_network_error".into(),
+            "1".into(),
+            "-rw_timeout".into(),
+            "30000000".into(),
+        ]);
+    }
+    args.extend([
+        "-ss".into(),
+        format!("{start:.3}"),
+        "-t".into(),
+        format!("{dur:.3}"),
+        "-i".into(),
+        source.into(),
+    ]);
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn render_audio_clip(
+    bin: &Path,
+    cover: Option<&Path>,
+    audio_source: &str,
+    remote: bool,
+    ranges: &[(f64, f64)],
+    out: &Path,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(f64),
+) -> Result<()> {
+    let total: f64 = ranges.iter().map(|(a, b)| (b - a).max(0.1)).sum();
+    let cover_str = cover.map(|p| p.to_string_lossy().into_owned());
+    let multi = ranges.len() > 1;
+    let build = |use_cover: bool, hw: bool| {
+        let mut a: Vec<String> = vec!["-y".into()];
+        if use_cover {
+            if let Some(ref c) = cover_str {
+                a.extend(["-loop".into(), "1".into(), "-framerate".into(), "25".into(), "-i".into(), c.clone()]);
+            } else {
+                a.extend(["-f".into(), "lavfi".into(), "-i".into(), "color=c=#18171c:s=1080x1080:r=25".into()]);
+            }
+        } else {
+            a.extend(["-f".into(), "lavfi".into(), "-i".into(), "color=c=#18171c:s=1080x1080:r=25".into()]);
+        }
+        for &(start, end) in ranges {
+            push_audio_input(&mut a, audio_source, remote, start.max(0.0), (end - start).max(0.1));
+        }
+        let vf = if use_cover && cover_str.is_some() {
+            "[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080,setsar=1,format=yuv420p[v]"
+        } else {
+            "[0:v]format=yuv420p[v]"
+        };
+        if multi {
+            let mut graph = format!("{vf};");
+            for k in 0..ranges.len() {
+                graph += &format!("[{}:a]", k + 1);
+            }
+            graph += &format!("concat=n={}:v=0:a=1[a]", ranges.len());
+            a.extend([
+                "-filter_complex".into(),
+                graph,
+                "-map".into(),
+                "[v]".into(),
+                "-map".into(),
+                "[a]".into(),
+            ]);
+        } else {
+            a.extend([
+                "-filter_complex".into(),
+                vf.into(),
+                "-map".into(),
+                "[v]".into(),
+                "-map".into(),
+                "1:a:0".into(),
+            ]);
+        }
+        a.extend(["-t".into(), format!("{total:.3}"), "-r".into(), "25".into(), "-g".into(), "50".into()]);
+        a.extend(ffmpeg::h264(hw, ":v", true));
+        a.extend([
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            "192k".into(),
+            "-movflags".into(),
+            "+faststart".into(),
+            out.to_string_lossy().into_owned(),
+        ]);
+        a
+    };
+
+    if cover_str.is_some() {
+        match ffmpeg::encode_h264(bin, None, out, total, cancel, &mut on_progress, |hw| build(true, hw)).await {
+            Ok(()) => return Ok(()),
+            Err(e) if cancel.load(Ordering::Relaxed) => return Err(e),
+            Err(_) => {
+                // 封面图异常（如畸形 WebP/AVIF）时回退深色纯底重试一次
+            }
+        }
+    }
+    ffmpeg::encode_h264(bin, None, out, total, cancel, on_progress, |hw| build(false, hw)).await
+}
+
+/// 纯音频播客取段（单段或多段拼接）：封面/纯色底 + 截取的音频段 → 标准 1080×1080 MP4，无缝接入剪辑工作室。
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_audio_ranges(
+    data: &Path,
+    episode_id: &str,
+    audio_url: &str,
+    cover_url: Option<&str>,
+    ranges: &[(f64, f64)],
+    cancel: Arc<AtomicBool>,
+    mut on_progress: impl FnMut(&str, f64, &str),
+) -> Result<PreparedClip> {
+    if ranges.is_empty() {
+        bail!("片段时间范围无效");
+    }
+    let total: f64 = ranges.iter().map(|(a, b)| b - a).sum();
+    if !(0.5..=900.0).contains(&total) || ranges.iter().any(|(a, b)| b - a < 0.2) {
+        bail!("片段时间范围无效");
+    }
+    let dir = work_dir(data, &format!("audio-{episode_id}"));
+    tokio::fs::create_dir_all(&dir).await?;
+    let dest = if ranges.len() == 1 {
+        let (a, b) = (ms(ranges[0].0), ms(ranges[0].1));
+        dir.join(format!("{a}-{b}.mp4"))
+    } else {
+        let key: Vec<String> = ranges.iter().map(|&(a, b)| format!("{}-{}", ms(a), ms(b))).collect();
+        let digest = hex::encode(Sha1::digest(key.join("_").as_bytes()));
+        dir.join(format!("montage-{}.mp4", &digest[..12]))
+    };
+    let lock = keyed_lock(&dest.to_string_lossy());
+
+    let (bin, cached) = {
+        let _held = lock.lock().await;
+        let bin = ensure_ffmpeg(data, &cancel, &mut on_progress).await?;
+        if usable(&dest) {
+            (bin, true)
+        } else {
+            on_progress("download", 0.14, "正在准备播客封面与音频…");
+            let cover = cached_cover_file(&dir, cover_url).await;
+            if cancel.load(Ordering::Relaxed) {
+                bail!("已取消");
+            }
+            let local_audio = crate::offline::find(data, episode_id)
+                .or_else(|| crate::offline::find_cached(data, episode_id))
+                .map(|s| PathBuf::from(s.path));
+            let tmp = dest.with_extension("part.mp4");
+
+            if let Some(path) = local_audio {
+                on_progress("trim", 0.28, "正在截取音频并生成画面…");
+                render_audio_clip(
+                    &bin,
+                    cover.as_deref(),
+                    &path.to_string_lossy(),
+                    false,
+                    ranges,
+                    &tmp,
+                    &cancel,
+                    |p| on_progress("trim", 0.28 + p * 0.62, "正在截取音频并生成画面…"),
+                )
+                .await?;
+            } else {
+                on_progress("download", 0.22, "正在获取这一段音频…");
+                let direct = render_audio_clip(
+                    &bin,
+                    cover.as_deref(),
+                    audio_url,
+                    true,
+                    ranges,
+                    &tmp,
+                    &cancel,
+                    |p| on_progress("download", 0.22 + p * 0.68, "正在获取这一段音频…"),
+                )
+                .await;
+                match direct {
+                    Ok(()) => {}
+                    Err(e) if cancel.load(Ordering::Relaxed) => return Err(e),
+                    Err(e) => {
+                        eprintln!("Subpodcast: direct audio clip failed, falling back to full download: {e}");
+                        let dl_work = dir.join(format!(".dl-{}", uuid::Uuid::new_v4().simple()));
+                        tokio::fs::create_dir_all(&dl_work).await?;
+                        let fetched = crate::asr::fetch_episode_audio(
+                            data,
+                            &dl_work,
+                            Some(audio_url),
+                            None,
+                            cancel.clone(),
+                            |p| on_progress("download", 0.35 + p.clamp(0.0, 1.0) * 0.40, "正在下载音频…"),
+                        )
+                        .await;
+                        let local = match fetched {
+                            Ok(p) => p,
+                            Err(err) => {
+                                let _ = tokio::fs::remove_dir_all(&dl_work).await;
+                                return Err(err);
+                            }
+                        };
+                        if cancel.load(Ordering::Relaxed) {
+                            let _ = tokio::fs::remove_dir_all(&dl_work).await;
+                            bail!("已取消");
+                        }
+                        on_progress("trim", 0.76, "正在截取音频并生成画面…");
+                        let res = render_audio_clip(
+                            &bin,
+                            cover.as_deref(),
+                            &local.to_string_lossy(),
+                            false,
+                            ranges,
+                            &tmp,
+                            &cancel,
+                            |p| on_progress("trim", 0.76 + p * 0.14, "正在截取音频并生成画面…"),
+                        )
+                        .await;
+                        let _ = tokio::fs::remove_dir_all(&dl_work).await;
+                        res?;
+                    }
+                }
+            }
+            commit(&tmp, &dest, 0.0).await?;
+            (bin, false)
+        }
+    };
+
+    Ok(finish_audio(&bin, &dest, total, cached, &mut on_progress).await)
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ import { initialAudioOnly } from "../media";
 import { anchorAt, toContent, toPlay, type TimeMap } from "../timemap";
 import { filterFuzzy, fuzzyScore } from "../fuzzy";
 import { clampLift, clampScale, resolveOrigScale, resolveSubScale } from "../reading";
+import { extractSelectionQuote } from "../quotePoster";
 
 describe("playback.activeIndex", () => {
   it("finds active segment via binary search with read-ahead lead", () => {
@@ -319,5 +320,52 @@ describe("fuzzy.filterFuzzy", () => {
     const subseq = fuzzyScore("lfp", ["Lex Fridman Podcast"]);
     expect(exact).toBeGreaterThan(subseq);
     expect(subseq).toBeGreaterThan(0);
+  });
+});
+
+describe("quotePoster.extractSelectionQuote", () => {
+  const segs = [
+    { start: 0, end: 5, text: "Great products start with taste." },
+    { start: 5, end: 10, text: "Taste comes from caring about every detail." },
+  ];
+  const zh = ["伟大的产品始于品味。", "品味来自对每个细节的在意。"];
+
+  it("extracts clean bilingual pair for multi-line subtitle selections with timestamps", () => {
+    const res = extractSelectionQuote({
+      selectedText: "00:00\n伟大的产品始于品味。\nGreat products start with taste.\n00:05\n品味来自对每个细节的在意。",
+      segments: segs,
+      zh,
+      startIdx: 0,
+      endIdx: 1,
+    });
+    expect(res.primary).toBe("伟大的产品始于品味。品味来自对每个细节的在意。");
+    expect(res.original).toBe("Great products start with taste. Taste comes from caring about every detail.");
+    expect(res.needsTranslation).toBe(false);
+  });
+
+  it("preserves partial single-line selection without expanding to whole line", () => {
+    const res = extractSelectionQuote({
+      selectedText: "start with taste",
+      segments: segs,
+      zh,
+      startIdx: 0,
+      endIdx: 0,
+    });
+    expect(res.primary).toBe("start with taste");
+    expect(res.original).toBe("start with taste");
+    expect(res.needsTranslation).toBe(true);
+  });
+
+  it("handles Chinese-only subtitle selections without requesting translation", () => {
+    const cnSegs = [{ start: 0, end: 4, text: "长期主义不是口号，而是每天的选择。" }];
+    const res = extractSelectionQuote({
+      selectedText: "00:00 长期主义不是口号，而是每天的选择。",
+      segments: cnSegs,
+      startIdx: 0,
+      endIdx: 0,
+    });
+    expect(res.primary).toBe("长期主义不是口号，而是每天的选择。");
+    expect(res.original).toBe("");
+    expect(res.needsTranslation).toBe(false);
   });
 });

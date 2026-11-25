@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts
- * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / reveal_file）与启动
+ * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / fetch_cover_data_url / reveal_file）与启动
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -1934,6 +1934,65 @@ async fn video_clip_prepare(
     result.map_err(e)
 }
 
+/// 高光/选区切片：纯音频播客取段（封面/深色底 + 截取音频 → MP4），可 cancel_job(jobId)。
+#[tauri::command]
+async fn video_clip_prepare_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+    episode_id: String,
+    start: f64,
+    end: f64,
+    ranges: Option<Vec<(f64, f64)>>,
+) -> Res<videoclip::PreparedClip> {
+    let (audio_url, cover_url) = {
+        let conn = state.db.lock().map_err(e)?;
+        let ep = db::get_episode(&conn, &episode_id)
+            .map_err(e)?
+            .ok_or_else(|| "单集不存在".to_string())?;
+        let audio = ep
+            .audio_url
+            .filter(|u| !u.trim().is_empty())
+            .ok_or_else(|| "当前单集没有可用音频源".to_string())?;
+        let cover = ep
+            .cover
+            .filter(|c| !c.trim().is_empty())
+            .or_else(|| {
+                db::get_show(&conn, &ep.show_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.cover)
+                    .filter(|c| !c.trim().is_empty())
+            });
+        (audio, cover)
+    };
+    let guard = begin_job(&state, &job_id);
+    let cancel = guard.cancel_flag();
+    let data = state.data.clone();
+    let report = clip_progress(&app, &job_id);
+    let list = match ranges.filter(|r| r.len() > 1) {
+        Some(r) => r,
+        None => vec![(start, end)],
+    };
+    videoclip::prepare_audio_ranges(
+        &data,
+        &episode_id,
+        &audio_url,
+        cover_url.as_deref(),
+        &list,
+        cancel,
+        report,
+    )
+    .await
+    .map_err(e)
+}
+
+/// 安全获取远程封面图片的 data URL，供摘句海报与切片封面画布无 CORS 污染绘制。
+#[tauri::command]
+async fn fetch_cover_data_url(url: String) -> Res<Option<String>> {
+    Ok(videoclip::fetch_image_data_url(&url).await)
+}
+
 /// 高光切片：叠字幕 / 标题 / 封面并导出 MP4，可 cancel_job(jobId)。
 #[tauri::command]
 async fn video_clip_render(
@@ -2885,7 +2944,9 @@ pub fn run() {
             video_clip_env,
             video_clip_warm,
             video_clip_prepare,
+            video_clip_prepare_audio,
             video_clip_render,
+            fetch_cover_data_url,
             reveal_file,
             file_exists,
             clipboard_write,

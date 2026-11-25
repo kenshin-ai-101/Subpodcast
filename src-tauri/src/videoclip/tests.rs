@@ -29,6 +29,69 @@ fn slug_and_covering_cache() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+#[test]
+fn image_url_and_mime_guards() {
+    assert!(is_public_http_url("https://image.xyzcdn.net/cover.jpg"));
+    assert!(!is_public_http_url("http://127.0.0.1/a.png"));
+    assert!(!is_public_http_url("http://localhost:8080/a.png"));
+    assert!(!is_public_http_url("https://192.168.1.5/a.png"));
+    assert!(!is_public_http_url("file:///etc/passwd"));
+
+    assert_eq!(sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0]), Some("image/jpeg"));
+    assert_eq!(sniff_image_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]), Some("image/png"));
+    assert_eq!(sniff_image_mime(b"RIFF\x00\x00\x00\x00WEBP"), Some("image/webp"));
+    assert_eq!(sniff_image_mime(b"<html>not img</html>"), None);
+}
+
+#[tokio::test]
+async fn offline_audio_clip_smoke() {
+    let data = temp("aclip");
+    let Some(bin) = ffmpeg::find(&data) else { return };
+    let dl = crate::offline::dir(&data);
+    std::fs::create_dir_all(&dl).unwrap();
+    let audio_path = dl.join("ep-audio.m4a");
+    let made = std::process::Command::new(&bin)
+        .args([
+            "-v", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+            "-c:a", "aac",
+        ])
+        .arg(&audio_path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    let never = Arc::new(AtomicBool::new(false));
+    let clip = prepare_audio_ranges(
+        &data,
+        "ep-audio",
+        "https://example.com/unused.m4a",
+        None,
+        &[(0.5, 2.5)],
+        never.clone(),
+        |_, _, _| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!((clip.width, clip.height, clip.has_burned_subtitles), (1080, 1080, false));
+    assert!((clip.duration - 2.0).abs() < 0.3, "{}", clip.duration);
+    assert!(!clip.frames.is_empty());
+
+    let cached = prepare_audio_ranges(
+        &data,
+        "ep-audio",
+        "https://example.com/unused.m4a",
+        None,
+        &[(0.5, 2.5)],
+        never,
+        |_, _, _| {},
+    )
+    .await
+    .unwrap();
+    assert!(cached.cached);
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 fn png(bin: &Path, spec: &str) -> String {
     let out = std::process::Command::new(bin)
         .args(["-v", "error", "-f", "lavfi", "-i", spec, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"])

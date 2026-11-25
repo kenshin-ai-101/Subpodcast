@@ -1322,9 +1322,9 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
                     <button type="button" className="link-btn" onClick={() => onHlPreview(hl)}>
                       <Play size={11} fill="currentColor" /> {t("试看")}
                     </button>
-                    {episode.videoId && (
+                    {(episode.videoId || episode.audioUrl) && (
                       <button type="button" className="link-btn hl-clip-btn" onClick={() => onHlClip(hl)}>
-                        <Scissors size={11} /> {t("剪视频")}
+                        <Scissors size={11} /> {t("剪成视频")}
                       </button>
                     )}
                   </div>

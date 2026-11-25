@@ -33,6 +33,7 @@ import { ShowView } from "./components/ShowView";
 import { Splitter } from "./components/Splitter";
 import { remindReview } from "./components/WordsBook";
 import { SelectionTools } from "./components/SelectionTools";
+import { QuotePosterDialogHost } from "./components/QuotePosterDialog";
 import { VideoClipDialogHost } from "./components/VideoClipDialog";
 import { YtEngine } from "./components/YtEngine";
 
@@ -329,6 +330,9 @@ export default function App() {
       </Suspense>
       <ErrorBoundary fallbackTitle={t("剪辑工作室加载异常")}>
         <VideoClipDialogHost />
+      </ErrorBoundary>
+      <ErrorBoundary fallbackTitle={t("海报生成加载异常")}>
+        <QuotePosterDialogHost />
       </ErrorBoundary>
       <ShortcutsHelpModal />
       <SelectionTools />

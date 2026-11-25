@@ -447,6 +447,12 @@
           "markdownDescription": "Enables the export_opml command without any pre-configured scope."
         },
         {
+          "description": "Enables the fetch_cover_data_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fetch-cover-data-url",
+          "markdownDescription": "Enables the fetch_cover_data_url command without any pre-configured scope."
+        },
+        {
           "description": "Enables the fetch_official_transcript command without any pre-configured scope.",
           "type": "string",
           "const": "allow-fetch-official-transcript",
@@ -759,6 +765,12 @@
           "markdownDescription": "Enables the video_clip_prepare command without any pre-configured scope."
         },
         {
+          "description": "Enables the video_clip_prepare_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-video-clip-prepare-audio",
+          "markdownDescription": "Enables the video_clip_prepare_audio command without any pre-configured scope."
+        },
+        {
           "description": "Enables the video_clip_render command without any pre-configured scope.",
           "type": "string",
           "const": "allow-video-clip-render",
@@ -883,6 +895,12 @@
           "type": "string",
           "const": "deny-export-opml",
           "markdownDescription": "Denies the export_opml command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fetch_cover_data_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fetch-cover-data-url",
+          "markdownDescription": "Denies the fetch_cover_data_url command without any pre-configured scope."
         },
         {
           "description": "Denies the fetch_official_transcript command without any pre-configured scope.",
@@ -1195,6 +1213,12 @@
           "type": "string",
           "const": "deny-video-clip-prepare",
           "markdownDescription": "Denies the video_clip_prepare command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the video_clip_prepare_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-video-clip-prepare-audio",
+          "markdownDescription": "Denies the video_clip_prepare_audio command without any pre-configured scope."
         },
         {
           "description": "Denies the video_clip_render command without any pre-configured scope.",

@@ -78,7 +78,9 @@
     "allow-video-clip-env",
     "allow-video-clip-warm",
     "allow-video-clip-prepare",
+    "allow-video-clip-prepare-audio",
     "allow-video-clip-render",
+    "allow-fetch-cover-data-url",
     "allow-reveal-file",
     "allow-file-exists",
     "allow-clipboard-write"

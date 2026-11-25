@@ -286,8 +286,23 @@ export const api = {
       end,
       ranges: ranges ?? null,
     }),
+  videoClipPrepareAudio: (
+    jobId: string,
+    episodeId: string,
+    start: number,
+    end: number,
+    ranges?: [number, number][],
+  ) =>
+    invoke<PreparedClip>("video_clip_prepare_audio", {
+      jobId,
+      episodeId,
+      start,
+      end,
+      ranges: ranges ?? null,
+    }),
   videoClipRender: (jobId: string, req: RenderVideoClipRequest) =>
     invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
+  fetchCoverDataUrl: (url: string) => invoke<string | null>("fetch_cover_data_url", { url }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   /** 本地文件是否仍在。 */
   fileExists: (path: string) => invoke<boolean>("file_exists", { path }),

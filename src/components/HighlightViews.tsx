@@ -264,7 +264,7 @@ export function HighlightsPanel({
           {t("共 {n} 段高光", { n: clips.length })}{bundle.intent ? ` · ${bundle.intent}` : ""}
         </span>
         <span className="spacer" />
-        {ep.videoId && clips.length > 1 && !picking && (
+        {(ep.videoId || ep.audioUrl) && clips.length > 1 && !picking && (
           <>
             <button
               type="button"
@@ -406,7 +406,7 @@ export function HighlightsPanel({
                   >
                     <Play size={12} fill="currentColor" /> {t("试看")}
                   </button>
-                  {ep.videoId && (
+                  {(ep.videoId || ep.audioUrl) && (
                     <button
                       type="button"
                       className={`btn sm ${c.exportPath ? "ghost" : "primary"}`}
