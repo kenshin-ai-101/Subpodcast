@@ -90,7 +90,8 @@
     "allow-mcp-agent-disconnect",
     "allow-reveal-file",
     "allow-file-exists",
-    "allow-clipboard-write"
+    "allow-clipboard-write",
+    "allow-network-check"
   ],
   "remote": {
     "urls": [

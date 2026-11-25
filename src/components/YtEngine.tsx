@@ -184,8 +184,18 @@ export function YtEngine() {
       },
       toggle() {
         if (!window.YT) return;
-        if (p.getPlayerState() === window.YT.PlayerState.PLAYING) p.pauseVideo();
-        else {
+        const st = p.getPlayerState();
+        const loading = !!useStore.getState().loadingSince;
+        // PLAYING / BUFFERING / 仍在 loadingSince → 暂停（加载中点一下即取消）
+        if (
+          st === window.YT.PlayerState.PLAYING ||
+          st === window.YT.PlayerState.BUFFERING ||
+          loading
+        ) {
+          p.pauseVideo();
+          waiting(false);
+          useStore.getState().set({ playWhenReady: null, playing: false });
+        } else {
           waiting(true);
           p.playVideo();
         }

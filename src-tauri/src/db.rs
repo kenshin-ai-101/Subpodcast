@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 model、rusqlite
- * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / dedupe_show_episodes；count_episodes / list_shows.episode_count
+ * [OUTPUT]: shows/episodes/transcripts/blobs/settings/tr_cache/listens；sync_episodes / clear_show_videos / set_duration / fill_video_duration / dedupe_show_episodes；count_episodes / list_shows.episode_count
  * [POS]: 本机持久化唯一入口；upsert_show 同步 kind/feed_url；刷新用 sync 删孤儿；侧栏数量=入库 COUNT（全量）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -481,6 +481,40 @@ pub fn set_video_id(conn: &Connection, id: &str, video_id: &str) -> Result<()> {
             format!("https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"),
             id
         ],
+    )?;
+    Ok(())
+}
+
+/// 仅在尚无正时长时写入（RSS/Atom 常缺 duration）。
+pub fn set_duration(conn: &Connection, id: &str, seconds: f64) -> Result<()> {
+    if seconds <= 0.0 || !seconds.is_finite() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE episodes SET duration=?1 WHERE id=?2 AND COALESCE(duration, 0) <= 0",
+        params![seconds, id],
+    )?;
+    Ok(())
+}
+
+/// 按 video_id 给缺时长的集回填（同视频可挂多行）。
+pub fn fill_video_duration(conn: &Connection, video_id: &str, seconds: f64) -> Result<usize> {
+    if seconds <= 0.0 || !seconds.is_finite() {
+        return Ok(0);
+    }
+    Ok(conn.execute(
+        "UPDATE episodes SET duration=?2 WHERE video_id=?1 AND COALESCE(duration, 0) <= 0",
+        params![video_id, seconds],
+    )?)
+}
+
+/// 权威视频检查后清掉该节目下陈旧 video_id（及 yt 方图封面），再由 sync 写入新值。
+pub fn clear_show_videos(conn: &Connection, show_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE episodes SET video_id=NULL,
+         cover=CASE WHEN cover LIKE 'https://i.ytimg.com/%' THEN NULL ELSE cover END
+         WHERE show_id=?1 AND video_id IS NOT NULL AND video_id != ''",
+        [show_id],
     )?;
     Ok(())
 }

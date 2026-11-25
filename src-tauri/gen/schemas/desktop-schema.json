@@ -615,6 +615,12 @@
           "markdownDescription": "Enables the mcp_agents_detect command without any pre-configured scope."
         },
         {
+          "description": "Enables the network_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-network-check",
+          "markdownDescription": "Enables the network_check command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_data_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-data-folder",
@@ -1105,6 +1111,12 @@
           "type": "string",
           "const": "deny-mcp-agents-detect",
           "markdownDescription": "Denies the mcp_agents_detect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the network_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-network-check",
+          "markdownDescription": "Denies the network_check command without any pre-configured scope."
         },
         {
           "description": "Denies the open_data_folder command without any pre-configured scope.",

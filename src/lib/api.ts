@@ -1,6 +1,6 @@
 /**
  * [INPUT]: @tauri-apps/api invoke
- * [OUTPUT]: 类型化后端命令封装（含 shared_* / learnClip / 朗读合成与存储 / clearDownloads / 高光 videoClip* / revealFile / clipboardWrite）
+ * [OUTPUT]: 类型化后端命令封装（含 shared_* / learnClip / 朗读合成与存储 / clearDownloads / 高光 videoClip* / revealFile / clipboardWrite / networkCheck）
  * [POS]: 前后端边界；字段名与 Rust camelCase 对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -112,6 +112,20 @@ export interface PreviewShow {
   show: Show;
   episodes: Episode[];
   fetchedAt: number;
+}
+
+/** 网络诊断单行（src-tauri network_check）。 */
+export interface NetCheck {
+  name: string;
+  ok: boolean;
+  ms?: number | null;
+  detail: string;
+}
+
+export interface NetworkReport {
+  checks: NetCheck[];
+  /** subpodcast | system | restart | unsupported-os | unsupported-proxy */
+  webviewProxy: string;
 }
 
 export const api = {
@@ -317,6 +331,8 @@ export const api = {
   fileExists: (path: string) => invoke<boolean>("file_exists", { path }),
   /** 系统剪贴板（不依赖 WebView 用户手势）。 */
   clipboardWrite: (text: string) => invoke<void>("clipboard_write", { text }),
+  /** 后端代理可达性 + WebView 代理状态；前端再补播放器侧探测。 */
+  networkCheck: () => invoke<NetworkReport>("network_check"),
 };
 
 export interface CliStatus {

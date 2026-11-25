@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts
- * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / fetch_cover_data_url / reveal_file）与启动
+ * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts/netcheck/video_duration
+ * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / fetch_cover_data_url / reveal_file / network_check）与启动；WebView 代理；开集补 video_id 时长
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -10,6 +10,7 @@ pub mod asr;
 mod captions;
 pub mod cli_install;
 mod clip;
+mod curated_video;
 mod db;
 mod edge_gec;
 mod edge_tts;
@@ -21,6 +22,7 @@ pub mod mcp;
 mod mcp_connect;
 mod model;
 mod net;
+mod netcheck;
 mod offline;
 mod qiaomu;
 mod secrets;
@@ -29,6 +31,7 @@ mod speech;
 mod translate;
 mod tts;
 mod ui;
+mod video_duration;
 mod videoclip;
 mod ytdlp;
 
@@ -277,11 +280,55 @@ fn data_dir() -> PathBuf {
         .join("Subpodcast")
 }
 
+fn maybe_clear_stale_videos(
+    conn: &rusqlite::Connection,
+    show_id: &str,
+    feed_url: &str,
+    title: &str,
+    videos_checked: bool,
+) {
+    let source = qiaomu::rss_source_id(feed_url)
+        .or_else(|| qiaomu::site_id(feed_url))
+        .or_else(|| {
+            feeds::qiaomu_preferred_source(feed_url, title).map(|s| s.to_string())
+        });
+    let audio_only = source
+        .as_deref()
+        .is_some_and(curated_video::is_audio_only);
+    if videos_checked || audio_only {
+        let _ = db::clear_show_videos(conn, show_id);
+    }
+}
+
+fn clear_audio_only_on_startup(conn: &rusqlite::Connection) {
+    let Ok(shows) = db::list_shows(conn) else { return };
+    for s in shows {
+        if s.kind != "qiaomu" {
+            continue;
+        }
+        let src = qiaomu::rss_source_id(&s.feed_url)
+            .or_else(|| qiaomu::site_id(&s.feed_url))
+            .or_else(|| {
+                feeds::qiaomu_preferred_source(&s.feed_url, &s.title).map(|x| x.to_string())
+            });
+        if src.as_deref().is_some_and(curated_video::is_audio_only) {
+            let _ = db::clear_show_videos(conn, &s.id);
+        }
+    }
+}
+
 #[tauri::command]
 async fn add_subscription(state: State<'_, AppState>, input: String) -> Res<Show> {
     let resolved = feeds::resolve(&input).await.map_err(e)?;
     let mut conn = state.db.lock().map_err(e)?;
     db::upsert_show(&conn, &resolved.show).map_err(e)?;
+    maybe_clear_stale_videos(
+        &conn,
+        &resolved.show.id,
+        &resolved.show.feed_url,
+        &resolved.show.title,
+        resolved.videos_checked,
+    );
     if resolved.catalog_partial {
         db::upsert_episodes(&mut conn, &resolved.episodes).map_err(e)?;
     } else {
@@ -335,6 +382,13 @@ async fn refresh_show(state: State<'_, AppState>, show_id: String) -> Res<u32> {
     db::upsert_show(&conn, &show).map_err(e)?;
     let mut eps = resolved.episodes;
     feeds::rebind_episodes(&mut eps, &show_id);
+    maybe_clear_stale_videos(
+        &conn,
+        &show_id,
+        &show.feed_url,
+        &show.title,
+        resolved.videos_checked,
+    );
     // 半量目录只合并，避免把本地已有旧集当孤儿删掉。
     if resolved.catalog_partial {
         db::upsert_episodes(&mut conn, &eps).map_err(e)?;
@@ -669,6 +723,18 @@ async fn fetch_official_transcript(
                 let _ = db::set_video_id(&conn, &ep.id, &vid);
             }
             ep.video_id = Some(vid);
+        }
+    }
+    // video_id 已有 / 刚挂上但 RSS 无时长 → 预填，避免进度条长期 --:--
+    if ep.duration.map(|d| !(d > 0.0)).unwrap_or(true) {
+        if let Some(vid) = ep.video_id.clone().filter(|v| !v.is_empty()) {
+            if let Some(secs) = video_duration::fetch(&vid, Some(&state.data)).await {
+                if let Ok(conn) = state.db.lock() {
+                    let _ = db::set_duration(&conn, &ep.id, secs);
+                    let _ = db::fill_video_duration(&conn, &vid, secs);
+                }
+                ep.duration = Some(secs);
+            }
         }
     }
 
@@ -1036,9 +1102,85 @@ fn set_settings(state: State<'_, AppState>, value: String) -> Res<()> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&value) {
         let proxy = v.get("proxy").and_then(|x| x.as_str()).map(str::to_string);
         net::set_proxy(proxy).map_err(|err| format!("代理设置无效：{err}"))?;
+        // WebView 代理在窗口创建时锁定；改完后需重启才会套到 iframe。HTTP 客户端已即时生效。
     }
     let conn = state.db.lock().map_err(e)?;
     db::set_setting(&conn, "app", &value).map_err(e)
+}
+
+/// 启动时锁定的 WebView 代理（YouTube iframe 走它）。改设置后需重启才更新。
+static WEBVIEW_PROXY: std::sync::OnceLock<Option<tauri::Url>> = std::sync::OnceLock::new();
+
+/// 设置里的代理给主窗口 WebView 用。未设置则走系统代理。
+fn webview_proxy() -> Option<tauri::Url> {
+    WEBVIEW_PROXY
+        .get_or_init(|| parse_webview_proxy(&net::proxy()).ok())
+        .clone()
+}
+
+/// 解析为 WebView 可用的代理 URL；失败原因：none / unsupported-proxy / unsupported-os。
+fn parse_webview_proxy(raw: &str) -> Result<tauri::Url, &'static str> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("none");
+    }
+    let s = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
+    };
+    let url: tauri::Url = s.parse().map_err(|_| "unsupported-proxy")?;
+    if !matches!(url.scheme(), "http" | "socks5") || url.host().is_none() || url.port().is_none() {
+        return Err("unsupported-proxy");
+    }
+    #[cfg(target_os = "macos")]
+    if macos_major() < 14 {
+        return Err("unsupported-os");
+    }
+    Ok(url)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_major() -> u32 {
+    std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .split('.')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .unwrap_or(0)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkReport {
+    checks: Vec<netcheck::Check>,
+    /// subpodcast | system | restart | unsupported-os | unsupported-proxy
+    webview_proxy: &'static str,
+}
+
+#[tauri::command]
+async fn network_check(state: State<'_, AppState>) -> Res<NetworkReport> {
+    let data = state.data.clone();
+    let checks = netcheck::run(&data).await;
+    let applied = webview_proxy();
+    let webview_proxy = match parse_webview_proxy(&net::proxy()) {
+        Ok(now) if applied.as_ref() == Some(&now) => "subpodcast",
+        Ok(_) => "restart",
+        Err("none") if applied.is_some() => "restart",
+        Err("none") => "system",
+        Err(why) => why,
+    };
+    Ok(NetworkReport {
+        checks,
+        webview_proxy,
+    })
 }
 
 #[tauri::command(async)]
@@ -2911,6 +3053,15 @@ pub fn run() {
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|v| v.get("proxy").and_then(|x| x.as_str()).map(str::to_string));
     let _ = net::set_proxy(startup_proxy);
+    // 纯音频精读源：清掉历史上误绑的 1:1 封面片
+    clear_audio_only_on_startup(&conn);
+    if let Ok(Some(raw)) = db::get_setting(&conn, "app") {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(cy) = v.get("curatedYoutube") {
+                curated_video::set_overrides(cy);
+            }
+        }
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -3003,6 +3154,7 @@ pub fn run() {
             reveal_file,
             file_exists,
             clipboard_write,
+            network_check,
         ])
         .setup(|app| {
             // 开发：Vite；发行：http://localhost（YouTube 拒绝 tauri://）
@@ -3021,6 +3173,11 @@ pub fn run() {
                 .title("Subpodcast · 声译")
                 .inner_size(1280.0, 840.0)
                 .min_inner_size(960.0, 640.0);
+            // YouTube iframe 只跟 WebView 代理；与设置里的 HTTP 客户端代理对齐（启动时锁定）。
+            let builder = match webview_proxy() {
+                Some(p) => builder.proxy_url(p),
+                None => builder,
+            };
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)

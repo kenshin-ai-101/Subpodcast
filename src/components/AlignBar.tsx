@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store.align / current / settings.skipAds；event align；timemap.alignCurrent / setManualMap / nudgeFromHere / gaps
- * [OUTPUT]: AlignBar — 字幕对齐条（自动声纹/语音探针对齐 / 点句锚点 / ±1s / 恢复 / 跳广告）
+ * [INPUT]: store.align / current / time / settings.skipAds；event align；timemap.alignCurrent / setManualMap / nudgeFromHere / gaps / toPlay
+ * [OUTPUT]: AlignBar — 字幕对齐条（自动声纹/语音探针对齐 / 点句锚点 / ±1s / 偏移徽章 / 恢复 / 跳广告）
  * [POS]: 字幕面板顶栏；HTMLAudio 播音轨时可用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -9,15 +9,16 @@ import { listen } from "@tauri-apps/api/event";
 import { Crosshair, Loader2, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useT } from "../lib/i18n";
-import { alignCurrent, gaps, nudgeFromHere, setManualMap } from "../lib/timemap";
+import { alignCurrent, gaps, nudgeFromHere, setManualMap, toPlay } from "../lib/timemap";
 import { useStore } from "../store";
 
 export function AlignBar({ onClose }: { onClose: () => void }) {
   const t = useT();
-  const { align, currentId, skipAds, saveSettings } = useStore(
+  const { align, currentId, time, skipAds, saveSettings } = useStore(
     useShallow((s) => ({
       align: s.current && s.align?.id === s.current.id ? s.align : null,
       currentId: s.current?.id ?? null,
+      time: Math.floor(s.time),
       skipAds: !!s.settings.skipAds,
       saveSettings: s.saveSettings,
     })),
@@ -36,6 +37,11 @@ export function AlignBar({ onClose }: { onClose: () => void }) {
 
   const working = align?.status === "working";
   const ads = gaps(align?.map).length;
+  const rawOffset = align?.map?.pieces.length
+    ? Math.round((toPlay(align.map, time) - time) * 10) / 10
+    : 0;
+  const offsetBadge =
+    Math.abs(rawOffset) >= 0.1 ? `${rawOffset > 0 ? "+" : ""}${rawOffset.toFixed(1)}s` : null;
   const status = working
     ? progress != null
       ? t("正在下载你听到的这份音频来比对 {pct}%", { pct: Math.round(progress * 100) })
@@ -57,6 +63,11 @@ export function AlignBar({ onClose }: { onClose: () => void }) {
       <div className="align-row">
         {working ? <Loader2 size={13} className="spin" /> : <Crosshair size={13} />}
         <span className="align-status">{status}</span>
+        {offsetBadge && (
+          <span className="align-offset num" title={t("当前字幕时间偏移")}>
+            {offsetBadge}
+          </span>
+        )}
         <button type="button" className="icon-btn sm" onClick={onClose} aria-label={t("关闭")}>
           <X size={14} />
         </button>

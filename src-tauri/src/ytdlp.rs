@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 dirs、net、asr::download_file；应用 data 目录
- * [OUTPUT]: find_tool（data/bin → PATH → homebrew）；定位/镜像安装 yt-dlp；ytdlp_command
- * [POS]: import、本机 ASR 抽音轨、videoclip 高光切片共用的外部工具链入口
+ * [OUTPUT]: find_tool（data/bin → PATH → homebrew）；定位/镜像安装 yt-dlp；ytdlp_command；ytdlp_version
+ * [POS]: import、本机 ASR 抽音轨、videoclip 高光切片、netcheck 共用的外部工具链入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Result};
@@ -76,9 +76,33 @@ pub fn find_ytdlp(data: &Path) -> Option<PathBuf> {
     find_tool(data, "yt-dlp")
 }
 
-/// 国内可达镜像（与 SubCast 同源）；GitHub 作兜底。
-const YTDLP_MIRROR: &str = "https://subcast.qiaomu.ai/tools/yt-dlp";
+/// 国内可达镜像（与 SubCast 同源）；GitHub 作兜底。网络诊断也会探测此地址。
+pub(crate) const YTDLP_MIRROR: &str = "https://subcast.qiaomu.ai/tools/yt-dlp";
 const YTDLP_GITHUB: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
+
+/// `--version` 输出第一行；网络诊断用。
+pub(crate) async fn ytdlp_version(bin: &Path) -> Option<String> {
+    let bin = bin.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut c = std::process::Command::new(&bin);
+        c.arg("--version").env("PATH", child_path());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
+        }
+        let out = c.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text.lines().next()?.trim();
+        (!line.is_empty()).then(|| line.to_string())
+    })
+    .await
+    .ok()
+    .flatten()
+}
 
 fn ytdlp_asset() -> &'static str {
     if cfg!(target_os = "macos") {

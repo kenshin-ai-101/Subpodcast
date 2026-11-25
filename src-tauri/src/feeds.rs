@@ -1,9 +1,10 @@
 /**
- * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源；iTunes lookup 单集
- * [OUTPUT]: 解析任意订阅输入为 Show+Episodes（源有多少入多少）；YouTube twin；search_podcasts=YouTube 频道∪Apple；LIST_EPISODES_CAP
+ * [INPUT]: 依赖 net、model、roxmltree；小宇宙页 __NEXT_DATA__；qiaomu 精读源；curated_video；iTunes lookup 单集
+ * [OUTPUT]: 解析任意订阅输入为 Show+Episodes（源有多少入多少）；YouTube twin / curated fill + video_duration 预填；search_podcasts=YouTube 频道∪Apple；LIST_EPISODES_CAP
  * [POS]: 订阅归一层——xyz RSS 被 ACL 时走 iTunes≤200 + 精读合并；目录搜索与 SubCast 同序（频道优先）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+use crate::curated_video;
 use crate::model::{now_ms, short_hash, Episode, Show};
 use crate::net;
 use crate::qiaomu;
@@ -21,6 +22,8 @@ pub struct Resolved {
     pub episodes: Vec<Episode>,
     /// 目录可能被截断（小宇宙网页 SSR 仅最近十余集）。刷新时只 upsert、不删旧集。
     pub catalog_partial: bool,
+    /// curated_video::fill 已权威检查（可清库内陈旧方图 video_id）。
+    pub videos_checked: bool,
 }
 
 impl Resolved {
@@ -29,6 +32,7 @@ impl Resolved {
             show,
             episodes,
             catalog_partial: false,
+            videos_checked: false,
         }
     }
 
@@ -37,6 +41,7 @@ impl Resolved {
             show,
             episodes,
             catalog_partial: true,
+            videos_checked: false,
         }
     }
 }
@@ -49,15 +54,15 @@ pub async fn resolve(input: &str) -> Result<Resolved> {
     }
 
     if let Some(id) = qiaomu::rss_source_id(raw) {
-        return qiaomu::rss_channel(&id).await;
+        return Ok(attach_curated_videos(qiaomu::rss_channel(&id).await?).await);
     }
     if let Some(id) = qiaomu::site_id(raw) {
-        return qiaomu::channel(&id).await;
+        return Ok(attach_curated_videos(qiaomu::channel(&id).await?).await);
     }
     // 词元之外等：优先精读，再用 iTunes/xyz 补目录（精读常是子集）
     if let Some(id) = qiaomu_preferred_source(raw, "") {
         let r = qiaomu::open_curated(id).await?;
-        return Ok(expand_thin_catalog(r, raw, "").await);
+        return Ok(attach_curated_videos(expand_thin_catalog(r, raw, "").await).await);
     }
 
     if let Some(id) = apple_id(raw) {
@@ -255,7 +260,7 @@ pub async fn refresh_with_title(feed_url: &str, kind: &str, title: &str) -> Resu
         };
         // 精读站常是子集：用小宇宙/iTunes 补全目录，保留精读 deep
         resolved = expand_thin_catalog(resolved, feed_url, title).await;
-        return Ok(resolved);
+        return Ok(attach_curated_videos(resolved).await);
     }
     // 小宇宙 / xyzfm：RSS∥节目页∥iTunes∥精读，取最完整合并。
     if kind == "xiaoyuzhou" || is_xyzfm(feed_url) {
@@ -292,8 +297,8 @@ async fn fetch_rss(feed_url: &str, kind_hint: &str) -> Result<Resolved> {
     }
     // Apple/Anchor 常滞后于小宇宙；若节目主页挂了小宇宙链接，用其补全单集。
     let resolved = prefer_xiaoyuzhou_if_richer(Resolved::full(show, episodes)).await;
-    // 音频播客 ↔ YouTube 双形态：按标题把 videoId 填上，单集页才有「视频/仅音频」。
-    Ok(attach_youtube_twins(resolved).await)
+    // 音频播客 ↔ YouTube 双形态：硬编码 twin 或精读 curated fill。
+    Ok(attach_all_video_twins(resolved).await)
 }
 
 fn parse_feed(xml: &str, feed_url: &str) -> Result<(Show, Vec<Episode>)> {
@@ -455,13 +460,13 @@ async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
     // RSS（全量）与节目页并行；ACL 时不耽误 SSR。
     let (rss, page_res) = tokio::join!(xyz_rss_resolved(pid, &page), net::get_text(&page));
     if let Some(r) = rss {
-        return Ok(attach_youtube_twins(enrich_xyz_catalog(r, pid).await).await);
+        return Ok(attach_all_video_twins(enrich_xyz_catalog(r, pid).await).await);
     }
 
     let html = page_res?;
     if let Ok(r) = xiaoyuzhou_from_next_data(&html, &page) {
         if !r.episodes.is_empty() {
-            return Ok(attach_youtube_twins(enrich_xyz_catalog(r, pid).await).await);
+            return Ok(attach_all_video_twins(enrich_xyz_catalog(r, pid).await).await);
         }
     }
     // 页面空壳：仍可用 iTunes / 精读
@@ -485,7 +490,7 @@ async fn xiaoyuzhou_show(pid: &str) -> Result<Resolved> {
         },
         vec![],
     );
-    Ok(attach_youtube_twins(enrich_xyz_catalog(shell, pid).await).await)
+    Ok(attach_all_video_twins(enrich_xyz_catalog(shell, pid).await).await)
 }
 
 /// slug 版 xyz（无 hex）或仅有标题：iTunes 单集目录 + 精读合并。
@@ -536,7 +541,7 @@ async fn xyz_slug_or_title(feed_url: &str, title: &str) -> Result<Resolved> {
         resolved.show.link = Some(resolved.show.feed_url.clone());
         resolved.show.kind = "xiaoyuzhou".into();
     }
-    Ok(attach_youtube_twins(resolved).await)
+    Ok(attach_all_video_twins(resolved).await)
 }
 
 /// SSR/RSS 半量时：iTunes≤200 单集 + 乔木精读合并；catalog_partial 如实标记。
@@ -1118,7 +1123,7 @@ pub fn episode_dedupe_key(title: &str) -> String {
 }
 
 /// 已知节目：小宇宙 SSR 只有约 15 集，切乔木精读拿全量（guid 对齐 xyz eid）。
-fn qiaomu_preferred_source(feed_or_input: &str, title: &str) -> Option<&'static str> {
+pub fn qiaomu_preferred_source(feed_or_input: &str, title: &str) -> Option<&'static str> {
     let u = feed_or_input.to_lowercase();
     let t = title.to_lowercase();
     // (id, 路径/pid/slug 标记…)
@@ -1182,6 +1187,39 @@ fn xyzfm_slug(url: &str) -> Option<String> {
         return None;
     }
     Some(slug)
+}
+
+/// 先硬编码 twin，再对精读源做 curated 宽屏配对。
+async fn attach_all_video_twins(resolved: Resolved) -> Resolved {
+    let after = attach_youtube_twins(resolved).await;
+    let mut after = attach_curated_videos(after).await;
+    // twin / curated 挂上 video_id 后补时长（Atom 常无；≤15s best-effort）
+    crate::video_duration::prefill_missing(&mut after.episodes, None).await;
+    after
+}
+
+/// 精读源：方图过滤 + 邻集 16:9 + audio_only；权威检查后置 `videos_checked`。
+async fn attach_curated_videos(mut resolved: Resolved) -> Resolved {
+    let source = qiaomu::rss_source_id(&resolved.show.feed_url)
+        .or_else(|| qiaomu::site_id(&resolved.show.feed_url))
+        .or_else(|| {
+            qiaomu_preferred_source(&resolved.show.feed_url, &resolved.show.title)
+                .map(|s| s.to_string())
+        });
+    let Some(source) = source else {
+        return resolved;
+    };
+    if curated_video::is_audio_only(&source) {
+        for ep in &mut resolved.episodes {
+            ep.video_id = None;
+        }
+        resolved.videos_checked = true;
+        return resolved;
+    }
+    let checked =
+        curated_video::fill(&source, &resolved.show.title, &mut resolved.episodes).await;
+    resolved.videos_checked = checked;
+    resolved
 }
 
 /// 音频源常无 videoId；对照 YouTube 频道按期号/标题配对，单集页才能切「视频/仅音频」。
@@ -1264,6 +1302,21 @@ async fn attach_youtube_twins(mut resolved: Resolved) -> Resolved {
 pub async fn fill_youtube_twin(ep: &Episode, feed_url: &str, show_title: &str) -> Option<String> {
     if ep.video_id.as_ref().is_some_and(|v| !v.is_empty()) {
         return ep.video_id.clone();
+    }
+    // 精读源走 curated 打分 + 宽屏过滤（单集切片）
+    if let Some(source) = qiaomu::rss_source_id(feed_url)
+        .or_else(|| qiaomu::site_id(feed_url))
+        .or_else(|| qiaomu_preferred_source(feed_url, show_title).map(|s| s.to_string()))
+    {
+        if curated_video::is_audio_only(&source) {
+            return None;
+        }
+        let mut one = [ep.clone()];
+        let _ = curated_video::fill(&source, show_title, &mut one).await;
+        return one[0]
+            .video_id
+            .clone()
+            .filter(|v| !v.is_empty());
     }
     let handle = youtube_twin_handle(feed_url, show_title)
         .or_else(|| youtube_twin_handle(feed_url, &ep.title))?;

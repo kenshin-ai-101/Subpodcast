@@ -1,12 +1,12 @@
 /**
  * [INPUT]: chats.loadChat/askChat；jobs.transcript；settings.quickPrompts；ChatTools
- * [OUTPUT]: 右侧问答面板（提示词、模型切换、会话持久化、历史）
+ * [OUTPUT]: 右侧问答面板（提示词、模型切换、会话持久化、历史；编辑/删除撤销/回到底部）
  * [POS]: 理解层；会话态在 lib/chats，切 tab 不丢流
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowUp, ChevronDown, Loader2, Settings2, Square, SquarePen } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Loader2, Settings2, Square, SquarePen } from "lucide-react";
 import type { ChatMessage, Episode } from "../lib/api";
 import {
   askChat,
@@ -39,12 +39,15 @@ export function ChatPane({ episode }: { episode: Episode }) {
   const messages = useChats((s) => s[episode.id]?.messages ?? NO_MESSAGES);
   const streaming = useChats((s) => s[episode.id]?.streaming ?? null);
   const [input, setInput] = useState("");
+  const [editAt, setEditAt] = useState<number | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [archive, setArchive] = useState<ArchivedChat[]>([]);
   const [allPrompts, setAllPrompts] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
   const box = useRef<HTMLTextAreaElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const histBtn = useRef<HTMLButtonElement>(null);
   const histStyle = useFixedUpMenu(histOpen, histBtn, 280, "right");
@@ -57,18 +60,42 @@ export function ChatPane({ episode }: { episode: Episode }) {
   useEffect(() => {
     void loadChat(episode.id);
     void loadArchive(episode.id).then(setArchive);
+    setEditAt(null);
+    setInput("");
+    setAtBottom(true);
   }, [episode.id]);
 
+  // 仅贴底时跟随新消息，上翻回看不被打断
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, streaming]);
+    if (atBottom) end.current?.scrollIntoView({ block: "end" });
+  }, [messages.length, streaming, atBottom]);
+
+  const onScroll = () => {
+    const el = scroller.current;
+    if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 60);
+  };
+  const toBottom = () => {
+    end.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    setAtBottom(true);
+  };
+
+  // 编辑时把完整原文放进输入框，并按内容增高，避免截断观感
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(200, Math.max(34, el.scrollHeight))}px`;
+  }, [input, editAt]);
 
   const send = (text: string) => {
     const q = text.trim();
     if (!q || busy) return;
+    const base = editAt != null ? messages.slice(0, editAt) : messages;
+    setEditAt(null);
     setInput("");
     setSetupError(null);
-    void askChat(episode, [...messages, { role: "user", content: q }]).catch((e: Error & { setup?: boolean }) => {
+    setAtBottom(true);
+    void askChat(episode, [...base, { role: "user", content: q }]).catch((e: Error & { setup?: boolean }) => {
       setSetupError(e.message);
       if (e.setup) set({ settingsOpen: true, settingsSection: "ai" });
     });
@@ -78,9 +105,21 @@ export function ChatPane({ episode }: { episode: Episode }) {
     messages[i]?.role === "assistant" && messages[i - 1]?.role === "user" ? i - 1 : i;
 
   const removePair = (i: number) => {
+    const prev = messages;
     const a = pairStart(i);
     const b = messages[a + 1]?.role === "assistant" ? a + 2 : a + 1;
+    if (editAt != null && a <= editAt) setEditAt(null);
     saveChat(episode.id, [...messages.slice(0, a), ...messages.slice(b)]);
+    useStore.getState().notify(t("已删除"), {
+      label: t("撤销"),
+      run: () => saveChat(episode.id, prev),
+    });
+  };
+
+  const edit = (i: number) => {
+    setEditAt(i);
+    setInput(messages[i]?.content ?? "");
+    window.setTimeout(() => box.current?.focus(), 0);
   };
 
   const retry = () => {
@@ -96,6 +135,7 @@ export function ChatPane({ episode }: { episode: Episode }) {
     setArchive(next);
     saveArchive(episode.id, next);
     saveChat(episode.id, []);
+    setEditAt(null);
     setInput("");
     box.current?.focus();
   };
@@ -126,95 +166,126 @@ export function ChatPane({ episode }: { episode: Episode }) {
 
   return (
     <div className="chat">
-      <div className="chat-scroll">
-        {empty && (
-          <div className="chat-intro">
-            <p className="lead">{t("问这期节目")}</p>
-            <p className="muted small">{t("基于整集字幕回答，引用可跳转")}</p>
-            {blocked && <p className="muted small">{t("字幕准备好后就可以提问。")}</p>}
-            <div className="prompt-list">
-              {shown.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className="prompt-row"
-                  title={t(p.body)}
-                  disabled={blocked || busy}
-                  onClick={() => send(t(p.body))}
-                >
-                  <span className="pr-title">{t(p.title)}</span>
-                  <span className="pr-sub">{t(p.body)}</span>
+      <div className="chat-stage">
+        <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
+          {empty && (
+            <div className="chat-intro">
+              <p className="lead">{t("问这期节目")}</p>
+              <p className="muted small">{t("基于整集字幕回答，引用可跳转")}</p>
+              {blocked && <p className="muted small">{t("字幕准备好后就可以提问。")}</p>}
+              <div className="prompt-list">
+                {shown.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="prompt-row"
+                    title={t(p.body)}
+                    disabled={blocked || busy}
+                    onClick={() => send(t(p.body))}
+                  >
+                    <span className="pr-title">{t(p.title)}</span>
+                    <span className="pr-sub">{t(p.body)}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="prompt-foot">
+                {prompts.length > 4 && (
+                  <button type="button" className="link-btn" onClick={() => setAllPrompts(!allPrompts)}>
+                    {allPrompts ? t("收起") : t("更多 {n} 个", { n: prompts.length - 4 })}
+                    <ChevronDown size={12} className={allPrompts ? "flip" : ""} />
+                  </button>
+                )}
+                <span className="spacer" />
+                <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}>
+                  <Settings2 size={13} /> {t("自定义提示词")}
                 </button>
-              ))}
+              </div>
             </div>
-            <div className="prompt-foot">
-              {prompts.length > 4 && (
-                <button type="button" className="link-btn" onClick={() => setAllPrompts(!allPrompts)}>
-                  {allPrompts ? t("收起") : t("更多 {n} 个", { n: prompts.length - 4 })}
-                  <ChevronDown size={12} className={allPrompts ? "flip" : ""} />
-                </button>
+          )}
+          {messages.map((m, i) =>
+            m.role === "user" ? (
+              <div key={i} className="msg-wrap user">
+                <div className="msg user">{m.content}</div>
+                {!busy && (
+                  <div className="msg-actions">
+                    <button type="button" className="link-btn" onClick={() => edit(i)}>
+                      {t("编辑")}
+                    </button>
+                    <button type="button" className="link-btn" onClick={() => removePair(i)}>
+                      {t("删除")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div key={i} className="msg-wrap assistant">
+                <div className="msg assistant">
+                  <Markdown text={m.content} onSeek={seek} onClip={clipRange} />
+                </div>
+                {!busy && (
+                  <div className="msg-actions">
+                    {m.model && <span className="muted small">{m.model}</span>}
+                    {i === messages.length - 1 && !blocked && (
+                      <button type="button" className="link-btn" onClick={retry}>
+                        {t("重试")}
+                      </button>
+                    )}
+                    <button type="button" className="link-btn" onClick={() => removePair(i)}>
+                      {t("删除")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ),
+          )}
+          {busy && (
+            <div className="msg assistant">
+              {streaming ? (
+                <Markdown text={streaming} onSeek={seek} onClip={clipRange} />
+              ) : (
+                <p className="muted">
+                  <Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}
+                </p>
               )}
-              <span className="spacer" />
-              <button type="button" className="link-btn" onClick={() => setPrefsOpen(true)}>
-                <Settings2 size={13} /> {t("自定义提示词")}
+            </div>
+          )}
+          {setupError && (
+            <div className="setup-note">
+              <span>{setupError}</span>
+              <button type="button" className="btn primary sm" onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}>
+                {t("去设置")}
               </button>
             </div>
-          </div>
+          )}
+          <div ref={end} />
+        </div>
+        {!atBottom && (messages.length > 0 || busy) && (
+          <button
+            type="button"
+            className="to-bottom"
+            title={t("回到底部")}
+            aria-label={t("回到底部")}
+            onClick={toBottom}
+          >
+            <ArrowDown size={16} />
+          </button>
         )}
-        {messages.map((m, i) =>
-          m.role === "user" ? (
-            <div key={i} className="msg-wrap user">
-              <div className="msg user">{m.content}</div>
-              {!busy && (
-                <div className="msg-actions">
-                  <button type="button" className="link-btn" onClick={() => removePair(i)}>
-                    {t("删除")}
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div key={i} className="msg-wrap assistant">
-              <div className="msg assistant">
-                <Markdown text={m.content} onSeek={seek} onClip={clipRange} />
-              </div>
-              {!busy && (
-                <div className="msg-actions">
-                  {m.model && <span className="muted small">{m.model}</span>}
-                  {i === messages.length - 1 && !blocked && (
-                    <button type="button" className="link-btn" onClick={retry}>
-                      {t("重试")}
-                    </button>
-                  )}
-                  <button type="button" className="link-btn" onClick={() => removePair(i)}>
-                    {t("删除")}
-                  </button>
-                </div>
-              )}
-            </div>
-          ),
-        )}
-        {busy && (
-          <div className="msg assistant">
-            {streaming ? (
-              <Markdown text={streaming} onSeek={seek} onClip={clipRange} />
-            ) : (
-              <p className="muted">
-                <Loader2 size={14} className="spin" /> {t("正在阅读文字稿…")}
-              </p>
-            )}
-          </div>
-        )}
-        {setupError && (
-          <div className="setup-note">
-            <span>{setupError}</span>
-            <button type="button" className="btn primary sm" onClick={() => set({ settingsOpen: true, settingsSection: "ai" })}>
-              {t("去设置")}
-            </button>
-          </div>
-        )}
-        <div ref={end} />
       </div>
+      {editAt != null && (
+        <div className="edit-banner small">
+          <span>{t("正在编辑历史提问，发送后将从此处重新生成")}</span>
+          <button
+            type="button"
+            className="link-btn small"
+            onClick={() => {
+              setEditAt(null);
+              setInput("");
+            }}
+          >
+            {t("取消")}
+          </button>
+        </div>
+      )}
       <form
         className="composer"
         onSubmit={(e) => {

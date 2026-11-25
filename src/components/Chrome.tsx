@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store、api、layout（sideOpen → rail、subsOpen → 订阅折叠）；fuzzy；Show.episodeCount
- * [OUTPUT]: Sidebar（首页/发现/统计/生词本；订阅折叠展开与模糊检索；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
+ * [INPUT]: store、api、layout（sideOpen → rail、subsOpen → 订阅折叠、subsAll → 长列表展开）；fuzzy；Show.episodeCount
+ * [OUTPUT]: Sidebar（首页/发现/统计/生词本；订阅折叠展开与模糊检索；>12 档时短列表+「显示全部」；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
  * [POS]: 全局导航与搜索订阅入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -61,12 +61,19 @@ export function Sidebar() {
   const { shows, view, go, set } = useStore(
     useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })),
   );
-  const { sideOpen, subsOpen, put: putLayout } = useLayout(
-    useShallow((l) => ({ sideOpen: l.sideOpen, subsOpen: l.subsOpen, put: l.put })),
+  const { sideOpen, subsOpen, subsAll, put: putLayout } = useLayout(
+    useShallow((l) => ({
+      sideOpen: l.sideOpen,
+      subsOpen: l.subsOpen,
+      subsAll: l.subsAll,
+      put: l.put,
+    })),
   );
   const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
   const due = useDueCount();
   const rail = !sideOpen;
+  const SUBS_LONG = 12;
+  const SUBS_SHORT = 8;
 
   const [filterOpen, setFilterOpen] = useState(false);
   const [subQuery, setSubQuery] = useState("");
@@ -82,6 +89,12 @@ export function Sidebar() {
     () => (rail || !subQuery.trim() ? shows : filterFuzzy(shows, subQuery, showSearchFields)),
     [shows, subQuery, rail],
   );
+  // 长列表：前 SUBS_SHORT 档 + 当前打开的节目（无论排第几）；筛选时不截断
+  const long = !rail && !subQuery.trim() && shows.length > SUBS_LONG;
+  const listed =
+    long && !subsAll
+      ? filteredShows.filter((s, i) => i < SUBS_SHORT || isView(view, { kind: "show", id: s.id }))
+      : filteredShows;
 
   const toggleFilter = () => {
     if (filterOpen) {
@@ -211,7 +224,7 @@ export function Sidebar() {
       )}
       {showListVisible && (
         <div className="show-list" id="sidebar-shows">
-          {filteredShows.map((s) => {
+          {listed.map((s) => {
             const n = s.episodeCount ?? 0;
             const activeShow = isView(view, { kind: "show", id: s.id });
             return (
@@ -231,6 +244,16 @@ export function Sidebar() {
               </button>
             );
           })}
+          {long && (
+            <button
+              type="button"
+              className="side-more"
+              aria-expanded={subsAll}
+              onClick={() => putLayout({ subsAll: !subsAll })}
+            >
+              {subsAll ? t("收起") : t("显示全部（{n}）", { n: shows.length })}
+            </button>
+          )}
           {!shows.length && (
             <p className="muted small side-empty" style={{ padding: "4px 10px" }}>
               {t("还没有订阅")}

@@ -27,7 +27,15 @@ import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
 import { pieceIndex, pieces } from "../lib/pieces";
-import { activeIndex, flushProgress, playSoon } from "../lib/playback";
+import { openExternalUrl } from "../lib/safeUrl";
+import {
+  activeIndex,
+  flushProgress,
+  playSoon,
+  pressPlay,
+  SLOW_LOAD_MS,
+  useLoadingFor,
+} from "../lib/playback";
 import { stopSubtitleRead, useSubtitleRead } from "../lib/subtitleRead";
 import { alignCurrent, currentMap, loadAlign, toContent } from "../lib/timemap";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
@@ -38,6 +46,16 @@ import { SubtitleOverlay } from "./SubtitleOverlay";
 import { useYtUi, VideoSlot } from "./YtEngine";
 
 const isCjk = (x: string) => /[\u4e00-\u9fff]/.test(x);
+
+/** 加载中转圈；悬停变暂停，点击取消。 */
+function LoadingIcon({ size }: { size: number }) {
+  return (
+    <span className="loading-icon">
+      <Loader2 size={size} className="spin" />
+      <Pause size={size} fill="currentColor" className="loading-cancel" />
+    </span>
+  );
+}
 
 /** 音频台：当前短句 + 淡化下一句（由 settings.audioNextLine / data-next-line 控制显隐）。 */
 function AudioSubtitles({
@@ -260,13 +278,14 @@ function ControlsBar({
       </button>
       <button
         type="button"
-        className="play-btn"
+        className={`play-btn${busy ? " loading" : ""}`}
         onClick={onPlayToggle}
-        aria-label={busy ? t("缓冲中") : playing ? t("暂停") : t("播放")}
+        title={busy ? t("正在加载…（点击取消）") : playing ? t("暂停（空格）") : t("播放（空格）")}
+        aria-label={busy ? t("正在加载…（点击取消）") : playing ? t("暂停") : t("播放")}
         aria-busy={busy || undefined}
       >
         {busy ? (
-          <Loader2 size={18} className="spin" />
+          <LoadingIcon size={18} />
         ) : playing ? (
           <Pause size={18} fill="currentColor" />
         ) : (
@@ -503,11 +522,13 @@ export function PlayerBar({ episode }: { episode: Episode }) {
 
   const playToggle = () => {
     if (live) {
-      useStore.getState().player?.toggle();
+      if (pressPlay() === "none") takeOver();
       return;
     }
     takeOver();
   };
+
+  const slowLoad = useLoadingFor(live ? source.id : undefined, SLOW_LOAD_MS);
 
   const switchTo = (audio: boolean, why?: string) => {
     if (!canVideo || !live || audio === audioOnly) return;
@@ -583,8 +604,8 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             <button
               type="button"
               className="yt-shield"
-              aria-label={shownPlaying ? t("暂停") : t("播放")}
-              title={shownPlaying ? t("暂停") : t("播放")}
+              aria-label={busy ? t("正在加载…（点击取消）") : shownPlaying ? t("暂停") : t("播放")}
+              title={busy ? t("正在加载…（点击取消）") : shownPlaying ? t("暂停") : t("播放")}
               onClick={playToggle}
               onDoubleClick={() => toggleTheater()}
             />
@@ -592,6 +613,31 @@ export function PlayerBar({ episode }: { episode: Episode }) {
               <span className="yt-center-play" aria-hidden>
                 <Play size={36} fill="currentColor" />
               </span>
+            )}
+            {busy && (
+              <span className="yt-center-play loading" aria-hidden>
+                <LoadingIcon size={36} />
+              </span>
+            )}
+            {slowLoad && !ytError && (
+              <div className="video-note">
+                <span className="spin-dot" />
+                {t("视频加载较慢…")}
+                {hasFile && (
+                  <button type="button" className="link-btn video-open" onClick={() => switchTo(true)}>
+                    {t("改听音频")}
+                  </button>
+                )}
+                {videoId && (
+                  <button
+                    type="button"
+                    className="link-btn video-open"
+                    onClick={() => void openExternalUrl(`https://www.youtube.com/watch?v=${videoId}`)}
+                  >
+                    {t("在 YouTube 打开")}
+                  </button>
+                )}
+              </div>
             )}
             <div className="video-cq">
               <SubtitleOverlay episodeId={episode.id} />
@@ -654,12 +700,26 @@ export function PlayerBar({ episode }: { episode: Episode }) {
             type="button"
             className="cover-play"
             onClick={playToggle}
-            title={shownPlaying ? t("暂停（空格）") : live ? t("播放（空格）") : t("播放这一集")}
-            aria-label={shownPlaying ? t("暂停") : t("播放")}
+            title={
+              busy
+                ? t("正在加载…（点击取消）")
+                : shownPlaying
+                  ? t("暂停（空格）")
+                  : live
+                    ? t("播放（空格）")
+                    : t("播放这一集")
+            }
+            aria-label={busy ? t("正在加载…（点击取消）") : shownPlaying ? t("暂停") : t("播放")}
           >
             {source.cover ? <img src={source.cover} alt="" /> : <span className="cover-fallback" />}
-            <span className={`cover-play-btn ${shownPlaying ? "playing" : ""}`}>
-              {shownPlaying ? <Pause size={30} fill="currentColor" /> : <Play size={30} fill="currentColor" />}
+            <span className={`cover-play-btn ${shownPlaying ? "playing" : ""}${busy ? " loading" : ""}`}>
+              {busy ? (
+                <LoadingIcon size={30} />
+              ) : shownPlaying ? (
+                <Pause size={30} fill="currentColor" />
+              ) : (
+                <Play size={30} fill="currentColor" />
+              )}
             </span>
           </button>
           {segs.length > 0 && (

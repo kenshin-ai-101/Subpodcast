@@ -1,6 +1,6 @@
 /**
  * [INPUT]: store；api；ReadingSettings / ModelSettings / TtsSettings / ShortcutSettings；plugin-opener
- * [OUTPUT]: 设置对话框（字幕 / AI / 朗读 / 通用 / 学英语）；KeyRow / KeyField / DefaultButton / ProviderEditor
+ * [OUTPUT]: 设置对话框（字幕 / AI / 朗读 / 通用 / 学英语）；通用 › 网络含 NetworkCheck；KeyRow / KeyField / DefaultButton / ProviderEditor
  * [POS]: 与 SubCast 设置项与布局对齐的原创实现；不做「关于」；保持对话框不改成页面
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -48,6 +48,7 @@ import { useStore } from "../store";
 import { LearnSettings } from "./LearnSettings";
 import { LocalAsrPicker } from "./LocalAsrSettings";
 import { ModelSettings } from "./ModelSettings";
+import { NetworkCheck } from "./NetworkCheck";
 import { ReadingSettings } from "./ReadingSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { TtsSettings } from "./TtsSettings";
@@ -923,6 +924,7 @@ export function SettingsDialog() {
                         </button>
                       </div>
                     </label>
+                    <NetworkCheck />
                     <label>
                       <span>{t("YouTube 要求验证时")}</span>
                       <select

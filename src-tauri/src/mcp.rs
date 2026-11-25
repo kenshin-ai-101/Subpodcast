@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use crate::{
-    asr, captions, db, feeds, llm,
+    asr, captions, curated_video, db, feeds, llm,
     model::{Episode, Segment, Show, Transcript},
     net, offline, qiaomu, secrets, shared, translate, videoclip,
 };
@@ -376,6 +376,16 @@ async fn preview_without_subscribe(ctx: &McpCtx, input: &str) -> Result<(Show, V
     let show = resolved.show;
     {
         let mut conn = ctx.db.lock().map_err(|e| anyhow!("{e}"))?;
+        let source = qiaomu::rss_source_id(&show.feed_url)
+            .or_else(|| qiaomu::site_id(&show.feed_url))
+            .or_else(|| {
+                feeds::qiaomu_preferred_source(&show.feed_url, &show.title).map(|s| s.to_string())
+            });
+        if resolved.videos_checked
+            || source.as_deref().is_some_and(curated_video::is_audio_only)
+        {
+            let _ = db::clear_show_videos(&conn, &show.id);
+        }
         if resolved.catalog_partial {
             db::upsert_episodes(&mut conn, &resolved.episodes)?;
         } else {
@@ -1623,6 +1633,20 @@ async fn dispatch_tool(
             {
                 let mut conn = ctx.db.lock().map_err(|e| anyhow!("{e}"))?;
                 db::upsert_show(&conn, &resolved.show)?;
+                let source = qiaomu::rss_source_id(&resolved.show.feed_url)
+                    .or_else(|| qiaomu::site_id(&resolved.show.feed_url))
+                    .or_else(|| {
+                        feeds::qiaomu_preferred_source(
+                            &resolved.show.feed_url,
+                            &resolved.show.title,
+                        )
+                        .map(|s| s.to_string())
+                    });
+                if resolved.videos_checked
+                    || source.as_deref().is_some_and(curated_video::is_audio_only)
+                {
+                    let _ = db::clear_show_videos(&conn, &resolved.show.id);
+                }
                 if resolved.catalog_partial {
                     db::upsert_episodes(&mut conn, &resolved.episodes)?;
                 } else {

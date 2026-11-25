@@ -86,9 +86,14 @@ const COMMANDS: &[&str] = &[
     "reveal_file",
     "file_exists",
     "clipboard_write",
+    "network_check",
 ];
 
 fn main() {
+    // macos-proxy 链到 Network.framework（macOS 14+）；weak link 让更旧系统仍能启动。
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-weak_framework,Network");
+    }
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )

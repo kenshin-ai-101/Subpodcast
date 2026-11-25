@@ -1,7 +1,7 @@
 /**
  * [INPUT]: jobs 字幕/译文/asr、asrModels、store；switchYoutubeTrack；SubtitleExport；highlights
- * [OUTPUT]: 右侧字幕面板（GenCard/导出/学英语/行列表）+「高光」子模式 + AlignBar
- * [POS]: 听懂主路径；高光列表与行内标记；按句订阅 activeIndex；纯音频可手动锚点对齐
+ * [OUTPUT]: 右侧字幕面板（GenCard/导出/学英语/行列表）+「高光」子模式 + AlignBar + ShadowBar
+ * [POS]: 听懂主路径；高光列表与行内标记；按句订阅 activeIndex；纯音频可手动锚点对齐；跟读条在列表上
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -56,7 +56,7 @@ import { AlignBar } from "./AlignBar";
 import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
-import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
+import { Dictation, EpisodeWords, ShadowBar, useShadowing } from "./LearnPractice";
 import { ReadAloudSettings } from "./ReadAloud";
 import { SubtitleExport } from "./SubtitleExport";
 import { openVideoClipDialog } from "./VideoClipDialog";
@@ -1247,15 +1247,7 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
           </button>
         </div>
       )}
-      {shadow && isCurrent && (
-        <div className="shadow-bar">
-          <Mic size={13} />
-          <span>{t("跟读模式：每句说完会停一下，跟着说一遍")}</span>
-          <button type="button" className="btn ghost sm" onClick={() => setShadow(false)}>
-            {t("退出")}
-          </button>
-        </div>
-      )}
+      {shadow && isCurrent && <ShadowBar onExit={() => setShadow(false)} />}
       {showHighlights ? (
         <HighlightsPanel
           ep={episode}

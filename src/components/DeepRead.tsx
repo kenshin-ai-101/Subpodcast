@@ -1,18 +1,20 @@
 /**
- * [INPUT]: api.getBlob / qiaomuDetail；store.player；opener.openUrl
- * [OUTPUT]: 精读长文面板（sanitize HTML、data-t 跳播、豆包朗读）
- * [POS]: EpisodeView「精读」Tab；朗读与导读共用 ReadAloud
+ * [INPUT]: api.getBlob / qiaomuDetail；markSentences；ReadAlongControls / useReadAlongPage
+ * [OUTPUT]: 精读长文面板（sanitize、句级跟读、data-t 跳播）
+ * [POS]: EpisodeView「精读」Tab；跟读进度跟 TTS，时间戳仍跳播客
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, ExternalLink } from "lucide-react";
 import DOMPurify from "dompurify";
 import { api, type Episode } from "../lib/api";
 import { parseClock } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { seekEpisode } from "../lib/playback";
+import { useReadAlong } from "../lib/readAlong";
+import { markSentences } from "../lib/sentences";
 import { openExternalUrl } from "../lib/safeUrl";
-import { ReadAloud } from "./ReadAloud";
+import { ReadAlongControls, useReadAlongPage } from "./ReadAlong";
 
 const ALLOWED_TAGS = [
   "p",
@@ -60,9 +62,9 @@ function sanitize(html: string): string {
         el.setAttribute("rel", "noopener noreferrer");
       }
     }
-    const t = el.getAttribute("data-t");
-    if (t) {
-      if (/^[\d:]+$/.test(t)) {
+    const stamp = el.getAttribute("data-t");
+    if (stamp) {
+      if (/^[\d:]+$/.test(stamp)) {
         el.setAttribute("class", "ts");
       } else {
         el.removeAttribute("data-t");
@@ -83,6 +85,8 @@ export function DeepRead({
 }) {
   const t = useT();
   const [html, setHtml] = useState<string | null | undefined>(undefined);
+  const article = useRef<HTMLElement>(null);
+  const owner = `deep:${ep.id}`;
 
   useEffect(() => {
     let live = true;
@@ -113,15 +117,9 @@ export function DeepRead({
     if (html === null) onMissing?.();
   }, [html, onMissing]);
 
-  const clean = useMemo(() => (html ? sanitize(html) : ""), [html]);
-  const readText = () => {
-    const doc = new DOMParser().parseFromString(clean, "text/html");
-    doc.querySelectorAll("[data-t]").forEach((n) => n.remove());
-    return Array.from(doc.body.querySelectorAll("p, h2, h3, h4, li, blockquote"))
-      .map((n) => n.textContent?.trim())
-      .filter(Boolean)
-      .join("\n");
-  };
+  const marked = useMemo(() => (html ? markSentences(sanitize(html)) : { html: "", sentences: [] }), [html]);
+  const reading = useReadAlongPage(owner, article);
+  const readingHere = useReadAlong((s) => s.owner === owner);
 
   if (html === undefined) {
     return (
@@ -135,12 +133,12 @@ export function DeepRead({
 
   return (
     <div className="deep-read">
-      <div className="deep-head">
+      <div className={`deep-head ${readingHere ? "ra-on" : ""}`}>
         <span className="deep-badge" title={t("AI 基于完整访谈改写的中文长文，不是逐字翻译")}>
-          <BookOpen size={13} /> {t("乔木精读")}
+          <BookOpen size={13} /> <span className="deep-badge-text">{t("乔木精读")}</span>
         </span>
         <span className="spacer" />
-        <ReadAloud text={readText} title={t("朗读精读全文")} />
+        <ReadAlongControls owner={owner} sentences={marked.sentences} />
         {ep.link && (
           <button type="button" className="icon-btn" title={t("在网页中打开")} onClick={() => void openExternalUrl(ep.link!)}>
             <ExternalLink size={14} />
@@ -148,9 +146,11 @@ export function DeepRead({
         )}
       </div>
       <article
+        ref={article}
         className="deep-body"
-        dangerouslySetInnerHTML={{ __html: clean }}
+        dangerouslySetInnerHTML={{ __html: marked.html }}
         onClick={(e) => {
+          if (reading.onClick(e)) return;
           const el = e.target as HTMLElement;
           const ts = el.closest<HTMLElement>("[data-t]");
           if (ts?.dataset.t) {
@@ -165,6 +165,7 @@ export function DeepRead({
           }
         }}
       />
+      {reading.backToReading}
     </div>
   );
 }

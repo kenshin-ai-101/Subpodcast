@@ -1,6 +1,6 @@
 /**
  * [INPUT]: store（init 已拉离线清单）、Chrome、layout、Splitter；AudioEngine / YtEngine / MiniPlayer；playback.armPlayerIntentListener；PlayerBar.toggleTheater；library / listening
- * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由；F 全屏
+ * [OUTPUT]: 应用壳；侧栏拖宽 / 图标轨；首页/发现/统计/生词本/频道/单集路由；F 全屏；空格不抢按钮焦点
  * [POS]: 前端根组件；音/视频引擎 + MiniPlayer 常驻；mount 时挂 playWhenReady 订阅（禁模块顶层）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -215,6 +215,15 @@ export default function App() {
         useKeysHelp.getState().open ||
         !!document.querySelector(".modal-back");
       if (typing || modalOpen) return;
+      // 焦点在按钮等可交互控件上时，不抢空格（留给控件自身激活）
+      if (
+        combo === "Space" &&
+        (e.target as HTMLElement | null)?.closest?.(
+          "button, a, [role=button], [role=tab], [role=radio], [role=menuitem]",
+        )
+      ) {
+        return;
+      }
 
       if (hit("fullscreen") && document.querySelector(".video")) {
         e.preventDefault();

@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 引擎偏好、api.ttsSynthesize、本机 Web Speech 音色
- * [OUTPUT]: 统一朗读、试听、停止和分段合成
+ * [OUTPUT]: 统一朗读、试听、停止、分段合成；synthesizeText / speakSystemAsync 供精读逐句跟读
  * [POS]: 导读、精读、生词和原声缺失时共用一条朗读路径
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,11 +14,17 @@ import { followVolume } from "./volume";
 
 export const useTtsPreview = create<{ active: string | null }>(() => ({ active: null }));
 let playback: AbortController | undefined;
-let externalStopper: (() => void) | null = null;
+/** 字幕逐句 / 精读跟读等旁路朗读的互斥停止回调。 */
+const readStoppers = new Set<() => void>();
 
-/** 允许字幕逐句朗读注册互斥停止回调，避免两路朗读重叠。 */
+/** 注册旁路朗读停止钩子（可多次；同一 fn 只保留一份）。 */
 export function registerReadStopper(fn: () => void) {
-  externalStopper = fn;
+  readStoppers.add(fn);
+}
+
+/** Key / 模型未就绪类错误：打开朗读设置弹层。 */
+export function isKeyError(message: string): boolean {
+  return /Key|API Key|下载|下載|download/i.test(message);
 }
 
 export function currentTtsService(settings: Settings): TtsService {
@@ -62,7 +68,7 @@ export function stopGeneralSpeaking() {
 
 export function stopSpeaking() {
   stopGeneralSpeaking();
-  externalStopper?.();
+  for (const stop of [...readStoppers]) stop();
 }
 
 const novelty = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Junior|Kathy|Organ|Ralph|Superstar|Trinoids|Whisper|Wobble|Zarvox)$/i;
@@ -91,14 +97,23 @@ function webVoice(text: string, voice: string): SpeechSynthesisVoice | undefined
     ?? matches[0];
 }
 
-function speakWeb(text: string, voice: SpeechSynthesisVoice, rate: number, signal: AbortSignal): Promise<void> {
+function speakWeb(
+  text: string,
+  voice: SpeechSynthesisVoice,
+  rate: number,
+  signal: AbortSignal,
+  onBoundary?: (spokenChars: number) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const synth = window.speechSynthesis;
     const utterance = new SpeechSynthesisUtterance(text);
+    let settled = false;
     const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       signal.removeEventListener("abort", cancel);
-      utterance.onend = utterance.onerror = null;
+      utterance.onend = utterance.onerror = utterance.onboundary = null;
       if (error) reject(error);
       else resolve();
     };
@@ -114,7 +129,15 @@ function speakWeb(text: string, voice: SpeechSynthesisVoice, rate: number, signa
     utterance.lang = voice.lang;
     utterance.rate = rate;
     utterance.onend = () => finish();
-    utterance.onerror = () => finish(new Error(tNow("系统音色无法播放")));
+    if (onBoundary) {
+      utterance.onboundary = (ev) => {
+        onBoundary(ev.charIndex + (ev.charLength || 1));
+      };
+    }
+    utterance.onerror = (ev) => {
+      if (signal.aborted || ev.error === "canceled" || ev.error === "interrupted") finish();
+      else finish(new Error(tNow("系统音色无法播放")));
+    };
     signal.addEventListener("abort", cancel, { once: true });
     try {
       synth.speak(utterance);
@@ -128,6 +151,47 @@ export function speakWebLine(text: string, voiceId: string, rate: number, signal
   const voice = webVoice(text, voiceId);
   if (!voice) return null;
   return speakWeb(text, voice, rate, signal);
+}
+
+/** 系统 Web Speech 读一句；支持 boundary 高亮与 isCanceled 轮询（精读跟读用）。 */
+export function speakSystemAsync(
+  text: string,
+  opts?: {
+    voice?: string;
+    rate?: number;
+    isCanceled?: () => boolean;
+    onBoundary?: (spokenChars: number) => void;
+  },
+): Promise<void> {
+  const synth = window.speechSynthesis;
+  if (!synth) return Promise.resolve();
+  const trimmed = text.trim();
+  if (!trimmed) return Promise.resolve();
+  const voice = webVoice(trimmed, opts?.voice ?? "");
+  const rate = Math.min(2, Math.max(0.5, opts?.rate ?? 1));
+  const controller = new AbortController();
+  const poll = window.setInterval(() => {
+    if (opts?.isCanceled?.()) controller.abort();
+  }, 80);
+  const run = voice
+    ? speakWeb(trimmed, voice, rate, controller.signal, opts?.onBoundary)
+    : Promise.reject(new Error(tNow("系统音色无法播放")));
+  return run.finally(() => clearInterval(poll)).catch((error: unknown) => {
+    if (opts?.isCanceled?.() || controller.signal.aborted) return;
+    throw error;
+  });
+}
+
+/** 合成单段文本为可播 URL（磁盘缓存路径经 convertFileSrc）；rate 为合成时语速。 */
+export async function synthesizeText(
+  text: string,
+  opts?: { rate?: number },
+): Promise<{ url: string; rate: number }> {
+  const settings = useStore.getState().settings;
+  const service = currentTtsService(settings);
+  const rate = opts?.rate ?? settings.ttsRate ?? 1;
+  const { path } = await synthesize(text, service, rate);
+  return { url: convertFileSrc(path), rate: requestRate(service, rate) };
 }
 
 function playbackOnly(service: TtsService): boolean {

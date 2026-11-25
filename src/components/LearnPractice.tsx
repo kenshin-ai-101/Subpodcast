@@ -1,11 +1,12 @@
 /**
  * [INPUT]: dict / words / clip / LearnModal（foot 钉底）/ store
- * [OUTPUT]: EpisodeWords、useShadowing、Dictation
- * [POS]: 英语学习 · 本期生词 / 跟读 / 听写
+ * [OUTPUT]: EpisodeWords、useShadowing、ShadowBar、Dictation
+ * [POS]: 英语学习 · 本期生词 / 跟读（定时停顿 + 倒计时条 / 重听）/ 听写；不做 ASR 打分引擎
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Play } from "lucide-react";
+import { create } from "zustand";
+import { Loader2, Mic, Play, SkipForward, Volume2 } from "lucide-react";
 import { type Episode, type Segment } from "../lib/api";
 import { playClip, prefetchClip, stopClip } from "../lib/clip";
 import { WORD_RE, isNew, lookup, tagLabel, useDict, type Entry } from "../lib/dict";
@@ -154,29 +155,143 @@ export function EpisodeWords({
   );
 }
 
-/** 跟读：每句结束后暂停约一句时长，方便跟说。 */
+type ShadowPhase = "playing" | "waiting";
+interface ShadowPiece {
+  start: number;
+  end: number;
+  text: string;
+}
+interface ShadowState {
+  phase: ShadowPhase;
+  piece: ShadowPiece | null;
+  waitTotal: number;
+  waitUntil: number;
+}
+const shadowInitial: ShadowState = { phase: "playing", piece: null, waitTotal: 0, waitUntil: 0 };
+const useShadow = create<ShadowState>(() => shadowInitial);
+
+let shadowControls: { replay: () => void; skip: () => void } | null = null;
+
+/** 跟读：每句结束后定时停顿（倒计时条 + 重听/下一句）；不做本机 ASR 打分。 */
 export function useShadowing(on: boolean, epId: string, segments: Segment[]) {
   useEffect(() => {
     if (!on) return;
+    let alive = true;
     let resume: number | undefined;
     let lastEnd = -1;
+    useShadow.setState({ ...shadowInitial });
+
+    const play = () => {
+      const st = useStore.getState();
+      if (st.current?.id === epId && !st.playing) st.player?.play();
+    };
+    const next = () => {
+      useShadow.setState({ phase: "playing", piece: null, waitTotal: 0, waitUntil: 0 });
+      play();
+    };
+
+    shadowControls = {
+      replay: () => {
+        const p = useShadow.getState().piece;
+        window.clearTimeout(resume);
+        if (!p) return;
+        lastEnd = -1;
+        useShadow.setState({ phase: "playing", piece: null, waitTotal: 0, waitUntil: 0 });
+        const st = useStore.getState();
+        st.player?.seek(p.start);
+        play();
+      },
+      skip: () => {
+        window.clearTimeout(resume);
+        next();
+      },
+    };
+
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.current?.id !== epId || !s.playing || s.time === prev.time) return;
+      if (s.current?.id !== epId) return;
+      // 手动续播：结束当前停顿
+      if (s.playing && !prev.playing && useShadow.getState().phase === "waiting") {
+        window.clearTimeout(resume);
+        useShadow.setState({ phase: "playing", piece: null, waitTotal: 0, waitUntil: 0 });
+      }
+      if (!s.playing || s.time === prev.time) return;
       const seg = segments.find((x) => prev.time < x.end && s.time >= x.end && s.time - x.end < 1.5);
       if (!seg || seg.end === lastEnd) return;
       lastEnd = seg.end;
       s.player?.toggle();
       const gap = Math.min(12, Math.max(1.5, (seg.end - seg.start) * 1.1 + 0.6));
+      const ms = Math.round(gap * 1000);
+      useShadow.setState({
+        phase: "waiting",
+        piece: { start: seg.start, end: seg.end, text: seg.text },
+        waitTotal: ms,
+        waitUntil: Date.now() + ms,
+      });
       resume = window.setTimeout(() => {
-        const st = useStore.getState();
-        if (!st.playing && st.current?.id === epId) st.player?.play();
-      }, gap * 1000);
+        if (alive && useShadow.getState().phase === "waiting") next();
+      }, ms);
     });
+
     return () => {
+      alive = false;
+      shadowControls = null;
       unsub();
       window.clearTimeout(resume);
+      useShadow.setState({ ...shadowInitial });
     };
   }, [on, epId, segments]);
+}
+
+/** 跟读条：等待倒计时 + 重听原句 / 下一句。 */
+export function ShadowBar({ onExit }: { onExit: () => void }) {
+  const t = useT();
+  const { phase, piece, waitTotal, waitUntil } = useShadow();
+  const [waitLeft, setWaitLeft] = useState(0);
+
+  useEffect(() => {
+    if (phase !== "waiting" || !waitUntil) {
+      setWaitLeft(0);
+      return;
+    }
+    const update = () => setWaitLeft(Math.max(0, waitUntil - Date.now()));
+    update();
+    const id = window.setInterval(update, 100);
+    return () => window.clearInterval(id);
+  }, [phase, waitUntil]);
+
+  const waitPct = waitTotal > 0 ? Math.min(100, Math.max(0, (waitLeft / waitTotal) * 100)) : 0;
+  const status =
+    phase === "waiting"
+      ? t("轮到你了，跟着说一遍（{s}s 后继续）", { s: Math.max(1, Math.ceil(waitLeft / 1000)) })
+      : t("跟读模式：每句说完会停一下，跟着说一遍");
+
+  return (
+    <div className="shadow-bar">
+      <div className="shadow-head">
+        <Mic size={13} />
+        <span className="shadow-status">{status}</span>
+        <button type="button" className="btn ghost sm" onClick={onExit}>
+          {t("退出")}
+        </button>
+      </div>
+      {piece && phase === "waiting" && (
+        <>
+          <p className="shadow-line">{piece.text}</p>
+          <div className="shadow-wait-bar" aria-hidden>
+            <span style={{ width: `${waitPct}%` }} />
+          </div>
+          <div className="shadow-actions">
+            <button type="button" className="btn ghost sm" onClick={() => shadowControls?.replay()}>
+              <Volume2 size={13} /> {t("重听原句")}
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => shadowControls?.skip()}>
+              <SkipForward size={13} /> {t("下一句")}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").match(/[a-z0-9']+/g) ?? [];

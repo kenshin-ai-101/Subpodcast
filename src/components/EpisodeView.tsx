@@ -1,6 +1,6 @@
 /**
- * [INPUT]: api、jobs、library、offline、showLinks、layout（panel）、Splitter、PlayerBar、右四 Tab
- * [OUTPUT]: 单集页：标题动作 + 开集字幕瀑布 + 音视频切换 + 右栏拖宽/收起
+ * [INPUT]: api、jobs、library、offline、showLinks、layout（panel / transcriptBelow）、Splitter、PlayerBar、右栏 Tab
+ * [OUTPUT]: 单集页：标题动作（更多菜单收纳收藏/外开）+ 开集字幕瀑布 + 音视频切换；transcriptBelow 时字幕在播放器下，右栏保留精读/导读/问答
  * [POS]: openEpisode 只导航；别人在播时本页不抢 load；PlayerBar 绑页内 ep，点播放再接管
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ExternalLink,
   MessageCircle,
+  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   ScrollText,
@@ -99,6 +100,89 @@ function seekNotes(ep: Episode, sec: number) {
   s.load({ ...ep, progress: sec });
 }
 
+/** 标题行溢出动作：收藏 / 外开 YouTube 或网页，避免挤占主操作。 */
+function EpisodeMoreMenu({
+  ep,
+  isCurrent,
+  fav,
+}: {
+  ep: Episode;
+  isCurrent: boolean;
+  fav: boolean;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      window.removeEventListener("keydown", esc, true);
+    };
+  }, [open]);
+
+  const openExternal = () => {
+    setOpen(false);
+    if (ep.videoId) {
+      const st = useStore.getState();
+      const s = Math.floor(isCurrent ? st.time : ep.progress ?? 0);
+      void openExternalUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
+    } else if (ep.link) {
+      void openExternalUrl(ep.link);
+    }
+  };
+
+  return (
+    <div className="menu-wrap" ref={box}>
+      <button
+        type="button"
+        className="round-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={t("更多")}
+        aria-label={t("更多")}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="menu right" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className={fav ? "on" : undefined}
+            onClick={() => {
+              setOpen(false);
+              toggleFavorite(ep);
+            }}
+          >
+            <Bookmark size={14} fill={fav ? "currentColor" : "none"} />
+            {fav ? t("取消收藏") : t("收藏这一集")}
+          </button>
+          {(ep.videoId || ep.link) && (
+            <button type="button" role="menuitem" onClick={openExternal}>
+              {ep.videoId ? <Youtube size={14} /> : <ExternalLink size={14} />}
+              {ep.videoId ? t("在 YouTube 打开（从当前位置继续）") : t("节目网页")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DownloadButton({ ep }: { ep: Episode }) {
   const t = useT();
   const saved = useOffline((s) => s.saved[ep.id]);
@@ -141,7 +225,11 @@ function DownloadButton({ ep }: { ep: Episode }) {
               className="danger"
               onClick={() => {
                 setMenu(false);
-                void ask(t("删除这一集已下载的音频？之后在线播放，字幕和进度都会保留。")).then((yes) => {
+                void ask({
+                  message: t("删除这一集已下载的音频？之后在线播放，字幕和进度都会保留。"),
+                  danger: true,
+                  ok: t("删除下载"),
+                }).then((yes) => {
                   if (yes) void removeDownload(ep.id);
                 });
               }}
@@ -174,8 +262,13 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
   );
   const fav = useLibrary((s) => s.favorites.some((f) => f.id === episodeId));
   const ytPromo = usePromo();
-  const { panel, panelOpen, put: putLayout } = useLayout(
-    useShallow((l) => ({ panel: l.panel, panelOpen: l.panelOpen, put: l.put })),
+  const { panel, panelOpen, below, put: putLayout } = useLayout(
+    useShallow((l) => ({
+      panel: l.panel,
+      panelOpen: l.panelOpen,
+      below: l.transcriptBelow,
+      put: l.put,
+    })),
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   const [bodyW, setBodyW] = useState(0);
@@ -292,6 +385,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
 
   const notes = plainText(ep.notes);
   const showDeep = !!ep.deep && noDeep !== ep.id;
+  // 字幕在播放器下方时，右栏只保留精读/导读/问答，并打开其中第一项
+  const shownTab: Tab = below && tab === "transcript" ? (showDeep ? "deep" : "summary") : tab;
   const epShow = shows.find((x) => x.id === ep.showId);
   const ytChannel = showLinks(epShow?.feedUrl).youtube;
   const isCurrent = current?.id === ep.id;
@@ -326,44 +421,17 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                   <PanelRightOpen size={15} />
                 </button>
               )}
-              <button
-                type="button"
-                className={`round-btn fav-btn ${fav ? "on" : ""}`}
-                aria-pressed={fav}
-                title={fav ? t("取消收藏") : t("收藏这一集")}
-                onClick={() => toggleFavorite(ep)}
-              >
-                <Bookmark size={15} fill={fav ? "currentColor" : "none"} />
-              </button>
               <DownloadButton ep={ep} />
-              {ep.videoId ? (
-                <button
-                  type="button"
-                  className="round-btn yt-open"
-                  title={t("在 YouTube 打开（从当前位置继续）")}
-                  onClick={() => {
-                    const st = useStore.getState();
-                    const s = Math.floor(isCurrent ? st.time : ep.progress ?? 0);
-                    void openExternalUrl(`https://www.youtube.com/watch?v=${ep.videoId}${s > 5 ? `&t=${s}s` : ""}`);
-                  }}
-                >
-                  <Youtube size={16} />
-                </button>
-              ) : (
-                ep.link && (
-                  <button
-                    type="button"
-                    className="round-btn"
-                    title={t("节目网页")}
-                    onClick={() => void openExternalUrl(ep.link!)}
-                  >
-                    <ExternalLink size={15} />
-                  </button>
-                )
-              )}
+              <EpisodeMoreMenu ep={ep} isCurrent={isCurrent} fav={fav} />
             </div>
 
             <PlayerBar episode={ep} />
+
+            {below && (
+              <section className="ep-transcript" aria-label={t("字幕")}>
+                <TranscriptPane episode={ep} />
+              </section>
+            )}
 
             {ytPromo && ytChannel && (
               <YtVideoStrip
@@ -418,21 +486,23 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
         {panelOpen && (
           <section className="ep-right">
             <div className="tabs" role="tablist" data-tauri-drag-region>
-              <button
-                role="tab"
-                className={tab === "transcript" ? "on" : ""}
-                aria-selected={tab === "transcript"}
-                title={t("字幕")}
-                onClick={() => setTab("transcript")}
-              >
-                <Captions size={15} />
-                <span>{t("字幕")}</span>
-              </button>
+              {!below && (
+                <button
+                  role="tab"
+                  className={shownTab === "transcript" ? "on" : ""}
+                  aria-selected={shownTab === "transcript"}
+                  title={t("字幕")}
+                  onClick={() => setTab("transcript")}
+                >
+                  <Captions size={15} />
+                  <span>{t("字幕")}</span>
+                </button>
+              )}
               {showDeep && (
                 <button
                   role="tab"
-                  className={tab === "deep" ? "on" : ""}
-                  aria-selected={tab === "deep"}
+                  className={shownTab === "deep" ? "on" : ""}
+                  aria-selected={shownTab === "deep"}
                   title={t("精读")}
                   onClick={() => setTab("deep")}
                 >
@@ -442,8 +512,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
               )}
               <button
                 role="tab"
-                className={tab === "summary" ? "on" : ""}
-                aria-selected={tab === "summary"}
+                className={shownTab === "summary" ? "on" : ""}
+                aria-selected={shownTab === "summary"}
                 title={t("导读")}
                 onClick={() => setTab("summary")}
               >
@@ -452,8 +522,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
               </button>
               <button
                 role="tab"
-                className={tab === "chat" ? "on" : ""}
-                aria-selected={tab === "chat"}
+                className={shownTab === "chat" ? "on" : ""}
+                aria-selected={shownTab === "chat"}
                 title={t("问答")}
                 onClick={() => setTab("chat")}
               >
@@ -471,8 +541,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
               </button>
             </div>
             <div className="tab-body">
-              {tab === "transcript" && <TranscriptPane episode={ep} />}
-              {tab === "deep" && (
+              {shownTab === "transcript" && <TranscriptPane episode={ep} />}
+              {shownTab === "deep" && (
                 <DeepRead ep={ep} onMissing={onMissingDeep}>
                   <div className="panel-empty">
                     <p className="lead">{t("这一集还没有精读")}</p>
@@ -480,8 +550,8 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
                   </div>
                 </DeepRead>
               )}
-              {tab === "summary" && <SummaryPane episode={ep} />}
-              {tab === "chat" && <ChatPane episode={ep} />}
+              {shownTab === "summary" && <SummaryPane episode={ep} />}
+              {shownTab === "chat" && <ChatPane episode={ep} />}
             </div>
           </section>
         )}

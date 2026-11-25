@@ -1,13 +1,17 @@
 /**
  * [INPUT]: store、api.setProgress；audioHost.recoverStuckPlay；timemap.toContent
- * [OUTPUT]: track / waiting / playSoon / SAVE_EVERY / activeIndex / SUBTITLE_LEAD — 进度心跳与按集起播意图
- * [POS]: armPlayerIntentListener 由 App mount 挂上；waiting 超时看门狗；字幕高亮带 150ms 读前量；track 写入字幕时钟
+ * [OUTPUT]: track / waiting / cancelLoading / pressPlay / useLoadingFor / playSoon / SAVE_EVERY / activeIndex / SUBTITLE_LEAD
+ * [POS]: armPlayerIntentListener 由 App mount 挂上；waiting 超时看门狗；加载中点播放=取消；字幕高亮带 150ms 读前量
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
+import { useEffect, useState } from "react";
 import { api, type Episode } from "./api";
 import { tNow } from "./i18n";
 import { currentMap, toContent } from "./timemap";
 import { useStore } from "../store";
+
+/** Play loading this long gets a slow-load note with ways out. */
+export const SLOW_LOAD_MS = 8_000;
 
 export const SAVE_EVERY = 10;
 /** 大 m4a moov 常 >1MB：首段缓冲可能超过 15s，看门狗只静默续命 */
@@ -73,6 +77,50 @@ export function waiting(on: boolean) {
     }
     void import("./audioHost").then((m) => m.recoverStuckPlay());
   }, STUCK_MS);
+}
+
+/** 取消进行中的起播/缓冲（清 loadingSince 与 playWhenReady）。 */
+export function cancelLoading() {
+  const s = useStore.getState();
+  if (!s.loadingSince && !s.playWhenReady) return;
+  window.clearTimeout(stuckTimer);
+  s.set({ loadingSince: null, playWhenReady: null, playing: false });
+}
+
+/**
+ * 主播放按钮：加载中点击 = 取消；已有 player 则 toggle。
+ * 无 player 且未在加载时由调用方自行 takeOver。
+ */
+export function pressPlay(): "cancelled" | "toggled" | "none" {
+  const s = useStore.getState();
+  if (s.loadingSince) {
+    // 有 player 时 toggle 会 pause（YtEngine 把 BUFFERING 当可暂停）
+    if (s.player) {
+      s.player.toggle();
+      return "toggled";
+    }
+    cancelLoading();
+    return "cancelled";
+  }
+  if (s.player) {
+    s.player.toggle();
+    return "toggled";
+  }
+  return "none";
+}
+
+/** 本集已缓冲至少 `after` ms（到点触发重渲）。 */
+export function useLoadingFor(id: string | undefined, after = 0): boolean {
+  const since = useStore((s) => (id && s.current?.id === id ? s.loadingSince ?? null : null));
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!since || !after) return;
+    const left = since + after - Date.now();
+    if (left <= 0) return;
+    const timer = window.setTimeout(() => tick((n) => n + 1), left + 50);
+    return () => window.clearTimeout(timer);
+  }, [since, after]);
+  return !!since && Date.now() - since >= after;
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
- * [INPUT]: store.settings / saveSettings；jobs 当前集字幕作实时预览；lib/reading 缩放工具
- * [OUTPUT]: Seg、SubSizeSliders、ReadingSettings（显示模式 / 中外双滑块字号 / 字体 / 视频样式 / 音频下句 / 问答字号 / 自动连播）
+ * [INPUT]: store.settings / saveSettings；jobs 当前集字幕作实时预览；lib/reading 缩放工具；layout.transcriptBelow
+ * [OUTPUT]: Seg、SubSizeSliders、ReadingSettings（显示模式 / 中外双滑块字号 / 字体 / 视频样式 / 字幕列表位置 / 音频下句 / 问答字号 / 自动连播）
  * [POS]: 设置 › 字幕 顶部阅读块；SubSizeSliders 同时供视频画中 Aa 快捷面板复用
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -8,6 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SUB_FONT_DEFS } from "../lib/fonts";
 import { useT } from "../lib/i18n";
 import { useJobs } from "../lib/jobs";
+import { useLayout } from "../lib/layout";
 import {
   resolveOrigScale,
   resolveSubScale,
@@ -90,6 +91,7 @@ export function ReadingSettings() {
   const { settings, saveSettings, current } = useStore(
     useShallow((s) => ({ settings: s.settings, saveSettings: s.saveSettings, current: s.current })),
   );
+  const below = useLayout((l) => l.transcriptBelow);
   const save = (p: Partial<Settings>) => void saveSettings(p);
   const tr = useJobs((s) => (current ? s.transcripts[current.id] : undefined));
   const items = useJobs((s) => (current ? s.translations[current.id]?.items : undefined));
@@ -154,6 +156,17 @@ export function ReadingSettings() {
               ["outline", t("描边，无底")],
             ]}
             onChange={(v) => save({ subtitleLook: v })}
+          />
+        </div>
+        <div className="reading-row">
+          <span>{t("字幕列表")}</span>
+          <Seg
+            value={below ? "below" : "side"}
+            options={[
+              ["side", t("右侧栏")],
+              ["below", t("播放器下方")],
+            ]}
+            onChange={(v) => useLayout.getState().put({ transcriptBelow: v === "below" })}
           />
         </div>
         <label className="check">
