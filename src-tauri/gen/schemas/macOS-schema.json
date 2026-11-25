@@ -633,6 +633,12 @@
           "markdownDescription": "Enables the open_privacy_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the prepare_youtube command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-youtube",
+          "markdownDescription": "Enables the prepare_youtube command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_show command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-show",
@@ -829,6 +835,12 @@
           "type": "string",
           "const": "allow-video-clip-warm",
           "markdownDescription": "Enables the video_clip_warm command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the youtube_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-youtube-stream",
+          "markdownDescription": "Enables the youtube_stream command without any pre-configured scope."
         },
         {
           "description": "Enables the youtube_subscriptions command without any pre-configured scope.",
@@ -1131,6 +1143,12 @@
           "markdownDescription": "Denies the open_privacy_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the prepare_youtube command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-youtube",
+          "markdownDescription": "Denies the prepare_youtube command without any pre-configured scope."
+        },
+        {
           "description": "Denies the preview_show command without any pre-configured scope.",
           "type": "string",
           "const": "deny-preview-show",
@@ -1327,6 +1345,12 @@
           "type": "string",
           "const": "deny-video-clip-warm",
           "markdownDescription": "Denies the video_clip_warm command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the youtube_stream command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-youtube-stream",
+          "markdownDescription": "Denies the youtube_stream command without any pre-configured scope."
         },
         {
           "description": "Denies the youtube_subscriptions command without any pre-configured scope.",

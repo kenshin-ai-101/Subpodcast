@@ -91,7 +91,9 @@
     "allow-reveal-file",
     "allow-file-exists",
     "allow-clipboard-write",
-    "allow-network-check"
+    "allow-network-check",
+    "allow-youtube-stream",
+    "allow-prepare-youtube"
   ],
   "remote": {
     "urls": [

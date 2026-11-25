@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts/netcheck/video_duration
- * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / fetch_cover_data_url / reveal_file / network_check）与启动；WebView 代理；开集补 video_id 时长
+ * [INPUT]: 聚合 db/feeds/captions/qiaomu/shared/translate/llm/secrets/net/asr/offline/clip/anki/speech/local_tts/netcheck/video_duration/yt_stream
+ * [OUTPUT]: Tauri 命令面（含 shared_* / tts_* / local_tts_* / learn_clip / export_anki / video_clip_* / youtube_stream / prepare_youtube / fetch_cover_data_url / reveal_file / network_check）与启动；WebView 代理；开集补 video_id 时长
  * [POS]: Rust 侧总控；新命令需同步 build.rs COMMANDS 与 capabilities
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -33,6 +33,7 @@ mod tts;
 mod ui;
 mod video_duration;
 mod videoclip;
+mod yt_stream;
 mod ytdlp;
 
 use model::{now_ms, short_hash, Episode, Show, Transcript};
@@ -1181,6 +1182,80 @@ async fn network_check(state: State<'_, AppState>) -> Res<NetworkReport> {
         checks,
         webview_proxy,
     })
+}
+
+/// 直连流：macOS 默认 native-hls；其它平台暂无 loopback HLS 代理，默认/proxy-hls 回落 mp4。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoStream {
+    url: String,
+    /// hls | mp4
+    kind: &'static str,
+    duration: Option<f64>,
+}
+
+#[tauri::command]
+async fn youtube_stream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    video_id: String,
+    mode: Option<String>,
+    fresh: Option<bool>,
+) -> Res<VideoStream> {
+    let fresh = fresh.unwrap_or(false);
+    let default_mode = if cfg!(target_os = "macos") {
+        "native-hls"
+    } else {
+        "mp4"
+    };
+    let mode = mode.unwrap_or_else(|| default_mode.to_string());
+    // 非 macOS 尚未实现 CORS 旁路的 loopback HLS 代理：proxy-hls → progressive mp4。
+    let mode = if mode == "proxy-hls" && !cfg!(target_os = "macos") {
+        "mp4".to_string()
+    } else {
+        mode
+    };
+    let hls = mode != "mp4";
+    let emit = |stage: &str, progress: f64| {
+        let _ = app.emit(
+            "yt-stream",
+            serde_json::json!({
+                "videoId": video_id,
+                "stage": stage,
+                "progress": progress,
+            }),
+        );
+    };
+    emit("resolve", 0.0);
+    let url = yt_stream::resolve(&state.data, &video_id, hls, fresh)
+        .await
+        .map_err(e)?;
+    let duration = yt_stream::video_duration(&video_id);
+    if let Some(d) = duration {
+        if let Ok(conn) = state.db.lock() {
+            let _ = db::fill_video_duration(&conn, &video_id, d);
+        }
+    }
+    if yt_stream::looks_hls(&url) {
+        // macOS WebKit 可直接播 YouTube HLS；暂不经 master_only 代理改写。
+        emit("resolve", 1.0);
+        return Ok(VideoStream {
+            url,
+            kind: "hls",
+            duration,
+        });
+    }
+    emit("resolve", 1.0);
+    Ok(VideoStream {
+        url,
+        kind: "mp4",
+        duration,
+    })
+}
+
+#[tauri::command]
+async fn prepare_youtube(state: State<'_, AppState>) -> Res<()> {
+    yt_stream::prepare(&state.data).await.map_err(e)
 }
 
 #[tauri::command(async)]
@@ -3155,6 +3230,8 @@ pub fn run() {
             file_exists,
             clipboard_write,
             network_check,
+            youtube_stream,
+            prepare_youtube,
         ])
         .setup(|app| {
             // 开发：Vite；发行：http://localhost（YouTube 拒绝 tauri://）

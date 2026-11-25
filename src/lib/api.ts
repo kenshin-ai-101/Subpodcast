@@ -1,6 +1,6 @@
 /**
  * [INPUT]: @tauri-apps/api invoke
- * [OUTPUT]: 类型化后端命令封装（含 shared_* / learnClip / 朗读合成与存储 / clearDownloads / 高光 videoClip* / revealFile / clipboardWrite / networkCheck）
+ * [OUTPUT]: 类型化后端命令封装（含 shared_* / learnClip / 朗读合成与存储 / clearDownloads / 高光 videoClip* / youtubeStream / prepareYoutube / revealFile / clipboardWrite / networkCheck）
  * [POS]: 前后端边界；字段名与 Rust camelCase 对齐
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -333,6 +333,19 @@ export const api = {
   clipboardWrite: (text: string) => invoke<void>("clipboard_write", { text }),
   /** 后端代理可达性 + WebView 代理状态；前端再补播放器侧探测。 */
   networkCheck: () => invoke<NetworkReport>("network_check"),
+  /** YouTube 直连流：native-hls（macOS）/ proxy-hls（非 mac 暂回落 mp4）/ mp4。 */
+  youtubeStream: (
+    videoId: string,
+    mode: "native-hls" | "proxy-hls" | "mp4",
+    fresh = false,
+  ) =>
+    invoke<{ url: string; kind: "hls" | "mp4"; duration?: number | null }>("youtube_stream", {
+      videoId,
+      mode,
+      fresh,
+    }),
+  /** 预热 yt-dlp，避免首次回退直连时才下载二进制。 */
+  prepareYoutube: () => invoke<void>("prepare_youtube"),
 };
 
 export interface CliStatus {

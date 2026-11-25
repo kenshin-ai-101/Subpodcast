@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-youtube"
+description = "Enables the prepare_youtube command without any pre-configured scope."
+commands.allow = ["prepare_youtube"]
+
+[[permission]]
+identifier = "deny-prepare-youtube"
+description = "Denies the prepare_youtube command without any pre-configured scope."
+commands.deny = ["prepare_youtube"]

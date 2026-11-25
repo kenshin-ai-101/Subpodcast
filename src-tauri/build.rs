@@ -87,6 +87,8 @@ const COMMANDS: &[&str] = &[
     "file_exists",
     "clipboard_write",
     "network_check",
+    "youtube_stream",
+    "prepare_youtube",
 ];
 
 fn main() {

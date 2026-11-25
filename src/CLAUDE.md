@@ -15,7 +15,7 @@ lib/pieces.ts: 长字幕块切短句；pieceAt / timedPieces（叠字与音频�
 lib/timemap.ts: TimeMap toPlay/toContent/anchorAt；loadAlign / alignCurrent / setManualMap / registerAudioAlignBridge；YT 引擎下恒等
 lib/mediaClock.ts: YouTube 粗采样墙钟外推（带 0.5s 缓冲上限）+ 异步 seek 目标锁（防 seekTo 期间旧读数回跳），供 YtEngine 驱动字幕
 lib/offline.ts: 离线下载 + 对齐音频缓存（audio-cache）；clearDownloads / clearAudioCache；audioSrc 本地→对齐缓存→远端；清单 store.init 预拉
-lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSynthesize / 朗读缓存与本地模型；sharedTranscript；saveDownload；learnClip / exportAnki / saveText；networkCheck）
+lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSynthesize / 朗读缓存与本地模型；sharedTranscript；saveDownload；learnClip / exportAnki / saveText；youtubeStream / prepareYoutube；networkCheck）
 lib/exportTranscript.ts: 字幕导出 SRT/WebVTT/ASS/LRC/TXT/Markdown（按内容模式组装；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
 lib/fuzzy.ts: fuzzyScore / filterFuzzy（多词模糊匹配与相关度排序）
@@ -84,7 +84,7 @@ components/ReadingSettings.tsx: 阅读预览、显示模式、字幕列表位置
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio；savedPath；认领时 resumeAudioIfWanted；有字幕时自动 alignCurrent
-components/YtEngine.tsx: App 根 iframe；cue/load 换片（switchingRef 挡旧片时钟）；seek 经 mediaClock.seek 防旧读数回跳；UNSTARTED/CUED 不覆写进度；滚动 clipPath 裁切；离页浮窗（含浮窗中文字幕与悬停操作条）；失活 stop+mute；倍速同步 mediaClock（上限 2×）
+components/YtEngine.tsx: App 根 iframe（controls:0 + .crop）+ 可选 video-native 直连；cue/load 换片；embed 错误 / 卡住 ~20s / 慢加载 8s → native-hls（mac）再 mp4；seek 经 mediaClock；离页浮窗；失活 stop+mute；倍速上限 2×；挂载时 prepareYoutube
 components/MiniPlayer.tsx: 非单集页音频迷你条（视频浮窗展示本集时自动避让；进度跟 rawTime ?? time；可拖/点进度条跳转）
 components/PlayerBar.tsx: 绑页内 episode；AudioSubtitles 短句 now/next（片头/静默保留与未译回退原文）；ControlsBar（拖拽实时同步 scrubTime、窗口级 pointerup 提交）；switchTo；theater（2.5s idle 隐退控制条与底栏，拖拽中不隐退）
 components/SubtitleOverlay.tsx: 视频叠字幕按块内进度只显当前短句（pieceAt；消费 scrubTime ?? time 实时同步进度条拖拽；支持指针上下拖拽移位、双击复位、未译回退原文、挂接 SubtitleTune）

@@ -384,6 +384,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const mode = useStore((s) => s.settings.subtitleMode);
   const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
+  const ytNote = useYtUi((s) => s.note);
 
   const onDrag = useCallback(
     (val: number) => {
@@ -619,10 +620,10 @@ export function PlayerBar({ episode }: { episode: Episode }) {
                 <LoadingIcon size={36} />
               </span>
             )}
-            {slowLoad && !ytError && (
+            {(ytNote || (slowLoad && !ytError)) && (
               <div className="video-note">
                 <span className="spin-dot" />
-                {t("视频加载较慢…")}
+                {ytNote || t("视频加载较慢…")}
                 {hasFile && (
                   <button type="button" className="link-btn video-open" onClick={() => switchTo(true)}>
                     {t("改听音频")}

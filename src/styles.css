@@ -652,7 +652,7 @@ body.resizing video { pointer-events: none; }
   container-type: inline-size;
 }
 .ep-left > * { flex-shrink: 0; }
-/* 播放器保持 16:9，宽栏居中；切换条与画面同宽、按钮靠右 */
+/* 播放器保持 16:9：按可视高度扣顶栏/标题/控件，避免宽栏把画面撑得比原站大 */
 .ep-left > .video,
 .ep-left > .audio-stage {
   width: min(100%, calc((100vh - 330px) * 16 / 9));
@@ -847,6 +847,36 @@ body.resizing video { pointer-events: none; }
   position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
 }
 .video .yt-slot { display: block; }
+/* 裁掉嵌入播放器顶栏与底标：舞台内全是画面；iframe 更高 → ABR 更易选高清 */
+.yt-dock .yt-mount.crop > div,
+.yt-dock .yt-mount.crop iframe {
+  top: -64px !important;
+  bottom: auto !important;
+  height: calc(100% + 128px) !important;
+  overflow: visible !important;
+}
+.yt-dock.theater-host .yt-mount.crop > div,
+.yt-dock.theater-host .yt-mount.crop iframe {
+  /* 全屏已按 16:9 居中，仍裁 chrome，勿再额外放大舞台 */
+  top: -64px !important;
+  bottom: auto !important;
+  height: calc(100% + 128px) !important;
+  overflow: visible !important;
+}
+/* yt-dlp 直连：填满 dock，object-fit 保 16:9 */
+.yt-dock .video-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  border: 0;
+}
+.yt-dock .yt-mount.stream-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
 /* 挡住 YouTube 自带控件；点击交给我们的 toggle */
 .yt-shield {
   position: absolute; inset: 0; z-index: 2;

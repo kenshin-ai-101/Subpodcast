@@ -2,7 +2,7 @@
 > L2 | 父级: /CLAUDE.md
 
 成员清单
-lib.rs: Tauri 命令面与启动（含 video_clip_* / fetch_cover_data_url / db_data_version / cli_status / cli_install / reveal_file / file_exists / clipboard_write / network_check；启动时 WebView 套用代理；首启静默同步 CLI 软链）
+lib.rs: Tauri 命令面与启动（含 video_clip_* / youtube_stream / prepare_youtube / fetch_cover_data_url / db_data_version / cli_status / cli_install / reveal_file / file_exists / clipboard_write / network_check；启动时 WebView 套用代理；首启静默同步 CLI 软链）
 main.rs: 桌面端 GUI 二进制入口
 bin/subpodcast-cli.rs: 独立无头 CLI 二进制入口（`subpodcast mcp` / `shows` / `episodes` / `doctor` / `--asr-worker`）
 mcp.rs: MCP over stdio（JSON-RPC 2.0，2024-11-05；13 工具 + 3 资源 + progressToken 进度通知 + 无订阅直达与歧义消解）
@@ -15,6 +15,7 @@ curated_video.rs: 精选/乔木视频配对（标题·期号·日期打分、oEm
 qiaomu.rs: 精读频道 + detail / rss_rewrite（分页拉满，不截 300）；qiaomu_detail 写 deep-read
 import.rs: YouTube 浏览器订阅导入、隐私设置入口、OPML 导出
 ytdlp.rs: find_tool + yt-dlp 定位/镜像安装；ytdlp_command（proxy、socket-timeout、js-runtimes、bot fallback）；ytdlp_version
+yt_stream.rs: YouTube 直连（HLS m3u8 / progressive mp4）；streams.json 缓存（expire 前 20 分）；per-video 锁 + 60s；youtube_stream / prepare_youtube
 video_duration.rs: video_id 时长预填（进程缓存；yt-dlp `--print duration` → InnerTube lengthSeconds；≤15s best-effort）
 asr.rs: 本机模型；ASR 选源（双形态优先 YouTube、纯播客复用 downloads/audio-cache 并落盘 audio-cache）；16k 解码进度 + encode_wav_bytes + decode_mono_stream；Qwen3/Whisper
 align.rs: Chromaprint 声纹提取/分段匹配 + 本机 ASR 语音探针对齐（TimeMap / AudioRef）
@@ -37,7 +38,9 @@ netcheck.rs: 网络诊断（代理 / YouTube oembed / Google / Apple Podcasts / 
 secrets.rs: API Key（正式签名→钥匙串；debug/ad-hoc→本机 secrets.json + 内存缓存）
 offline.rs: 单集音频离线（downloads/，命中 audio-cache 自动转正）+ 对齐缓存（audio-cache/，2 GB 真实 LRU）；ASR 复用 find/find_cached
 
-命令补充：shared_* / align_audio / save_time_map / list_audio_cache / clear_audio_cache / tts_* / local_tts_* / clear_downloads / learn_clip / export_anki / save_text / video_clip_env|warm|prepare|prepare_audio|render / fetch_cover_data_url / db_data_version / cli_status / cli_install / reveal_file / file_exists / clipboard_write / network_check
+命令补充：shared_* / align_audio / save_time_map / list_audio_cache / clear_audio_cache / tts_* / local_tts_* / clear_downloads / learn_clip / export_anki / save_text / video_clip_env|warm|prepare|prepare_audio|render / youtube_stream / prepare_youtube / fetch_cover_data_url / db_data_version / cli_status / cli_install / reveal_file / file_exists / clipboard_write / network_check
+
+youtube_stream 模式：native-hls（macOS 默认，直接返回 m3u8）| proxy-hls（非 mac 暂回落 mp4，未实现 loopback CORS 代理）| mp4；进度事件 `yt-stream`。
 
 storage_info 计入 audioCache、ttsCache 与 ttsModels；open_data_folder 支持 audio-cache / tts-cache / tts-models / models；assetProtocol 含 audio-cache 与 work/clips。
 
