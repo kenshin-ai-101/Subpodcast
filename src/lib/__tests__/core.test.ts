@@ -12,6 +12,7 @@ import { resolveLocale, translate } from "../i18n";
 import { createMediaClock } from "../mediaClock";
 import { initialAudioOnly } from "../media";
 import { anchorAt, toContent, toPlay, type TimeMap } from "../timemap";
+import { filterFuzzy, fuzzyScore } from "../fuzzy";
 import { clampLift, clampScale, resolveOrigScale, resolveSubScale } from "../reading";
 
 describe("playback.activeIndex", () => {
@@ -290,5 +291,33 @@ describe("highlights.buildPlatformPost", () => {
     expect(v2Social).toContain("「第二版标题」");
     expect(v2Social).toContain("第二版开头");
     expect(v2Social).not.toBe(v1Social);
+  });
+});
+
+describe("fuzzy.filterFuzzy", () => {
+  const shows = [
+    { id: "1", title: "Lex Fridman Podcast", zh: "Lex Fridman 播客", author: "Lex Fridman" },
+    { id: "2", title: "张小珺Jùn｜商业访谈录", zh: "张小珺｜商业访谈录", author: "张小珺" },
+    { id: "3", title: "Latent Space", zh: "潜空间", author: "swyx & Alessio" },
+    { id: "4", title: "The a16z Show", zh: "a16z 播客", author: "Andreessen Horowitz" },
+  ];
+  const fields = (s: (typeof shows)[number]) => [s.zh, s.title, s.author];
+
+  it("matches exact, prefix, substring, acronym subsequence, and Chinese alias queries", () => {
+    expect(filterFuzzy(shows, "", fields).map((x) => x.id)).toEqual(["1", "2", "3", "4"]);
+    expect(filterFuzzy(shows, "lex", fields).map((x) => x.id)).toEqual(["1"]);
+    expect(filterFuzzy(shows, "lfp", fields).map((x) => x.id)).toEqual(["1"]);
+    expect(filterFuzzy(shows, "张访", fields).map((x) => x.id)).toEqual(["2"]);
+    expect(filterFuzzy(shows, "潜空", fields).map((x) => x.id)).toEqual(["3"]);
+    expect(filterFuzzy(shows, "swyx", fields).map((x) => x.id)).toEqual(["3"]);
+    expect(filterFuzzy(shows, "a16z 播客", fields).map((x) => x.id)).toEqual(["4"]);
+    expect(filterFuzzy(shows, "not-found-xyz", fields)).toEqual([]);
+  });
+
+  it("ranks prefix/exact matches ahead of loose subsequence matches", () => {
+    const exact = fuzzyScore("lex", ["Lex Fridman Podcast"]);
+    const subseq = fuzzyScore("lfp", ["Lex Fridman Podcast"]);
+    expect(exact).toBeGreaterThan(subseq);
+    expect(subseq).toBeGreaterThan(0);
   });
 });

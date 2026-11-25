@@ -18,6 +18,7 @@ lib/offline.ts: 离线下载 + 对齐音频缓存（audio-cache）；clearDownlo
 lib/api.ts: Tauri invoke（sharedGuide / shareGuide / ttsSynthesize / 朗读缓存与本地模型；sharedTranscript；saveDownload；learnClip / exportAnki / saveText）
 lib/exportTranscript.ts: 字幕导出 SRT/WebVTT/ASS/LRC/TXT/Markdown（按内容模式组装；落盘 saveDownload）
 lib/feeds.ts: looksLikeLink / sameFeed
+lib/fuzzy.ts: fuzzyScore / filterFuzzy（多词模糊匹配与相关度排序）
 lib/settings.ts: Settings / LearnLevel / PRESETS / TTS_SERVICES；shareTranscripts；ttsEngine / ttsServices / ttsRate；learn*；clipExportDir
 lib/dict.ts: 离线 ECDICT（/dict/en.json）；lookup / isNew / looksEnglish / useDict
 lib/words.ts: 生词本 FSRS（ts-fsrs）；blob learn/words；日学习 log / known；reviewQueue / toCsv
@@ -30,7 +31,7 @@ lib/videoCoverCanvas.ts: 剪视频封面模板渲染（8 款 × 多比例）
 lib/sfx.ts: 拼写复习按键/对错/完成音效（受 learnSounds 控制）
 lib/reading.ts: 字幕/问答 CSS 变量（--sub-scale / --sub-orig-scale / --sub-lift；连续缩放、步进、拖拽位移；列表/音频台/叠字共用）
 lib/fonts.ts: 字幕可选字体与按需加载
-lib/layout.ts: 侧栏/右栏几何（sideOpen → 72px 图标轨；localStorage）
+lib/layout.ts: 侧栏/右栏几何与订阅区折叠态（sideOpen → 72px 图标轨、subsOpen；localStorage）
 lib/shortcuts.ts: 快捷键注册表与录制校验
 lib/jobs.ts: 字幕瀑布（缓存/官方/共享库）+ 机翻（已有 zh 译文时跳过自动翻译）+ switchYoutubeTrack + ASR（成功后 loadDownloads）+ llmReady
 lib/asrModels.ts: 本机模型列表/下载/删除进度
@@ -55,7 +56,7 @@ lib/picks.ts: Discover 精选目录与 Topic
 lib/deepPicks.ts: 原版 → 乔木精读入口映射（ShowView banner）
 lib/recommend.ts: 首页「为你推荐」本地打分
 lib/showLinks.ts: 主推节目站外链接；mayHaveYoutubeTwin 后台配对（不堵起播）
-components/Chrome.tsx: Sidebar（首页/发现/统计/生词本；收起为图标轨）/ TopBar / Toast
+components/Chrome.tsx: Sidebar（首页/发现/统计/生词本；订阅区折叠展开与模糊检索；收起为图标轨）/ TopBar / Toast
 components/Splitter.tsx: 列宽拖条（左栏 / 单集右栏；过 snap 收起 / 双击恢复）
 components/HomeView.tsx: 卡片只打开；▶ / 继续听走 playAll；EpisodeRow + EpFeed（滚轮交给 .page）
 components/RecentView.tsx: 最近播放 / 收藏

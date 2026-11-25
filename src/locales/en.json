@@ -1161,5 +1161,12 @@
   "停止播放并关闭": "Stop and close",
   "停止翻译": "Stop translation",
   "补全中文翻译": "Fill missing Chinese translations",
-  "翻译为中文": "Translate to Chinese"
+  "翻译为中文": "Translate to Chinese",
+  "折叠订阅": "Collapse subscriptions",
+  "展开订阅": "Expand subscriptions",
+  "筛选订阅": "Filter subscriptions",
+  "筛选订阅…": "Filter subscriptions…",
+  "关闭筛选": "Close filter",
+  "清空": "Clear",
+  "没有匹配的订阅": "No matching subscriptions"
 }

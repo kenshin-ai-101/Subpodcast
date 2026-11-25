@@ -1,14 +1,15 @@
 /**
- * [INPUT]: store、api、layout（sideOpen → rail）；Show.episodeCount
- * [OUTPUT]: Sidebar（首页/发现/统计/生词本；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
+ * [INPUT]: store、api、layout（sideOpen → rail、subsOpen → 订阅折叠）；fuzzy；Show.episodeCount
+ * [OUTPUT]: Sidebar（首页/发现/统计/生词本；订阅折叠展开与模糊检索；收起为图标轨；订阅角标=单集总数）/ TopBar / Toast
  * [POS]: 全局导航与搜索订阅入口
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   BookMarked,
   ChartColumn,
+  ChevronDown,
   ChevronLeft,
   Clock,
   Compass,
@@ -20,12 +21,14 @@ import {
   Plus,
   Search,
   Settings as Cog,
+  X,
 } from "lucide-react";
 import { api, errText, type Show } from "../lib/api";
-import { looksLikeLink } from "../lib/feeds";
+import { looksLikeLink, sameFeed } from "../lib/feeds";
+import { filterFuzzy } from "../lib/fuzzy";
 import { useT } from "../lib/i18n";
 import { useLayout } from "../lib/layout";
-import { showName } from "../lib/picks";
+import { PICKS, shortName, showName } from "../lib/picks";
 import { IS_MAC } from "../lib/shortcuts";
 import { useStore, type View } from "../store";
 import { useDueCount } from "./WordsBook";
@@ -40,15 +43,61 @@ function isView(view: View, v: View) {
 
 const SIDE_MOD = IS_MAC ? "⌘" : "Ctrl+";
 
+function showSearchFields(s: Show): (string | null | undefined)[] {
+  const display = showName(s.title);
+  const short = shortName(s.title);
+  const pick = PICKS.find(
+    (p) =>
+      sameFeed(s.feedUrl, p.input) ||
+      p.title === s.title ||
+      shortName(p.title) === short ||
+      (!!p.channel && p.channel === s.title),
+  );
+  return [display, s.title, s.author, pick?.zh, pick?.title, pick?.by, pick?.channel];
+}
+
 export function Sidebar() {
   const t = useT();
   const { shows, view, go, set } = useStore(
     useShallow((s) => ({ shows: s.shows, view: s.view, go: s.go, set: s.set })),
   );
-  const { sideOpen, put: putLayout } = useLayout(useShallow((l) => ({ sideOpen: l.sideOpen, put: l.put })));
+  const { sideOpen, subsOpen, put: putLayout } = useLayout(
+    useShallow((l) => ({ sideOpen: l.sideOpen, subsOpen: l.subsOpen, put: l.put })),
+  );
   const wordsNav = useStore((s) => s.settings.learnOn && s.settings.learnSide);
   const due = useDueCount();
   const rail = !sideOpen;
+
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [subQuery, setSubQuery] = useState("");
+  const filterInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (filterOpen && subsOpen && !rail) {
+      filterInputRef.current?.focus();
+    }
+  }, [filterOpen, subsOpen, rail]);
+
+  const filteredShows = useMemo(
+    () => (rail || !subQuery.trim() ? shows : filterFuzzy(shows, subQuery, showSearchFields)),
+    [shows, subQuery, rail],
+  );
+
+  const toggleFilter = () => {
+    if (filterOpen) {
+      setFilterOpen(false);
+      setSubQuery("");
+    } else {
+      if (!subsOpen) putLayout({ subsOpen: true });
+      setFilterOpen(true);
+    }
+  };
+
+  const toggleSubs = () => {
+    const next = !subsOpen;
+    putLayout({ subsOpen: next });
+    if (!next && !subQuery.trim()) setFilterOpen(false);
+  };
 
   // 渲染函数而非子组件：避免每次 Sidebar 重渲时按钮 remount 吞掉点击
   const nav = (v: View, icon: React.ReactNode, label: string, badge?: number) => (
@@ -65,6 +114,8 @@ export function Sidebar() {
       {badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}
     </button>
   );
+
+  const showListVisible = rail || subsOpen;
 
   return (
     <aside className={`sidebar ${rail ? "rail" : ""}`}>
@@ -86,38 +137,112 @@ export function Sidebar() {
       </nav>
       <div className="side-sep" />
       <div className="side-head">
-        <span className="label">{t("订阅")}</span>
-        <button type="button" className="icon-btn sm" title={t("添加节目")} onClick={() => set({ addOpen: true })}>
-          <Plus size={14} />
+        <button
+          type="button"
+          className="side-head-toggle"
+          aria-expanded={subsOpen}
+          aria-controls="sidebar-shows"
+          title={subsOpen ? t("折叠订阅") : t("展开订阅")}
+          onClick={toggleSubs}
+        >
+          <ChevronDown size={13} className={`side-chevron ${subsOpen ? "" : "collapsed"}`} />
+          <span className="label">{t("订阅")}</span>
+          {shows.length > 0 && <span className="side-count">{shows.length}</span>}
         </button>
-      </div>
-      <div className="show-list">
-        {shows.map((s) => {
-          const n = s.episodeCount ?? 0;
-          const activeShow = isView(view, { kind: "show", id: s.id });
-          return (
+        <div className="side-head-actions">
+          {!rail && shows.length > 0 && (
             <button
-              key={s.id}
               type="button"
-              className={`show-item ${activeShow ? "on" : ""}`}
-              onClick={() => go({ kind: "show", id: s.id })}
-              title={rail ? showName(s.title) : s.title}
+              className={`icon-btn sm side-search-btn ${filterOpen || subQuery ? "on" : ""}`}
+              title={filterOpen ? t("关闭筛选") : t("筛选订阅")}
+              aria-label={filterOpen ? t("关闭筛选") : t("筛选订阅")}
+              aria-pressed={filterOpen}
+              onClick={toggleFilter}
             >
-              <span className="show-cover">
-                {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
-                {rail && activeShow && <span className="rail-dot" />}
-              </span>
-              <span className="show-title">{showName(s.title)}</span>
-              {n > 0 && <span className="show-count">{n}</span>}
+              <Search size={13} />
             </button>
-          );
-        })}
-        {!shows.length && (
-          <p className="muted small side-empty" style={{ padding: "4px 10px" }}>
-            {t("还没有订阅")}
-          </p>
-        )}
+          )}
+          <button
+            type="button"
+            className="icon-btn sm"
+            title={t("添加节目")}
+            aria-label={t("添加节目")}
+            onClick={() => set({ addOpen: true })}
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </div>
+      {!rail && subsOpen && filterOpen && (
+        <div className="side-filter">
+          <Search size={13} className="side-filter-ico" />
+          <input
+            ref={filterInputRef}
+            value={subQuery}
+            placeholder={t("筛选订阅…")}
+            aria-label={t("筛选订阅")}
+            spellCheck={false}
+            onChange={(e) => setSubQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setSubQuery("");
+                setFilterOpen(false);
+              } else if (e.key === "Enter" && filteredShows.length > 0) {
+                go({ kind: "show", id: filteredShows[0]!.id });
+              }
+            }}
+          />
+          {subQuery && (
+            <button
+              type="button"
+              className="side-filter-clear"
+              title={t("清空")}
+              aria-label={t("清空")}
+              onClick={() => {
+                setSubQuery("");
+                filterInputRef.current?.focus();
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+      {showListVisible && (
+        <div className="show-list" id="sidebar-shows">
+          {filteredShows.map((s) => {
+            const n = s.episodeCount ?? 0;
+            const activeShow = isView(view, { kind: "show", id: s.id });
+            return (
+              <button
+                key={s.id}
+                type="button"
+                className={`show-item ${activeShow ? "on" : ""}`}
+                onClick={() => go({ kind: "show", id: s.id })}
+                title={rail ? showName(s.title) : s.title}
+              >
+                <span className="show-cover">
+                  {s.cover ? <img src={s.cover} alt="" /> : <span className="cover-fallback">{s.title.slice(0, 1)}</span>}
+                  {rail && activeShow && <span className="rail-dot" />}
+                </span>
+                <span className="show-title">{showName(s.title)}</span>
+                {n > 0 && <span className="show-count">{n}</span>}
+              </button>
+            );
+          })}
+          {!shows.length && (
+            <p className="muted small side-empty" style={{ padding: "4px 10px" }}>
+              {t("还没有订阅")}
+            </p>
+          )}
+          {shows.length > 0 && !filteredShows.length && (
+            <p className="muted small side-empty" style={{ padding: "8px 10px" }}>
+              {t("没有匹配的订阅")}
+            </p>
+          )}
+        </div>
+      )}
       <div className="side-foot">
         <button
           type="button"
