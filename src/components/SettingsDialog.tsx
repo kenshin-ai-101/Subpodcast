@@ -20,13 +20,15 @@ import {
   GraduationCap,
   SlidersHorizontal,
   Sparkles,
+  Terminal,
   Trash2,
   Volume2,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, errText, type StorageInfo } from "../lib/api";
+import { api, errText, type CliStatus, type StorageInfo } from "../lib/api";
+import { AgentSettings } from "./AgentConnectDialog";
 import { ask } from "../lib/confirm";
 import { useT } from "../lib/i18n";
 import { bytes, clearAudioCache, clearDownloads, useOffline } from "../lib/offline";
@@ -619,6 +621,67 @@ function Storage({ info, reload, onAsr, onTts }: {
   );
 }
 
+function CliSettings() {
+  const t = useT();
+  const notify = useStore((s) => s.notify);
+  const [status, setStatus] = useState<CliStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { void api.cliStatus().then(setStatus).catch(e => setError(errText(e))); }, []);
+
+  const install = async () => {
+    setBusy(true);
+    try {
+      const next = await api.cliInstall();
+      setStatus(next);
+      notify(t("已安装 subpodcast 命令"));
+    } catch (e) {
+      notify(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!status) return <p className="muted small">{error || t("正在检查…")}</p>;
+
+  const badge = !status.bundled
+    ? t("开发态需先构建 subpodcast-cli")
+    : status.installed && !status.needsUpdate
+      ? t("已就绪")
+      : status.needsUpdate
+        ? t("需要更新链接")
+        : t("未安装");
+
+  return (
+    <div className="provider-form cli-settings">
+      <p className="muted small">
+        {t("在终端使用 subpodcast 命令管理播客。")}
+      </p>
+      <p className="small">
+        <span>
+          {t("命令行状态")}：{badge}
+        </span>
+        {status.linkPath ? ` · ${status.linkPath}` : ""}
+      </p>
+      {status.installed && !status.inPath && status.linkPath && (
+        <p className="muted small">
+          {t("请将 {dir} 加入 PATH 环境变量。", {
+            dir: status.linkPath.replace(/[/\\][^/\\]+$/, ""),
+          })}
+        </p>
+      )}
+      <div className="row-actions">
+        {status.bundled && (!status.installed || status.needsUpdate) && (
+          <button type="button" className="btn sm" disabled={busy} onClick={() => void install()}>
+            {busy ? <Loader2 size={13} className="spin" /> : <Terminal size={13} />}{" "}
+            {status.needsUpdate ? t("更新链接") : t("安装 subpodcast 命令")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsDialog() {
   const t = useT();
   const { settingsOpen, settingsSection, settings, saveSettings, set, notify } = useStore(
@@ -636,11 +699,16 @@ export function SettingsDialog() {
   const [proxy, setProxy] = useState(settings.proxy);
   const [showKeys, setShowKeys] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
+  const [showCli, setShowCli] = useState(false);
 
   useEffect(() => {
     if (settingsOpen) {
-      setSection(settingsSection ?? "subtitles");
+      setSection(settingsSection === "agents" ? "general" : settingsSection ?? "subtitles");
       setProxy(settings.proxy);
+      if (settingsSection === "agents") {
+        const frame = requestAnimationFrame(() => document.getElementById("agent-connect")?.scrollIntoView({ block: "start" }));
+        return () => cancelAnimationFrame(frame);
+      }
     }
   }, [settingsOpen, settingsSection]);
 
@@ -870,6 +938,10 @@ export function SettingsDialog() {
                       </select>
                     </label>
                   </section>
+                  <section className="setup-block" id="agent-connect">
+                    <p className="setup-title">{t("让 AI 助手调用声译")}</p>
+                    <AgentSettings />
+                  </section>
                   <section className="setup-block">
                     <p className="setup-title">{t("共享")}</p>
                     <label className="check">
@@ -891,6 +963,12 @@ export function SettingsDialog() {
                     {showKeys && <ShortcutSettings />}
                     <StorageSettings expanded={showStorage} toggle={() => setShowStorage(!showStorage)}
                       onAsr={() => setSection("subtitles")} onTts={() => setSection("tts")} />
+                    <button type="button" className="setting-row" aria-expanded={showCli} onClick={() => setShowCli(!showCli)}>
+                      <Terminal size={15} /> <span>{t("命令行工具（CLI）")}</span>
+                      <span className="muted small">subpodcast</span>
+                      <ChevronDown size={14} className={showCli ? "flip" : ""} />
+                    </button>
+                    {showCli && <CliSettings />}
                   </section>
                 </>
               )}

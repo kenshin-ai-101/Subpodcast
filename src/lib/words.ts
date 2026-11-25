@@ -87,7 +87,7 @@ interface WordsState extends Book {
   log: Record<string, DayLog>;
   known: Record<string, number>;
   loaded: boolean;
-  load(): Promise<void>;
+  load(refresh?: boolean): Promise<void>;
   add(w: Omit<Word, "added" | "card">): void;
   update(id: string, patch: Partial<Word>): void;
   remove(id: string): void;
@@ -136,10 +136,12 @@ export const useWords = create<WordsState>((set, get) => ({
   log: {},
   known: {},
   loaded: false,
-  async load() {
-    if (get().loaded) return;
+  async load(refresh = false) {
+    if (saveTimer || (get().loaded && !refresh)) return;
+    const before = get();
     try {
       const raw = await api.getBlob(BLOB[0], BLOB[1]);
+      if (get() !== before) return;
       const b = raw ? (JSON.parse(raw) as Book) : null;
       const words = b?.words ?? {};
       set({

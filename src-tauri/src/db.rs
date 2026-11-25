@@ -9,6 +9,9 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
+/// GUI 与 CLI/MCP 共用的 SQLite 文件名（位于应用数据目录下）
+pub const DB_FILE: &str = "library.db";
+
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -554,6 +557,15 @@ pub fn tr_put_batch(conn: &mut Connection, pairs: &[(String, String)]) -> Result
     Ok(())
 }
 
+/// SQLite 跨连接写版本号：外部进程（CLI / MCP）修改数据库后该值递增，桌面端据此刷新状态。
+pub fn data_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("PRAGMA data_version;", [], |r| r.get(0))?)
+}
+
+pub fn count_all_episodes(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))?)
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get(0))
@@ -727,5 +739,22 @@ mod tests {
             assert!(get_blob(&conn, "e1", kept).unwrap().is_some(), "{kept} should be kept");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn data_version_bumps_on_external_connection_write() {
+        let path = std::env::temp_dir().join(format!(
+            "subpodcast-dataver-{}.db",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let reader = open(&path).unwrap();
+        let writer = open(&path).unwrap();
+        let v1 = data_version(&reader).unwrap();
+        set_setting(&writer, "probe", "1").unwrap();
+        let v2 = data_version(&reader).unwrap();
+        assert!(v2 > v1, "expected data_version bump: {v1} -> {v2}");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 }

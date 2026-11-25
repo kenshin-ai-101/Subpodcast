@@ -4,7 +4,7 @@
 成员清单
 App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / remindReview（离线清单在 store.init）
 main.tsx: React 挂载入口
-store.ts: Zustand；load→prepareEngines；align/rawTime/gapEnd/scrubTime（字幕时钟 vs 媒体时钟 / 拖拽预览）；init 并行拉离线清单
+store.ts: Zustand；load→prepareEngines；align/rawTime/gapEnd/scrubTime（字幕时钟 vs 媒体时钟 / 拖拽预览）；init 并行拉离线清单；syncFromDisk 基于 PRAGMA data_version 感知 CLI/MCP 外部写库
 styles.css: 暖纸底 + 橙强调；yt-dock；theater；mini；asub 短句叠字；align-bar
 lib/media.ts: preferAudio / initialAudioOnly（在线有 videoId 视频优先，避免 RSS 音频与 YouTube 字幕错位；纯音频或断网已下载→仅音频）/ usesAudioEngine / usesYtEngine
 lib/audioHost.ts: 单例 Audio；rAF→toContent；seek→toPlay；pendingSeek 按字幕时钟重映射；对齐到达无缝切源；prepare 必硬停 YT
@@ -69,7 +69,7 @@ components/MonthFilter.tsx: 按年月热力筛选单集
 components/AddDialog.tsx: 添加节目
 components/ImportPanel.tsx: 浏览器 YouTube + OPML 导入
 components/BrowserAccess.tsx: macOS 浏览器权限引导
-components/SettingsDialog.tsx: 设置壳（字幕 / AI / 朗读 / 通用 / 学英语）；通用 › 存储对齐原站（离线清空 / 高光导出 / TTS 缓存）
+components/SettingsDialog.tsx: 设置壳（字幕 / AI / 朗读 / 通用 / 学英语）；通用 › 存储对齐原站 + 命令行与 MCP（一键安装 subpodcast 命令与复制 MCP 配置）
 components/LearnSettings.tsx: 设置 › 学英语
 components/Learn.tsx: 标词 / 词卡 / LearnTip / EmptyState·ClipIcon·ClipLabel·dueLabel
 components/LearnPractice.tsx: 本期生词 / 跟读 / 听写
@@ -96,6 +96,8 @@ lib/videoClipCanvas.ts: 正片叠层与水印（assets/logo.png +「声译」）
 lib/videoCoverCanvas.ts: 封面模板画布（8 款 + 高亮/字号/字间距）
 lib/quotePoster.ts: 摘句「分享海报」画布引擎（1080×≥1350 五款主题版式 × 五款开源字体 × 扫码回跳二维码）
 components/QuotePosterDialog.tsx: 分享海报弹窗（整图自适应无滚动预览 + 主题色卡 + 字体选择；App 挂 QuotePosterDialogHost）
+components/AgentConnectDialog.tsx: 启动接入提示卡与设置中的 AI 助手列表（agent-connect 行表 + 品牌标，对齐原站）；支持一键接入、逐项更新及移除。
+lib/agentMarks.ts: 本机助手 id → LobeHub Icons SVG（MIT；缺标回退首字母）
 components/SelectionTools.tsx: 划词条（单行排列：复制出处 / 翻译 / 生成海报 / 剪成视频；稳健解析跨行与三击字幕索引）
 components/SubtitleExport.tsx: 字幕导出弹窗（格式 SRT·VTT·ASS·LRC·TXT·MD + 内容模式 + 预览）
 components/EpisodeView.tsx: 打开不抢播；后台配对/字幕；右栏拖宽/收起

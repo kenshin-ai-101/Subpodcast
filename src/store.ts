@@ -98,6 +98,8 @@ interface State {
   addOpen: boolean;
   addTab: "search" | "link" | "import";
   init(): Promise<void>;
+  /** 窗口重新获得焦点时检查 PRAGMA data_version，感知 CLI / MCP 对数据库的外部修改。 */
+  syncFromDisk(): Promise<boolean>;
   go(view: View): void;
   back(): void;
   reloadShows(): Promise<void>;
@@ -112,6 +114,7 @@ interface State {
 
 let toastTimer: number | undefined;
 let settingsSaveTimer: number | undefined;
+let lastDbVersion = 0;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -144,9 +147,24 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     // 离线清单与 shows 并行：ready 前 isSaved 已可信，断网 YouTube 才能正确仅音频
     const downloadsP = loadDownloads();
+    const [settings, shows, dbVer] = await Promise.all([
+      loadSettings(),
+      api.listShows(),
+      api.dbDataVersion().catch(() => 0),
+    ]);
+    await downloadsP;
+    lastDbVersion = dbVer;
+    set({ settings, shows, ready: true, rate: settings.playbackRate ?? 1 });
+  },
+  async syncFromDisk() {
+    const nextVer = await api.dbDataVersion().catch(() => 0);
+    if (!nextVer || nextVer === lastDbVersion) return false;
+    lastDbVersion = nextVer;
+    const downloadsP = loadDownloads();
     const [settings, shows] = await Promise.all([loadSettings(), api.listShows()]);
     await downloadsP;
-    set({ settings, shows, ready: true, rate: settings.playbackRate ?? 1 });
+    set({ settings, shows, rate: settings.playbackRate ?? get().rate });
+    return true;
   },
   go(view) {
     const cur = get().view;
@@ -175,11 +193,22 @@ export const useStore = create<State>((set, get) => ({
     window.clearTimeout(settingsSaveTimer);
     if (debounced) {
       settingsSaveTimer = window.setTimeout(() => {
-        void saveSettings(get().settings);
+        void saveSettings(get().settings)
+          .then(() => api.dbDataVersion())
+          .then((v) => {
+            if (v) lastDbVersion = v;
+          })
+          .catch(() => {});
       }, 240);
       return;
     }
     await saveSettings(settings);
+    void api
+      .dbDataVersion()
+      .then((v) => {
+        if (v) lastDbVersion = v;
+      })
+      .catch(() => {});
   },
   openEpisode(ep) {
     get().go({ kind: "episode", id: ep.id });

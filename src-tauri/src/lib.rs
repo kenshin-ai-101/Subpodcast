@@ -6,8 +6,9 @@
  */
 mod align;
 mod anki;
-mod asr;
+pub mod asr;
 mod captions;
+pub mod cli_install;
 mod clip;
 mod db;
 mod edge_gec;
@@ -16,6 +17,8 @@ mod feeds;
 mod import;
 mod llm;
 mod local_tts;
+pub mod mcp;
+mod mcp_connect;
 mod model;
 mod net;
 mod offline;
@@ -1993,6 +1996,43 @@ async fn fetch_cover_data_url(url: String) -> Res<Option<String>> {
     Ok(videoclip::fetch_image_data_url(&url).await)
 }
 
+/// SQLite 跨连接写版本号：CLI / MCP 改库后桌面端窗口聚焦时据此自动刷新。
+#[tauri::command]
+fn db_data_version(state: State<'_, AppState>) -> Res<i64> {
+    let conn = state.db.lock().map_err(e)?;
+    db::data_version(&conn).map_err(e)
+}
+
+/// 检查随应用附带的 `subpodcast-cli` 安装状态与 PATH 可达性。
+#[tauri::command]
+fn cli_status() -> cli_install::CliStatus {
+    cli_install::inspect()
+}
+
+/// 将 `subpodcast-cli` 软链为 `subpodcast` 命令（/usr/local/bin 或 ~/.local/bin）。
+#[tauri::command]
+fn cli_install() -> Res<cli_install::CliStatus> {
+    cli_install::install().map_err(e)
+}
+
+/// 探测本机已安装的外部 AI 工具（Claude Code / Claude Desktop / Codex / Cursor / Antigravity 等）及其 MCP 连接态。
+#[tauri::command]
+fn mcp_agents_detect() -> Vec<mcp_connect::AgentClientInfo> {
+    mcp_connect::detect_clients()
+}
+
+/// 一键自动安装 CLI 软链并将 `subpodcast mcp` 写入所选本机 AI 工具的 MCP 配置。
+#[tauri::command]
+fn mcp_agents_connect(ids: Vec<String>) -> Res<Vec<mcp_connect::AgentClientInfo>> {
+    mcp_connect::connect_clients(&ids).map_err(e)
+}
+
+/// 从指定本机 AI 工具的配置中移除 `subpodcast` MCP 条目（保留其他配置）。
+#[tauri::command]
+fn mcp_agent_disconnect(id: String) -> Res<Vec<mcp_connect::AgentClientInfo>> {
+    mcp_connect::disconnect_client(&id).map_err(e)
+}
+
 /// 高光切片：叠字幕 / 标题 / 封面并导出 MP4，可 cancel_job(jobId)。
 #[tauri::command]
 async fn video_clip_render(
@@ -2856,7 +2896,7 @@ pub fn run() {
 
     let dir = data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let db_path = dir.join("library.db");
+    let db_path = dir.join(db::DB_FILE);
     let conn = db::open(&db_path).expect("open db");
     // 无论有无设置都初始化：留空 → 直连（禁用 reqwest 幽灵 system-proxy）
     let startup_proxy = db::get_setting(&conn, "app")
@@ -2947,6 +2987,12 @@ pub fn run() {
             video_clip_prepare_audio,
             video_clip_render,
             fetch_cover_data_url,
+            db_data_version,
+            cli_status,
+            cli_install,
+            mcp_agents_detect,
+            mcp_agents_connect,
+            mcp_agent_disconnect,
             reveal_file,
             file_exists,
             clipboard_write,
@@ -2973,6 +3019,7 @@ pub fn run() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true);
             builder.build()?;
+            tauri::async_runtime::spawn_blocking(cli_install::ensure_synced);
             Ok(())
         })
         .run(tauri::generate_context!())

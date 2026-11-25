@@ -318,6 +318,31 @@ async fn ensure_ffmpeg(
     .await
 }
 
+pub(crate) async fn prepare_local_media(
+    data: &Path, episode_id: &str, path: &Path, start: f64, end: f64, cancel: &AtomicBool,
+) -> Result<PreparedClip> {
+    let bin = ensure_ffmpeg(data, cancel, &mut |_,_,_| {}).await?;
+    let metadata = tokio::fs::metadata(path).await?;
+    let modified = metadata.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let dir = work_dir(data, episode_id);
+    tokio::fs::create_dir_all(&dir).await?;
+    let dest = dir.join(format!("{}-{}-{modified}.mp4", ms(start), ms(end)));
+    let lock = keyed_lock(&dest.to_string_lossy());
+    let _held = lock.lock().await;
+    let cached = usable(&dest);
+    if !cached {
+        let tmp = dest.with_extension("part.mp4");
+        let ext = path.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        if matches!(ext.as_str(),"mp4"|"mov"|"mkv"|"webm") {
+            ffmpeg::normalize(&bin,path,&tmp,Some((start,end-start)),end-start,cancel,|_|{}).await?;
+        } else {
+            render_audio_clip(&bin,None,&path.to_string_lossy(),false,&[(start,end)],&tmp,cancel,|_|{}).await?;
+        }
+        tokio::fs::rename(tmp,&dest).await?;
+    }
+    Ok(finish(&bin,&dest,end-start,cached,|_,_,_|{}).await)
+}
+
 /// 取 `video_id` 的 `[start, end]`（或复用缓存）。进度阶段：ffmpeg / download / trim / done。
 ///
 /// 锁只保护「写入 dest」；`finish`（抽帧 / 硬字幕检测）在锁外做，

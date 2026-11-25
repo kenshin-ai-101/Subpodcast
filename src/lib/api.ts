@@ -303,12 +303,40 @@ export const api = {
   videoClipRender: (jobId: string, req: RenderVideoClipRequest) =>
     invoke<RenderVideoClipResult>("video_clip_render", { jobId, req }),
   fetchCoverDataUrl: (url: string) => invoke<string | null>("fetch_cover_data_url", { url }),
+  dbDataVersion: () => invoke<number>("db_data_version"),
+  cliStatus: () => invoke<CliStatus>("cli_status"),
+  cliInstall: () => invoke<CliStatus>("cli_install"),
+  mcpAgentsDetect: () => invoke<AgentClientInfo[]>("mcp_agents_detect"),
+  mcpAgentsConnect: (ids: string[]) => invoke<AgentClientInfo[]>("mcp_agents_connect", { ids }),
+  mcpAgentDisconnect: (id: string) => invoke<AgentClientInfo[]>("mcp_agent_disconnect", { id }),
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   /** 本地文件是否仍在。 */
   fileExists: (path: string) => invoke<boolean>("file_exists", { path }),
   /** 系统剪贴板（不依赖 WebView 用户手势）。 */
   clipboardWrite: (text: string) => invoke<void>("clipboard_write", { text }),
 };
+
+export interface CliStatus {
+  bundled: boolean;
+  bundledPath?: string | null;
+  installed: boolean;
+  linkPath?: string | null;
+  targetPath?: string | null;
+  needsUpdate: boolean;
+  inPath: boolean;
+  command: string;
+}
+
+export interface AgentClientInfo {
+  id: string;
+  name: string;
+  vendor: string;
+  installed: boolean;
+  connected: boolean;
+  needsUpdate: boolean;
+  configPath: string;
+  format: "json" | "toml" | string;
+}
 
 export interface FfmpegStatus {
   installed: boolean;

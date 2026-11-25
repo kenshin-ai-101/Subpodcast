@@ -32,7 +32,7 @@ export interface CloudAsr {
 }
 
 export type SubtitleMode = "bilingual" | "original" | "translation";
-export type SettingsSection = "subtitles" | "ai" | "tts" | "general" | "learn";
+export type SettingsSection = "subtitles" | "ai" | "tts" | "general" | "learn" | "agents";
 export type LangSetting = "auto" | "zh-CN" | "zh-TW" | "en";
 export type ThemeSetting = "system" | "light" | "dark";
 export type LearnLevel = "cet4" | "cet6" | "ky" | "ielts";

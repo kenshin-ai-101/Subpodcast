@@ -399,6 +399,18 @@
           "markdownDescription": "Enables the clear_tts_cache command without any pre-configured scope."
         },
         {
+          "description": "Enables the cli_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cli-install",
+          "markdownDescription": "Enables the cli_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cli_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cli-status",
+          "markdownDescription": "Enables the cli_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clipboard_write command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clipboard-write",
@@ -409,6 +421,12 @@
           "type": "string",
           "const": "allow-cloud-transcribe",
           "markdownDescription": "Enables the cloud_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the db_data_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-db-data-version",
+          "markdownDescription": "Enables the db_data_version command without any pre-configured scope."
         },
         {
           "description": "Enables the delete_asr_model command without any pre-configured scope.",
@@ -571,6 +589,24 @@
           "type": "string",
           "const": "allow-log-listen",
           "markdownDescription": "Enables the log_listen command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mcp_agent_disconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mcp-agent-disconnect",
+          "markdownDescription": "Enables the mcp_agent_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mcp_agents_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mcp-agents-connect",
+          "markdownDescription": "Enables the mcp_agents_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mcp_agents_detect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mcp-agents-detect",
+          "markdownDescription": "Enables the mcp_agents_detect command without any pre-configured scope."
         },
         {
           "description": "Enables the open_data_folder command without any pre-configured scope.",
@@ -849,6 +885,18 @@
           "markdownDescription": "Denies the clear_tts_cache command without any pre-configured scope."
         },
         {
+          "description": "Denies the cli_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cli-install",
+          "markdownDescription": "Denies the cli_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cli_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cli-status",
+          "markdownDescription": "Denies the cli_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clipboard_write command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clipboard-write",
@@ -859,6 +907,12 @@
           "type": "string",
           "const": "deny-cloud-transcribe",
           "markdownDescription": "Denies the cloud_transcribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the db_data_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-db-data-version",
+          "markdownDescription": "Denies the db_data_version command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_asr_model command without any pre-configured scope.",
@@ -1021,6 +1075,24 @@
           "type": "string",
           "const": "deny-log-listen",
           "markdownDescription": "Denies the log_listen command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mcp_agent_disconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mcp-agent-disconnect",
+          "markdownDescription": "Denies the mcp_agent_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mcp_agents_connect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mcp-agents-connect",
+          "markdownDescription": "Denies the mcp_agents_connect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mcp_agents_detect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mcp-agents-detect",
+          "markdownDescription": "Denies the mcp_agents_detect command without any pre-configured scope."
         },
         {
           "description": "Denies the open_data_folder command without any pre-configured scope.",

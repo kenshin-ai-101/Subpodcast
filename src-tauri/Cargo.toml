@@ -5,10 +5,19 @@ description = "Subpodcast · 声译 — bilingual podcast & YouTube listener"
 authors = ["Subpodcast"]
 edition = "2021"
 license = "AGPL-3.0-only"
+default-run = "subpodcast"
 
 [lib]
 name = "subpodcast_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "subpodcast"
+path = "src/main.rs"
+
+[[bin]]
+name = "subpodcast-cli"
+path = "src/bin/subpodcast-cli.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

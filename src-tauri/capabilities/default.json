@@ -81,6 +81,12 @@
     "allow-video-clip-prepare-audio",
     "allow-video-clip-render",
     "allow-fetch-cover-data-url",
+    "allow-db-data-version",
+    "allow-cli-status",
+    "allow-cli-install",
+    "allow-mcp-agents-detect",
+    "allow-mcp-agents-connect",
+    "allow-mcp-agent-disconnect",
     "allow-reveal-file",
     "allow-file-exists",
     "allow-clipboard-write"

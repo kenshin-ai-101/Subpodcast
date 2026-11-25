@@ -104,17 +104,24 @@ build_one() {
     unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH || true
   fi
 
-  npm run tauri build -- --target "$target" --bundles "$bundles"
+  # 仅打 .app，再把 subpodcast-cli 植入 .app/Contents/MacOS 并重签，随后统一自制 DMG，确保 DMG 包含最新 CLI
+  npm run tauri build -- --target "$target" --bundles app
 
   local app="src-tauri/target/$target/release/bundle/macos/${PRODUCT}.app"
-  local dmg_list dmg_src
-  dmg_list=$(find "src-tauri/target/$target/release/bundle/dmg" -maxdepth 1 -name "${PRODUCT}_${VERSION}_*.dmg" 2>/dev/null || true)
-  if [ -z "$dmg_list" ]; then
-    dmg_list=$(find "src-tauri/target/$target/release/bundle/dmg" -maxdepth 1 -name "${PRODUCT}_*.dmg" 2>/dev/null || true)
-  fi
-  dmg_src=$(printf '%s\n' "$dmg_list" | head -1)
-
   [ -d "$app" ] || { echo "找不到 $app" >&2; exit 1; }
+
+  # 编译并打入随包分发的 subpodcast-cli（供终端与 MCP Agent 使用），按 hardened runtime 签名
+  echo "==> build & sign subpodcast-cli ($target)"
+  (cd src-tauri && cargo build --release --target "$target" --bin subpodcast-cli)
+  local cli_bin="src-tauri/target/$target/release/subpodcast-cli"
+  [ -f "$cli_bin" ] || { echo "找不到 $cli_bin" >&2; exit 1; }
+  cp "$cli_bin" "${app}/Contents/MacOS/subpodcast-cli"
+  chmod 755 "${app}/Contents/MacOS/subpodcast-cli"
+  codesign --force --options runtime --timestamp --entitlements src-tauri/Entitlements.plist --sign "${IDENTITY}" "${app}/Contents/MacOS/subpodcast-cli"
+  codesign --force --options runtime --timestamp --entitlements src-tauri/Entitlements.plist --sign "${IDENTITY}" "$app"
+
+  local dmg_src=""
+
   codesign --verify --deep --strict "$app"
   codesign -dv --verbose=2 "$app" 2>&1 | grep -E 'Authority=|Signature=' || true
 

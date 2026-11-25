@@ -7,6 +7,7 @@
 import { Suspense, lazy, useEffect, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "./store";
+import { api } from "./lib/api";
 import { useLayout, SIDEBAR } from "./lib/layout";
 import { tNow, useT } from "./lib/i18n";
 import { stepSubScale, useReadingSettings } from "./lib/reading";
@@ -33,6 +34,8 @@ import { ShowView } from "./components/ShowView";
 import { Splitter } from "./components/Splitter";
 import { remindReview } from "./components/WordsBook";
 import { SelectionTools } from "./components/SelectionTools";
+import { useWords } from "./lib/words";
+import { AgentConnectDialogHost, maybePromptAgentConnect } from "./components/AgentConnectDialog";
 import { QuotePosterDialogHost } from "./components/QuotePosterDialog";
 import { VideoClipDialogHost } from "./components/VideoClipDialog";
 import { YtEngine } from "./components/YtEngine";
@@ -61,6 +64,7 @@ export default function App() {
       loadFavorites();
       // 预热 iframe API，视频首点少等一轮脚本
       void loadYouTube().catch(() => {});
+      window.setTimeout(() => void maybePromptAgentConnect(), 1200);
       window.setTimeout(() => void remindReview(), 4000);
     });
   }, [init]);
@@ -75,6 +79,42 @@ export default function App() {
       if (c) noteListening(c, false);
       flushListening();
     };
+    const onFocus = () => {
+      void useStore
+        .getState()
+        .syncFromDisk()
+        .then((changed) => {
+          if (!changed) return;
+          loadFavorites();
+          if (useWords.getState().loaded) void useWords.getState().load(true);
+          // 外部 CLI / MCP 可能写入了新的字幕、译文或导读：清掉空闲的字幕内存缓存，让单集页重新从库读取
+          const jobs = useJobs.getState();
+          const curView = useStore.getState().view;
+          const activeEpId = curView.kind === "episode" ? curView.id : useStore.getState().current?.id;
+          if (activeEpId && !jobs.asrRunning[activeEpId] && !jobs.translations[activeEpId]?.running) {
+            void api.loadTranscript(activeEpId).then((tr) => {
+              if (tr) {
+                useJobs.setState((j) => ({
+                  transcripts: { ...j.transcripts, [activeEpId]: tr },
+                }));
+              }
+            }).catch(() => {});
+            void api.getBlob(activeEpId, "zh").then((raw) => {
+              if (!raw) return;
+              try {
+                const items = JSON.parse(raw) as (string | null)[];
+                useJobs.setState((j) => ({
+                  translations: { ...j.translations, [activeEpId]: { items, running: false } },
+                }));
+              } catch {
+                /* ignore */
+              }
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", onFocus);
     window.addEventListener("beforeunload", onUnload);
     // 接入系统媒体键（MediaSession）
     const syncMediaSession = () => {
@@ -122,6 +162,7 @@ export default function App() {
       offListen();
       offIntent();
       offMedia();
+      window.removeEventListener("focus", onFocus);
       window.removeEventListener("beforeunload", onUnload);
     };
   }, []);
@@ -334,6 +375,7 @@ export default function App() {
       <ErrorBoundary fallbackTitle={t("海报生成加载异常")}>
         <QuotePosterDialogHost />
       </ErrorBoundary>
+      <AgentConnectDialogHost />
       <ShortcutsHelpModal />
       <SelectionTools />
       <ConfirmHost />
