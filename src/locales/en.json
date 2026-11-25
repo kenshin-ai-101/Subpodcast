@@ -1333,5 +1333,7 @@
   "视频没能播放，正在换一种方式…": "The video didn't play. Trying another way…",
   "视频无法播放": "The video can't play",
   "YouTube 播放器没有响应": "The YouTube player isn't responding",
-  "YouTube 播放器加载失败": "The YouTube player failed to load"
+  "YouTube 播放器加载失败": "The YouTube player failed to load",
+  "正在获取高清视频…": "Getting HD video…",
+  "改用嵌入播放…": "Switching to embedded playback…"
 }

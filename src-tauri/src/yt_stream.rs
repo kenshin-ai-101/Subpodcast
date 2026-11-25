@@ -1,7 +1,7 @@
 /**
  * [INPUT]: ytdlp（ensure / ytdlp_command / with_bot_fallback / warm）；应用 data 目录
  * [OUTPUT]: youtube_stream_url（HLS m3u8 或 progressive mp4）；内存+磁盘 URL 缓存；video_duration
- * [POS]: 嵌入播放失败时给 WebView `<video>` 直连；macOS 优先 HLS，其它平台 progressive MP4（暂无 loopback HLS 代理）
+ * [POS]: 前端开播可优先直连；macOS 取自适应 HLS master（hls_variant 优先），其它平台 progressive MP4（暂无 loopback HLS 代理）
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 use anyhow::{anyhow, Context, Result};
@@ -123,14 +123,25 @@ fn audio_rank(f: &Value) -> i64 {
 fn pick_url(info: &Value, hls: bool) -> Result<String> {
     let formats = info["formats"].as_array().cloned().unwrap_or_default();
     if hls {
+        // 优先自适应 master（hls_variant）与带画面的条目，避免误取音轨-only 或低清单码率
         if let Some(u) = formats
             .iter()
             .filter(|f| {
                 f["protocol"]
                     .as_str()
                     .is_some_and(|p| p.starts_with("m3u8"))
+                    && f["manifest_url"].as_str().is_some()
             })
-            .find_map(|f| f["manifest_url"].as_str())
+            .max_by_key(|f| {
+                let url = f["manifest_url"].as_str().unwrap_or("");
+                (
+                    url.contains("hls_variant") || url.contains("/manifest/hls"),
+                    f["vcodec"].as_str().is_some_and(|v| v != "none"),
+                    f["height"].as_i64().unwrap_or(0),
+                    (f["tbr"].as_f64().unwrap_or(0.0) * 10.0) as i64,
+                )
+            })
+            .and_then(|f| f["manifest_url"].as_str())
         {
             return Ok(u.to_string());
         }
@@ -236,4 +247,32 @@ pub async fn prepare(data: &Path) -> Result<()> {
 /// 地址是否像 HLS（manifest）。
 pub fn looks_hls(url: &str) -> bool {
     url.contains("m3u8") || url.contains("/manifest/hls")
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::pick_url;
+    use serde_json::json;
+
+    #[test]
+    fn hls_prefers_variant_master_over_audio_only() {
+        let info = json!({
+            "formats": [
+                {
+                    "protocol": "m3u8_native",
+                    "vcodec": "none",
+                    "manifest_url": "https://manifest.googlevideo.com/api/manifest/hls_playlist/audio.m3u8"
+                },
+                {
+                    "protocol": "m3u8_native",
+                    "vcodec": "avc1.4d401f",
+                    "height": 720,
+                    "tbr": 1200,
+                    "manifest_url": "https://manifest.googlevideo.com/api/manifest/hls_variant/expire/1/file/index.m3u8"
+                }
+            ]
+        });
+        let url = pick_url(&info, true).unwrap();
+        assert!(url.contains("hls_variant"), "{url}");
+    }
 }

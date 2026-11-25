@@ -15,7 +15,7 @@ curated_video.rs: 精选/乔木视频配对（标题·期号·日期打分、oEm
 qiaomu.rs: 精读频道 + detail / rss_rewrite（分页拉满，不截 300）；qiaomu_detail 写 deep-read
 import.rs: YouTube 浏览器订阅导入、隐私设置入口、OPML 导出
 ytdlp.rs: find_tool + yt-dlp 定位/镜像安装；ytdlp_command（proxy、socket-timeout、js-runtimes、bot fallback）；ytdlp_version
-yt_stream.rs: YouTube 直连（HLS m3u8 / progressive mp4）；streams.json 缓存（expire 前 20 分）；per-video 锁 + 60s；youtube_stream / prepare_youtube
+yt_stream.rs: YouTube 直连（HLS 优先 hls_variant master / progressive mp4）；streams.json 缓存（expire 前 20 分）；per-video 锁 + 60s；youtube_stream / prepare_youtube
 video_duration.rs: video_id 时长预填（进程缓存；yt-dlp `--print duration` → InnerTube lengthSeconds；≤15s best-effort）
 asr.rs: 本机模型；ASR 选源（双形态优先 YouTube、纯播客复用 downloads/audio-cache 并落盘 audio-cache）；16k 解码进度 + encode_wav_bytes + decode_mono_stream；Qwen3/Whisper
 align.rs: Chromaprint 声纹提取/分段匹配 + 本机 ASR 语音探针对齐（TimeMap / AudioRef）

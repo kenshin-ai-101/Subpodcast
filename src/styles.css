@@ -635,16 +635,14 @@ body.resizing video { pointer-events: none; }
 .episode { flex: 1; height: 100%; min-height: 0; display: flex; }
 .ep-body {
   flex: 1; height: 100%; min-height: 0; display: grid;
-  /* 中栏至少 ~460px；右栏宽度钳在 [340, 可用] 内，避免 panel-w 过小算成 0 宽 */
-  --panel-eff: clamp(340px, var(--panel-w, 460px), max(340px, calc(100% - 460px)));
-  grid-template-columns: minmax(0, 1fr) var(--panel-eff);
+  /* 与原站一致：右栏用 --panel-w（JS 已钳可视宽）；勿再用 CSS clamp 挤大中栏，否则 16:9 舞台会偏大 */
+  grid-template-columns: minmax(0, 1fr) var(--panel-w, 460px);
   position: relative;
 }
 .ep-body.panel-collapsed {
-  --panel-eff: 0px;
   grid-template-columns: minmax(0, 1fr) 0;
 }
-.ep-body > .splitter { right: calc(var(--panel-eff) - 5px); }
+.ep-body > .splitter { right: calc(var(--panel-w, 460px) - 5px); }
 .ep-leftcol { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ep-left {
   flex: 1; min-height: 0; overflow-y: auto; padding: 4px 28px 32px;

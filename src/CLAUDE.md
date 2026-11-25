@@ -5,7 +5,7 @@
 App.tsx: 应用壳；AudioEngine + YtEngine + MiniPlayer；预热 YouTube API；路由 / 收藏 / remindReview（离线清单在 store.init）
 main.tsx: React 挂载入口
 store.ts: Zustand；load→prepareEngines；align/rawTime/gapEnd/scrubTime（字幕时钟 vs 媒体时钟 / 拖拽预览）；init 并行拉离线清单；syncFromDisk 基于 PRAGMA data_version 感知 CLI/MCP 外部写库
-styles.css: 暖纸底 + 橙强调；yt-dock；theater；mini；asub 短句叠字；align-bar
+styles.css: 暖纸底 + 橙强调；ep-body 右栏 --panel-w（勿 CSS clamp 挤大舞台）；视频宽 min(100%, (100vh-330)×16/9)；yt-dock crop；theater；mini；asub；align-bar
 lib/media.ts: preferAudio / initialAudioOnly（在线有 videoId 视频优先，避免 RSS 音频与 YouTube 字幕错位；纯音频或断网已下载→仅音频）/ usesAudioEngine / usesYtEngine
 lib/audioHost.ts: 单例 Audio；rAF→toContent；seek→toPlay；pendingSeek 按字幕时钟重映射；对齐到达无缝切源；prepare 必硬停 YT
 lib/ytHost.ts: registerYtHost / pauseYoutubeHost — stop+mute 硬停，挡 loadVideoById 迟到起播
@@ -84,7 +84,7 @@ components/ReadingSettings.tsx: 阅读预览、显示模式、字幕列表位置
 components/ModelSettings.tsx: AI 模型分栏
 components/ShortcutSettings.tsx: 快捷键
 components/AudioEngine.tsx: App 根哨兵；prepareAudio；savedPath；认领时 resumeAudioIfWanted；有字幕时自动 alignCurrent
-components/YtEngine.tsx: App 根 iframe（controls:0 + .crop）+ 可选 video-native 直连；cue/load 换片；embed 错误 / 卡住 ~20s / 慢加载 8s → native-hls（mac）再 mp4；seek 经 mediaClock；离页浮窗；失活 stop+mute；倍速上限 2×；挂载时 prepareYoutube
+components/YtEngine.tsx: App 根 iframe（controls:0 + .crop）+ 可选 video-native 直连；macOS 开播优先 native-hls（失败再 embed）；embed 错误 / 卡住 ~20s / 慢加载 8s → 直连 mp4；seek 经 mediaClock；离页浮窗；失活 stop+mute；倍速上限 2×；挂载时 prepareYoutube
 components/MiniPlayer.tsx: 非单集页音频迷你条（视频浮窗展示本集时自动避让；进度跟 rawTime ?? time；可拖/点进度条跳转）
 components/PlayerBar.tsx: 绑页内 episode；AudioSubtitles 短句 now/next（片头/静默保留与未译回退原文）；ControlsBar（拖拽实时同步 scrubTime、窗口级 pointerup 提交）；switchTo；theater（2.5s idle 隐退控制条与底栏，拖拽中不隐退）
 components/SubtitleOverlay.tsx: 视频叠字幕按块内进度只显当前短句（pieceAt；消费 scrubTime ?? time 实时同步进度条拖拽；支持指针上下拖拽移位、双击复位、未译回退原文、挂接 SubtitleTune）

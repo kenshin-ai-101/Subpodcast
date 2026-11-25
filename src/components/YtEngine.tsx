@@ -1,7 +1,7 @@
 /**
  * [INPUT]: store.current / audioOnly / playWhenReady / rate / theater；media.usesYtEngine；youtube / mediaClock / playback / volume；api.youtubeStream
  * [OUTPUT]: VideoSlot + YtEngine（App 根持久 iframe + 可选 `<video class="video-native">`）；useYtUi.error / note
- * [POS]: embed（controls:0 + .crop）优先；错误 / 卡住 ~20s / 慢加载 8s → native-hls（mac）再 mp4；失活 stop+mute；rAF+mediaClock 驱动字幕
+ * [POS]: macOS 可播 HLS 时 native-hls 优先（自适应高清），失败再 embed（controls:0 + .crop）；embed 卡住/慢载仍回退直连 mp4；失活 stop+mute；rAF+mediaClock 驱动字幕
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { useEffect, useRef, useState } from "react";
@@ -131,6 +131,8 @@ export function YtEngine() {
   /** 复用 iframe 换片后，在新片进入 PLAYING/CUED 前忽略旧片残留的 getCurrentTime。 */
   const switchingRef = useRef(false);
   const [native, setNative] = useState<NativeStream | null>(null);
+  /** 直连优先失败后 +1，迫使 embed effect 在 native 仍为 null 时重跑。 */
+  const [embedKick, setEmbedKick] = useState(0);
   const nativeRef = useRef<NativeStream | null>(null);
   const streamPlanRef = useRef<StreamMode[]>([]);
   const resolvingStreamRef = useRef(false);
@@ -143,6 +145,8 @@ export function YtEngine() {
   const usingNativeRef = useRef(false);
   /** 直连也失败且无音频可退：别再重建 embed，避免死循环。 */
   const streamGaveUpRef = useRef(false);
+  /** 直连优先已失败：本集改走 embed，避免 stream↔embed 互踢。 */
+  const preferEmbedRef = useRef(false);
 
   const ytRate = (r: number) => Math.min(2, Math.max(0.25, Number.isFinite(r) && r > 0 ? r : 1));
 
@@ -384,6 +388,14 @@ export function YtEngine() {
   const giveUpStream = (detail: string) => {
     resolvingStreamRef.current = false;
     useYtUi.setState({ note: null });
+    // 直连优先失败：退回嵌入（原站清晰度路径的回退），勿直接改听音频
+    if (!preferEmbedRef.current && canNativeHls()) {
+      preferEmbedRef.current = true;
+      setNative(null);
+      setEmbedKick((n) => n + 1);
+      useYtUi.setState({ note: tNow("改用嵌入播放…"), error: null });
+      return;
+    }
     const cur = epRef.current;
     if (cur && audioSrc(cur)) {
       setNative(null);
@@ -431,7 +443,8 @@ export function YtEngine() {
     );
   };
 
-  const fallbackToStream = async (why: string) => {
+  /** `primary`：macOS 开播即直连高清；否则为 embed 失败后的回退文案。 */
+  const fallbackToStream = async (why: string, primary = false) => {
     if (resolvingStreamRef.current || usingNativeRef.current) return;
     const vid = videoIdRef.current ?? epRef.current?.videoId;
     if (!vid || !stillMine()) return;
@@ -440,7 +453,9 @@ export function YtEngine() {
     clearEmbedTimers();
     useYtUi.setState({
       error: null,
-      note: tNow("{reason}，正在改用直连播放…", { reason: why }),
+      note: primary
+        ? tNow("正在获取高清视频…")
+        : tNow("{reason}，正在改用直连播放…", { reason: why }),
     });
     const off = listen<{ videoId: string; stage: string; progress: number }>("yt-stream", ({ payload: p }) => {
       if (p.videoId !== vid) return;
@@ -450,7 +465,9 @@ export function YtEngine() {
             ? tNow("首次使用，正在下载 YouTube 播放组件 {pct}%", {
                 pct: Math.round(p.progress * 100),
               })
-            : tNow("{reason}，正在获取视频地址…", { reason: why }),
+            : primary
+              ? tNow("正在获取高清视频…")
+              : tNow("{reason}，正在获取视频地址…", { reason: why }),
       });
     });
     const mode: StreamMode = canNativeHls() ? "native-hls" : "mp4";
@@ -586,7 +603,7 @@ export function YtEngine() {
     }
   }, [active]);
 
-  // 换集：清直连，回到 embed
+  // 换集：清直连；下一集重新允许 HLS 优先
   useEffect(() => {
     setNative(null);
     streamPlanRef.current = [];
@@ -594,6 +611,7 @@ export function YtEngine() {
     streamLoadedRef.current = false;
     streamRefreshedRef.current = false;
     streamGaveUpRef.current = false;
+    preferEmbedRef.current = false;
     useYtUi.setState({ note: null, error: null });
   }, [current?.id]);
 
@@ -711,6 +729,18 @@ export function YtEngine() {
 
     const wantPlayNow =
       (fromKick && !!kick?.play) || useStore.getState().playWhenReady === epId;
+
+    // macOS：WebKit 可播 HLS 时优先直连自适应高清，对齐原站清晰度；失败再走 embed
+    if (canNativeHls() && !preferEmbedRef.current && !resolvingStreamRef.current) {
+      const s = useStore.getState();
+      const wantStream =
+        wantPlayNow || s.playing || !!s.loadingSince || s.playWhenReady === epId;
+      if (wantStream) {
+        videoIdRef.current = vid;
+        void fallbackToStream("", true);
+        return;
+      }
+    }
 
     const onReady = (p: YtPlayer) => {
       ytRef.current = p;
@@ -898,7 +928,7 @@ export function YtEngine() {
       clearEmbedTimers();
       unsubVol();
     };
-  }, [active, videoId, current?.id, kick?.gen, native]);
+  }, [active, videoId, current?.id, kick?.gen, native, embedKick]);
 
   useEffect(() => {
     if (!active || !playWhenReady || !current || playWhenReady !== current.id) return;

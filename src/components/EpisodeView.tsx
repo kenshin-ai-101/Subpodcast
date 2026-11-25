@@ -390,7 +390,7 @@ export function EpisodeView({ episodeId }: { episodeId: string }) {
   const epShow = shows.find((x) => x.id === ep.showId);
   const ytChannel = showLinks(epShow?.feedUrl).youtube;
   const isCurrent = current?.id === ep.id;
-  // 与 CSS --panel-eff 一致：拖条用可视宽度，避免存宽 > 可用时「空拖」再突然收起
+  // 拖条用可视宽度写入 --panel-w，避免存宽 > 可用时「空拖」再突然收起（与原站 panel-w 直连一致）
   const panelMax = Math.min(PANEL.max, Math.max(PANEL.min, (bodyW || PANEL.max + 460) - 460));
   const panelVis = Math.min(panel, panelMax);
 
