@@ -16,6 +16,8 @@ export type ActionId =
   | "nextLine"
   | "fullscreen"
   | "subtitleMode"
+  | "subBigger"
+  | "subSmaller"
   | "speedUp"
   | "speedDown"
   | "mute"
@@ -52,6 +54,8 @@ export const ACTIONS: ActionDef[] = [
   { id: "volumeDown", label: "调低音量", group: "播放", keys: ["Mod+ArrowDown", "-"] },
   { id: "fullscreen", label: "全屏看视频", group: "视频与字幕", keys: ["F"] },
   { id: "subtitleMode", label: "切换字幕：双语 / 中文 / 原文", group: "视频与字幕", keys: ["C"] },
+  { id: "subBigger", label: "字幕变大", group: "视频与字幕", keys: ["Mod+="] },
+  { id: "subSmaller", label: "字幕变小", group: "视频与字幕", keys: ["Mod+-"] },
   { id: "toggleSidebar", label: "显示 / 收起侧栏", group: "窗口", keys: ["Mod+B"], global: true },
   { id: "togglePanel", label: "显示 / 收起字幕栏", group: "窗口", keys: ["Mod+\\"], global: true },
   { id: "search", label: "搜索节目", group: "窗口", keys: ["Mod+L"], global: true },
@@ -94,6 +98,8 @@ export function comboOf(e: KeyboardEvent): string | null {
   else if (e.code === "Period") key = ".";
   else if (e.code === "Backslash") key = "\\";
   else if (e.code === "Slash") key = "/";
+  else if (e.code === "Equal") key = "=";
+  else if (e.code === "Minus") key = "-";
   const mod = IS_MAC ? e.metaKey : e.ctrlKey;
   const parts = [mod && "Mod", !IS_MAC && e.metaKey && "Meta", IS_MAC && e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", key].filter(
     Boolean,

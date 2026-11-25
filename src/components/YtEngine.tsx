@@ -7,8 +7,10 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import { ExternalLink, X } from "lucide-react";
 import { pauseAudioHost, releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
-import { tNow } from "../lib/i18n";
+import { tNow, useT } from "../lib/i18n";
+import { useLayout } from "../lib/layout";
 import { noteListening } from "../lib/listening";
 import { preferAudio, usesYtEngine } from "../lib/media";
 import { createMediaClock } from "../lib/mediaClock";
@@ -21,11 +23,15 @@ import { hideYouTubeCaptions, loadYouTube, type YtPlayer } from "../lib/youtube"
 import { registerYtHost } from "../lib/ytHost";
 import { useYtKick } from "../lib/ytKick";
 import { offerPlayer, useStore, withdrawPlayer, type PlayerHandle } from "../store";
+import { SubtitleOverlay } from "./SubtitleOverlay";
 
 /** 叠字要跟口型：约 20Hz 采样；getCurrentTime 粗跳时靠 mediaClock 外推。 */
 const TICK_MS = 50;
 
 export const useYtUi = create<{ error: string | null }>(() => ({ error: null }));
+
+/** 离页悬浮视频小窗当前归属的单集 id；MiniPlayer 据此避让。 */
+export const useVideoFloating = create<{ epId: string | null }>(() => ({ epId: null }));
 
 const useSlot = create<{ el: HTMLElement | null }>(() => ({ el: null }));
 
@@ -58,16 +64,19 @@ function fallbackToAudio() {
 }
 
 export function YtEngine() {
-  const { current, audioOnly, playWhenReady, rate, theater } = useStore(
+  const t = useT();
+  const { current, audioOnly, playWhenReady, rate, theater, playing } = useStore(
     useShallow((s) => ({
       current: s.current,
       audioOnly: s.audioOnly,
       playWhenReady: s.playWhenReady,
       rate: s.rate,
       theater: s.theater,
+      playing: s.playing,
     })),
   );
   const slotEl = useSlot((s) => s.el);
+  const floatingEpId = useVideoFloating((s) => s.epId);
   const kick = useYtKick((s) => s.kick);
   const boxRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -86,7 +95,26 @@ export function YtEngine() {
   const active = usesYtEngine(current, audioOnly);
   const videoId = active ? current?.videoId ?? kick?.videoId ?? null : null;
   const shell = !!(active && current && audioOnly && !audioSrc(current));
+  const floating = Boolean(active && !shell && !slotEl && current && floatingEpId === current.id);
   epRef.current = current;
+
+  // 离页时若视频正在播放则切入右下角悬浮小窗；回到单集页、切集或停用视频引擎则收起
+  useEffect(() => {
+    if (!active || shell || !current || slotEl) {
+      if (useVideoFloating.getState().epId !== null) {
+        useVideoFloating.setState({ epId: null });
+      }
+      return;
+    }
+    const curFloat = useVideoFloating.getState().epId;
+    if (curFloat && curFloat !== current.id) {
+      useVideoFloating.setState({ epId: playing ? current.id : null });
+      return;
+    }
+    if (!curFloat && playing) {
+      useVideoFloating.setState({ epId: current.id });
+    }
+  }, [active, shell, slotEl, current?.id, playing]);
 
   const stopTick = () => {
     if (tickRef.current) {
@@ -110,6 +138,17 @@ export function YtEngine() {
       try {
         if (!window.YT) return;
         const state = p.getPlayerState();
+        // UNSTARTED / CUED / ENDED 时 getCurrentTime 常为 0，只补时长、不覆盖用户进度或刚发起的 seek
+        if (
+          state !== window.YT.PlayerState.PLAYING &&
+          state !== window.YT.PlayerState.PAUSED &&
+          state !== window.YT.PlayerState.BUFFERING
+        ) {
+          const dur = p.getDuration();
+          const st = useStore.getState();
+          if (dur > 0 && dur !== st.length) st.set({ length: dur });
+          return;
+        }
         const playing = state === window.YT.PlayerState.PLAYING;
         clock.setPlaying(playing);
         if (!playing && state !== window.YT.PlayerState.PAUSED) {
@@ -132,8 +171,15 @@ export function YtEngine() {
       episodeId,
       seek(seconds) {
         switchingRef.current = false;
-        useStore.getState().set({ time: seconds, rawTime: seconds, gapEnd: null });
-        clockRef.current.reset(seconds);
+        let origin = useStore.getState().rawTime ?? useStore.getState().time;
+        try {
+          const cur = p.getCurrentTime();
+          if (Number.isFinite(cur)) origin = cur;
+        } catch {
+          /* ignore */
+        }
+        clockRef.current.seek(seconds, origin);
+        useStore.getState().set({ time: seconds, rawTime: seconds, gapEnd: null, scrubTime: null });
         p.seekTo(seconds, true);
       },
       toggle() {
@@ -164,22 +210,26 @@ export function YtEngine() {
     offerPlayer(handle);
   };
 
-  // 贴合槽位；用 ResizeObserver + scroll/resize 事件替代 60-120fps rAF 持续轮询
+  // 贴合槽位；用 ResizeObserver + scroll/resize/layout 事件同步几何与滚动裁切
   useEffect(() => {
     const box = boxRef.current;
     if (!box || !active) return;
     if (!slotEl || shell) {
-      box.className = `yt-dock ${shell ? "shell" : "offscreen"}`;
+      box.className = `yt-dock ${shell ? "shell" : floating ? "floating" : "offscreen"}`;
       box.removeAttribute("style");
       return;
     }
+    const scroller = slotEl.closest<HTMLElement>(".ep-left");
     let raf = 0;
     let last = "";
     const sync = () => {
       raf = 0;
       const r = slotEl.getBoundingClientRect();
       const host = theater ? " theater-host" : "";
-      const key = `${r.left},${r.top},${r.width},${r.height},${host}`;
+      const c = (scroller ?? document.body).getBoundingClientRect();
+      const top = theater ? 0 : Math.max(0, c.top - r.top);
+      const bottom = theater ? 0 : Math.max(0, r.bottom - c.bottom);
+      const key = `${r.left},${r.top},${r.width},${r.height},${top},${bottom},${host}`;
       if (key !== last) {
         last = key;
         box.className = `yt-dock docked${host}`;
@@ -188,6 +238,7 @@ export function YtEngine() {
           top: `${r.top}px`,
           width: `${r.width}px`,
           height: `${r.height}px`,
+          clipPath: top || bottom ? `inset(${top}px 0 ${bottom}px 0 round 12px)` : "",
         });
       }
     };
@@ -197,17 +248,20 @@ export function YtEngine() {
     sync();
     const ro = new ResizeObserver(schedule);
     ro.observe(slotEl);
-    const scrollParent = slotEl.closest<HTMLElement>(".ep-left") ?? window;
+    ro.observe(document.documentElement);
+    if (scroller) ro.observe(scroller);
     const onEvent = () => schedule();
-    scrollParent.addEventListener("scroll", onEvent, { passive: true });
+    (scroller ?? window).addEventListener("scroll", onEvent, { passive: true });
     window.addEventListener("resize", onEvent, { passive: true });
+    const unsubLayout = useLayout.subscribe(schedule);
     return () => {
       ro.disconnect();
-      scrollParent.removeEventListener("scroll", onEvent);
+      (scroller ?? window).removeEventListener("scroll", onEvent);
       window.removeEventListener("resize", onEvent);
+      unsubLayout();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [active, slotEl, shell, videoId, theater]);
+  }, [active, slotEl, shell, floating, videoId, theater]);
 
   const hardStopYt = () => {
     stopTick();
@@ -405,8 +459,8 @@ export function YtEngine() {
                 clockRef.current.setPlaying(false);
                 try {
                   const raw = e.target.getCurrentTime();
-                  clockRef.current.reset(raw);
-                  flushProgress(cur, toContent(currentMap(cur.id), raw).at);
+                  const settled = clockRef.current.sample(raw);
+                  flushProgress(cur, toContent(currentMap(cur.id), settled).at);
                 } catch {
                   /* ignore */
                 }
@@ -505,12 +559,59 @@ export function YtEngine() {
   }, []);
 
   // 始终保留挂载点，失活只藏起——iframe 才能跨集 / 音视频切换复用
-  const mode = !active ? "offscreen" : shell || !slotEl ? (shell ? "shell" : "offscreen") : "docked";
+  const mode = !active
+    ? "offscreen"
+    : shell
+      ? "shell"
+      : slotEl
+        ? "docked"
+        : floating
+          ? "floating"
+          : "offscreen";
   const theaterHost = mode === "docked" && theater ? " theater-host" : "";
 
+  const closeFloating = () => {
+    const st = useStore.getState();
+    if (st.playing) st.player?.toggle();
+    useVideoFloating.setState({ epId: null });
+  };
+
   return (
-    <div ref={boxRef} className={`yt-dock ${mode}${theaterHost}`} aria-hidden={!active}>
+    <div ref={boxRef} className={`yt-dock ${mode}${theaterHost}`} aria-hidden={!active && !floating}>
       <div className="yt-mount" ref={hostRef} />
+      {floating && current && (
+        <>
+          <button
+            type="button"
+            className="yt-float-shield"
+            aria-label={playing ? t("暂停") : t("播放")}
+            onClick={() => useStore.getState().player?.toggle()}
+          />
+          <div className="video-cq">
+            <SubtitleOverlay episodeId={current.id} interactive={false} />
+          </div>
+          <div className="video-float-bar">
+            <button
+              type="button"
+              className="icon-btn sm"
+              title={t("回到这一集")}
+              aria-label={t("回到这一集")}
+              onClick={() => useStore.getState().openEpisode(current)}
+            >
+              <ExternalLink size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-btn sm"
+              title={t("停止播放并关闭")}
+              aria-label={t("停止播放并关闭")}
+              onClick={closeFloating}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

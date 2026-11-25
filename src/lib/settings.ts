@@ -64,6 +64,12 @@ export interface Settings {
   quickPrompts: QuickPrompt[] | null;
   subtitleMode: SubtitleMode;
   subtitleSize?: "s" | "m" | "l" | "xl";
+  /** 中文字幕缩放倍率（0.7 ~ 2.0）；未设时回退 subtitleSize 四档。 */
+  subtitleScale?: number;
+  /** 原文字幕缩放倍率（0.7 ~ 2.0）；未设时跟随 subtitleScale。 */
+  subtitleOrigScale?: number;
+  /** 视频叠字幕垂直位移（单位 cqh，-4 ~ 70）；拖拽产生，双击清零。 */
+  subtitleLift?: number;
   subtitleFont?: "system" | "serif" | "kai" | "sans";
   subtitleLook?: "box" | "outline";
   chatSize?: "m" | "l";

@@ -9,7 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "./store";
 import { useLayout, SIDEBAR } from "./lib/layout";
 import { tNow, useT } from "./lib/i18n";
-import { useReadingSettings } from "./lib/reading";
+import { stepSubScale, useReadingSettings } from "./lib/reading";
 import { loadFavorites } from "./lib/library";
 import { flushListening, noteListening } from "./lib/listening";
 import { activeIndex, armPlayerIntentListener } from "./lib/playback";
@@ -186,6 +186,16 @@ export default function App() {
         const next = order[(order.indexOf(cur) + 1) % order.length];
         e.preventDefault();
         void st.saveSettings({ subtitleMode: next });
+        return;
+      }
+      if (hit("subBigger")) {
+        e.preventDefault();
+        stepSubScale(1);
+        return;
+      }
+      if (hit("subSmaller")) {
+        e.preventDefault();
+        stepSubScale(-1);
         return;
       }
       if (hit("mute")) {

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: api、settings；event asr；asrModels；store.time（播放头优先机翻）；offline.loadDownloads
- * [OUTPUT]: ensureTranscript、autoTranslate、translateEpisode、generateTranscript、switchYoutubeTrack、llmReady
- * [POS]: 跨屏幕长任务；缓存→官方（含 twin 回填）→共享库→空态→用户触发识别；ASR 落盘后刷新离线清单；机翻播放头优先
+ * [OUTPUT]: ensureTranscript、autoTranslate、translateEpisode、stopTranslation、hasZhTranslation、shouldAutoTranslate、countMissingTranslations、generateTranscript、switchYoutubeTrack、llmReady
+ * [POS]: 跨屏幕长任务；缓存→官方（含 twin 回填）→共享库→空态→用户触发识别；已有 zh 译文时跳过自动翻译；ASR 落盘后刷新离线清单；机翻播放头优先
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 import { listen } from "@tauri-apps/api/event";
@@ -25,7 +25,10 @@ const BATCH = 6;
 type Batch = { ids: number[] };
 
 const controllers = new Map<string, AbortController>();
-const saveTimers = new Map<string, number>();
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const ensuring = new Map<string, Promise<void>>();
+const loadingTranslations = new Map<string, Promise<void>>();
+const startingTranslations = new Set<string>();
 
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -33,11 +36,11 @@ function sleep(ms: number, signal?: AbortSignal) {
       reject(new DOMException("aborted", "AbortError"));
       return;
     }
-    const t = window.setTimeout(() => resolve(), ms);
+    const t = globalThis.setTimeout(() => resolve(), ms);
     signal?.addEventListener(
       "abort",
       () => {
-        window.clearTimeout(t);
+        globalThis.clearTimeout(t);
         reject(new DOMException("aborted", "AbortError"));
       },
       { once: true },
@@ -45,8 +48,10 @@ function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-function toBatches(total: number, items: (string | null)[]): Batch[] {
-  const missing = Array.from({ length: total }, (_, i) => i).filter((i) => items[i] == null);
+function toBatches(segments: readonly Segment[], items: (string | null)[]): Batch[] {
+  const missing = segments
+    .map((seg, i) => (items[i] == null && seg.text.trim().length > 0 ? i : -1))
+    .filter((i) => i >= 0);
   const out: Batch[] = [];
   for (let i = 0; i < missing.length; i += BATCH) {
     out.push({ ids: missing.slice(i, i + BATCH) });
@@ -149,77 +154,86 @@ export async function ensureTranscript(ep: Episode) {
   const s = useJobs.getState();
   // 已有内存字幕（含空对象以外的命中）或正在搜，不重复进
   if (s.transcripts[ep.id] || s.official[ep.id] === "searching") return;
+  const inflight = ensuring.get(ep.id);
+  if (inflight) return inflight;
 
-  let cached: Awaited<ReturnType<typeof api.loadTranscript>> = null;
-  try {
-    cached = await api.loadTranscript(ep.id);
-  } catch {
-    cached = null;
-  }
+  const task = (async () => {
+    let cached: Awaited<ReturnType<typeof api.loadTranscript>> = null;
+    try {
+      cached = await api.loadTranscript(ep.id);
+    } catch {
+      cached = null;
+    }
 
-  const stale = !!(cached?.segments?.length && staleYoutubeCache(ep, cached));
-  if (cached?.segments?.length && !stale) {
-    acceptTranscript(ep.id, cached);
-    return;
-  }
-  if (stale) {
-    const picked = await api.getBlob(ep.id, "track-picked").catch(() => null);
-    if (picked) {
-      acceptTranscript(ep.id, cached!);
+    const stale = !!(cached?.segments?.length && staleYoutubeCache(ep, cached));
+    if (cached?.segments?.length && !stale) {
+      acceptTranscript(ep.id, cached);
       return;
     }
-  }
-
-  patch("official", ep.id, "searching");
-  patch("officialError", ep.id, "");
-
-  const fromShared = async () => {
-    const sh = await api.sharedTranscript(ep.id).catch(() => null);
-    if (sh?.segments?.length) {
-      acceptTranscript(ep.id, sh);
-      return true;
-    }
-    return false;
-  };
-
-  // 即使前端看不到 videoId，也要调官方拉取：Rust 会给词元等双形态回填 YouTube 轨
-  try {
-    const t = await api.fetchOfficialTranscript(ep.id);
-    if (t?.segments?.length) {
-      acceptTranscript(ep.id, t);
-      if (stale && !t.language.toLowerCase().startsWith("zh")) {
-        void api.setBlob(ep.id, "track-picked", "auto");
+    if (stale) {
+      const picked = await api.getBlob(ep.id, "track-picked").catch(() => null);
+      if (picked) {
+        acceptTranscript(ep.id, cached!);
+        return;
       }
-      return;
     }
+
+    patch("official", ep.id, "searching");
+    patch("officialError", ep.id, "");
+
+    const fromShared = async () => {
+      const sh = await api.sharedTranscript(ep.id).catch(() => null);
+      if (sh?.segments?.length) {
+        acceptTranscript(ep.id, sh);
+        return true;
+      }
+      return false;
+    };
+
+    // 即使前端看不到 videoId，也要调官方拉取：Rust 会给词元等双形态回填 YouTube 轨
     try {
-      cached = await api.loadTranscript(ep.id);
-    } catch {
-      cached = null;
-    }
-    if (cached?.segments?.length) {
-      acceptTranscript(ep.id, cached);
-      return;
-    }
-    if (!(await fromShared())) {
+      const t = await api.fetchOfficialTranscript(ep.id);
+      if (t?.segments?.length) {
+        acceptTranscript(ep.id, t);
+        if (stale && !t.language.toLowerCase().startsWith("zh")) {
+          void api.setBlob(ep.id, "track-picked", "auto");
+        }
+        return;
+      }
+      try {
+        cached = await api.loadTranscript(ep.id);
+      } catch {
+        cached = null;
+      }
+      if (cached?.segments?.length) {
+        acceptTranscript(ep.id, cached);
+        return;
+      }
+      if (!(await fromShared())) {
+        patch("transcripts", ep.id, null);
+        patch("official", ep.id, "none");
+      }
+    } catch (e) {
+      try {
+        cached = await api.loadTranscript(ep.id);
+      } catch {
+        cached = null;
+      }
+      if (cached?.segments?.length) {
+        acceptTranscript(ep.id, cached);
+        return;
+      }
+      if (await fromShared()) return;
       patch("transcripts", ep.id, null);
-      patch("official", ep.id, "none");
+      patch("officialError", ep.id, errText(e));
+      patch("official", ep.id, "error");
     }
-  } catch (e) {
-    try {
-      cached = await api.loadTranscript(ep.id);
-    } catch {
-      cached = null;
-    }
-    if (cached?.segments?.length) {
-      acceptTranscript(ep.id, cached);
-      return;
-    }
-    if (await fromShared()) return;
-    patch("transcripts", ep.id, null);
-    patch("officialError", ep.id, errText(e));
-    patch("official", ep.id, "error");
-  }
+  })().finally(() => {
+    ensuring.delete(ep.id);
+  });
+
+  ensuring.set(ep.id, task);
+  return task;
 }
 
 export function looksChinese(language: string, sample: string) {
@@ -235,36 +249,106 @@ export function needsTranslation(t: Transcript) {
   );
 }
 
-export async function loadTranslation(id: string, total: number) {
-  if (useJobs.getState().translations[id]) return;
-  const raw = await api.getBlob(id, "zh");
-  let items: (string | null)[] = [];
+/** 安全解析数据库里的 zh blob，按字幕段数对齐长度。 */
+export function parseZhTranslation(
+  raw: string | null | undefined,
+  total: number,
+): (string | null)[] {
+  let parsed: unknown = null;
   try {
-    items = raw ? JSON.parse(raw) : [];
+    parsed = raw ? JSON.parse(raw) : null;
   } catch {
-    items = [];
+    parsed = null;
   }
-  if (items.length !== total) items = Array.from({ length: total }, (_, i) => items[i] ?? null);
-  const engine = ((await api.getBlob(id, "zh-engine")) as TranslateEngine | null) ?? undefined;
-  patch("translations", id, { items, running: false, engine });
+  const arr = Array.isArray(parsed) ? parsed : [];
+  return Array.from({ length: total }, (_, i) => {
+    const v = arr[i];
+    return typeof v === "string" ? v : null;
+  });
 }
 
-/** 外语字幕就绪后自动补中文；原文模式不跑。节目方中文轨只填缺口。 */
+/** 检测是否已存在有效的 zh 中文翻译（至少有一条非空译文）。 */
+export function hasZhTranslation(
+  items: readonly (string | null | undefined)[] | null | undefined,
+): boolean {
+  if (!items?.length) return false;
+  return items.some((x) => typeof x === "string" && x.trim().length > 0);
+}
+
+/** 统计非空原文中缺失中文翻译的句段数。 */
+export function countMissingTranslations(
+  segments: readonly Segment[],
+  items: readonly (string | null | undefined)[] | null | undefined,
+): number {
+  let missing = 0;
+  for (let i = 0; i < segments.length; i++) {
+    if (!segments[i]!.text.trim()) continue;
+    const zh = items?.[i];
+    if (typeof zh !== "string" || !zh.trim()) missing++;
+  }
+  return missing;
+}
+
+/** 是否应当在打开单集时自动触发翻译：原文模式、正在跑、已报错、或已有 zh 翻译时均跳过。 */
+export function shouldAutoTranslate(
+  job: TranslationJob | undefined,
+  subtitleMode: "bilingual" | "translation" | "original",
+): boolean {
+  if (subtitleMode === "original") return false;
+  if (!job || job.running || job.error) return false;
+  if (hasZhTranslation(job.items)) return false;
+  return job.items.some((x) => x == null);
+}
+
+export async function loadTranslation(id: string, total: number) {
+  const existing = useJobs.getState().translations[id];
+  if (existing && (existing.running || existing.items.length === total)) return;
+  const inflight = loadingTranslations.get(id);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const [raw, engineRaw] = await Promise.all([
+      api.getBlob(id, "zh"),
+      api.getBlob(id, "zh-engine"),
+    ]);
+    if (useJobs.getState().translations[id]?.running) return;
+    const items = parseZhTranslation(raw, total);
+    const engine = (engineRaw as TranslateEngine | null) ?? undefined;
+    patch("translations", id, { items, running: false, engine });
+  })().finally(() => {
+    loadingTranslations.delete(id);
+  });
+
+  loadingTranslations.set(id, task);
+  return task;
+}
+
+/** 外语字幕就绪后先读本地 zh 翻译；已有 zh 翻译或原文模式不自动翻译，降低翻译 API 调用。 */
 export function autoTranslate(ep: Episode) {
   const t = useJobs.getState().transcripts[ep.id];
   if (!t?.segments.length) return;
-  if (useStore.getState().settings.subtitleMode === "original") return;
   if (!needsTranslation(t)) return;
+  if (useStore.getState().settings.subtitleMode === "original") {
+    void loadTranslation(ep.id, t.segments.length).catch(() => {});
+    return;
+  }
   void loadTranslation(ep.id, t.segments.length).then(() => {
+    const mode = useStore.getState().settings.subtitleMode;
     const job = useJobs.getState().translations[ep.id];
-    if (!job || job.running || job.error || job.items.every((x) => x != null)) return;
-    void translateEpisode(ep, t).catch((e) =>
-      patch("translations", ep.id, {
-        ...useJobs.getState().translations[ep.id],
-        running: false,
-        error: errText(e),
-      }),
-    );
+    if (!shouldAutoTranslate(job, mode)) return;
+    if (startingTranslations.has(ep.id) || controllers.has(ep.id)) return;
+    startingTranslations.add(ep.id);
+    void translateEpisode(ep, t)
+      .catch((e) =>
+        patch("translations", ep.id, {
+          ...useJobs.getState().translations[ep.id],
+          running: false,
+          error: errText(e),
+        }),
+      )
+      .finally(() => {
+        startingTranslations.delete(ep.id);
+      });
   });
 }
 
@@ -273,20 +357,23 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
   const total = t.segments.length;
   await loadTranslation(ep.id, total);
   const job = useJobs.getState().translations[ep.id];
-  if (job.running) return;
+  if (!job) return;
+  if (force == null && (job.running || controllers.has(ep.id))) return;
 
   const useLlm = force === "llm" || (force !== "google" && settings.translateMode !== "google");
   const engine: TranslateEngine =
     force === "youtube" ? "youtube" : useLlm ? "llm" : "google";
-  const keep =
-    (job.engine === "youtube" || job.engine === "shared") && force == null;
+  const keepLabel =
+    force == null && (job.engine === "youtube" || job.engine === "shared");
+  const mixedEngine = Boolean(job.engine && job.engine !== engine && force == null);
   let items =
-    job.engine && job.engine !== engine && !keep
+    force != null && job.engine && job.engine !== engine
       ? t.segments.map(() => null)
       : [...job.items];
-  const label: TranslateEngine = keep ? job.engine! : engine;
-  if (items.every((x) => x != null)) {
-    patch("translations", ep.id, { items, running: false, engine: label });
+  const label: TranslateEngine = keepLabel ? job.engine! : engine;
+  const queue = toBatches(t.segments, items);
+  if (!queue.length) {
+    patch("translations", ep.id, { items, running: false, engine: label, error: undefined });
     return;
   }
 
@@ -295,19 +382,21 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
   controllers.set(ep.id, controller);
   const { signal } = controller;
 
-  patch("translations", ep.id, { items, running: true, engine: label });
+  patch("translations", ep.id, { items, running: true, engine: label, error: undefined });
   void api.setBlob(ep.id, "zh-engine", label);
 
   const provider =
     settings.providers[settings.translateProvider] ?? settings.providers[settings.chatProvider];
-  const queue = toBatches(total, items);
   const save = () => {
-    window.clearTimeout(saveTimers.get(ep.id));
+    globalThis.clearTimeout(saveTimers.get(ep.id));
     saveTimers.set(
       ep.id,
-      window.setTimeout(() => {
+      globalThis.setTimeout(() => {
+        saveTimers.delete(ep.id);
         const cur = useJobs.getState().translations[ep.id];
-        if (cur) void api.setBlob(ep.id, "zh", JSON.stringify(cur.items));
+        if (cur && hasZhTranslation(cur.items)) {
+          void api.setBlob(ep.id, "zh", JSON.stringify(cur.items));
+        }
       }, 800),
     );
   };
@@ -406,9 +495,13 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
   });
 
   controllers.delete(ep.id);
+  globalThis.clearTimeout(saveTimers.get(ep.id));
+  saveTimers.delete(ep.id);
   const final = useJobs.getState().translations[ep.id];
   if (!final) return;
-  await api.setBlob(ep.id, "zh", JSON.stringify(final.items));
+  if (hasZhTranslation(final.items)) {
+    await api.setBlob(ep.id, "zh", JSON.stringify(final.items));
+  }
   patch("translations", ep.id, {
     ...final,
     running: false,
@@ -417,8 +510,9 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
   if (
     !signal.aborted &&
     (engine === "llm" || engine === "google") &&
-    !keep &&
-    final.items.every((x) => x != null)
+    !keepLabel &&
+    !mixedEngine &&
+    countMissingTranslations(t.segments, final.items) === 0
   ) {
     void api
       .shareTranslation(ep.id, engine, engine === "llm" ? provider?.model ?? "" : "")
@@ -427,6 +521,8 @@ export async function translateEpisode(ep: Episode, t: Transcript, force?: Trans
 }
 
 export function stopTranslation(id: string) {
+  globalThis.clearTimeout(saveTimers.get(id));
+  saveTimers.delete(id);
   controllers.get(id)?.abort();
 }
 
@@ -495,7 +591,7 @@ export async function generateTranscript(ep: Episode) {
     }
     patch("transcripts", ep.id, t);
     patch("official", ep.id, "found");
-    patch("translations", ep.id, { items: [], running: false });
+    forgetTranslation(ep.id);
     patch("asrProgress", ep.id, { stage: "done", progress: 1 });
     // ASR 可能将播客音频写入 audio-cache/：刷新清单，并同步重置/载入当前集时间映射
     void loadDownloads();

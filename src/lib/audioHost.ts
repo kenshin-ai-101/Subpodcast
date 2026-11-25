@@ -269,7 +269,7 @@ function bindHandle(a: HTMLAudioElement, id: string) {
     seek(seconds) {
       // seconds = 字幕时间
       const playAt = toPlay(currentMap(id), seconds);
-      useStore.getState().set({ time: seconds, rawTime: playAt, gapEnd: null });
+      useStore.getState().set({ time: seconds, rawTime: playAt, gapEnd: null, scrubTime: null });
       if (a.readyState < HTMLMediaElement.HAVE_METADATA) {
         pendingSeek = { sub: seconds };
         return;
@@ -287,6 +287,7 @@ function bindHandle(a: HTMLAudioElement, id: string) {
         time: mapped.at,
         rawTime: seconds,
         gapEnd: mapped.gapEnd ?? null,
+        scrubTime: null,
       });
       if (a.readyState < HTMLMediaElement.HAVE_METADATA) {
         pendingSeek = { play: seconds };

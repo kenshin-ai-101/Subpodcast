@@ -1,6 +1,6 @@
 /**
  * [INPUT]: api、settings、media.initialAudioOnly、audioHost / ytHost / ytKick、offline.loadDownloads；timemap.Aligned
- * [OUTPUT]: 全局导航；播放态（time=字幕时钟 / rawTime=媒体时钟）；align；notify；offerPlayer
+ * [OUTPUT]: 全局导航；播放态（time=字幕时钟 / rawTime=媒体时钟 / scrubTime=拖拽预览字幕时钟）；align；notify；offerPlayer
  * [POS]: view⊥current；load→prepareEngines 先停另一路再装载；init 先拉离线清单
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -69,6 +69,8 @@ interface State {
   time: number;
   /** 媒体元素时钟；有 TimeMap 时与 time 不同 */
   rawTime?: number;
+  /** 进度条拖拽预览时的字幕时钟；松手或取消后归 null */
+  scrubTime: number | null;
   /** 本集字幕与播放音轨的对齐态 */
   align?: AlignState;
   /** 落在播放文件独有空隙时，正文恢复的媒体时钟 */
@@ -99,7 +101,7 @@ interface State {
   go(view: View): void;
   back(): void;
   reloadShows(): Promise<void>;
-  saveSettings(patch: Partial<Settings>): Promise<void>;
+  saveSettings(patch: Partial<Settings>, debounced?: boolean): Promise<void>;
   /** 只导航到单集页，不装载、不起播 */
   openEpisode(ep: Episode): void;
   /** 装入播放器并预缓冲；不起播（起播用 playSoon） */
@@ -109,6 +111,7 @@ interface State {
 }
 
 let toastTimer: number | undefined;
+let settingsSaveTimer: number | undefined;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -119,6 +122,7 @@ export const useStore = create<State>((set, get) => ({
   current: null,
   time: 0,
   rawTime: undefined,
+  scrubTime: null,
   align: null,
   gapEnd: null,
   length: 0,
@@ -163,11 +167,18 @@ export const useStore = create<State>((set, get) => ({
   async reloadShows() {
     set({ shows: await api.listShows() });
   },
-  async saveSettings(patch) {
+  async saveSettings(patch, debounced) {
     const settings = { ...get().settings, ...patch };
     const next: Partial<State> = { settings };
     if (patch.playbackRate != null) next.rate = patch.playbackRate;
     set(next);
+    window.clearTimeout(settingsSaveTimer);
+    if (debounced) {
+      settingsSaveTimer = window.setTimeout(() => {
+        void saveSettings(get().settings);
+      }, 240);
+      return;
+    }
     await saveSettings(settings);
   },
   openEpisode(ep) {
@@ -196,6 +207,7 @@ export const useStore = create<State>((set, get) => ({
       current: ep,
       time: ep.progress || 0,
       rawTime: undefined,
+      scrubTime: null,
       gapEnd: null,
       align: null,
       length: ep.duration || 0,

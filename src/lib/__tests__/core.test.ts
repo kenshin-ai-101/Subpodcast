@@ -12,6 +12,7 @@ import { resolveLocale, translate } from "../i18n";
 import { createMediaClock } from "../mediaClock";
 import { initialAudioOnly } from "../media";
 import { anchorAt, toContent, toPlay, type TimeMap } from "../timemap";
+import { clampLift, clampScale, resolveOrigScale, resolveSubScale } from "../reading";
 
 describe("playback.activeIndex", () => {
   it("finds active segment via binary search with read-ahead lead", () => {
@@ -79,14 +80,16 @@ describe("timemap", () => {
 
 describe("mediaClock", () => {
   it("extrapolates while playing when the player clock stalls", () => {
-    const c = createMediaClock();
+    let now = 1000;
+    const c = createMediaClock(() => now);
     c.setPlaying(true);
     c.setRate(1);
     const a = c.sample(10);
     expect(a).toBe(10);
     // 同一读数：应略往前走（墙钟外推）
+    now += 150;
     const b = c.sample(10);
-    expect(b).toBeGreaterThanOrEqual(a);
+    expect(b).toBeGreaterThan(a);
   });
 
   it("re-anchors on seek jumps", () => {
@@ -94,6 +97,42 @@ describe("mediaClock", () => {
     c.setPlaying(true);
     c.sample(10);
     expect(c.sample(40)).toBe(40);
+  });
+
+  it("holds async seek target until YouTube catches up, both playing and paused", () => {
+    let now = 1000;
+    const c = createMediaClock(() => now);
+    c.setPlaying(true);
+    c.sample(10);
+    c.seek(500, 10);
+    // 播放器仍报旧读数：锁在 500 不回跳
+    now += 100;
+    expect(c.sample(10.1)).toBe(500);
+    // 播放器落到附近关键帧：立刻收敛到真实读数
+    now += 200;
+    expect(c.sample(499.6)).toBe(499.6);
+
+    // 暂停态 seek：即使等待很久也不应被旧读数覆盖
+    c.setPlaying(false);
+    c.seek(120, 499.6);
+    now += 5000;
+    expect(c.sample(499.6)).toBe(120);
+    // 暂停态 iframe 更新完成后立即同步
+    expect(c.sample(120.4)).toBe(120.4);
+  });
+
+  it("handles short seeks without settling prematurely on normal playback drift", () => {
+    let now = 1000;
+    const c = createMediaClock(() => now);
+    c.setPlaying(true);
+    c.sample(100);
+    c.seek(101.8, 100);
+    // 100ms 后原时钟只自然前进了 0.1s，尚未落地，应继续锁在目标
+    now += 100;
+    expect(c.sample(100.1)).toBe(101.8);
+    // 到达目标附近后落地
+    now += 100;
+    expect(c.sample(101.6)).toBe(101.6);
   });
 });
 
@@ -109,13 +148,30 @@ describe("safeUrl.isSafeHttpUrl", () => {
 });
 
 describe("shortcuts registry", () => {
-  it("exposes all 19 actions and detects conflicts and reserved combos", () => {
-    expect(ACTIONS.length).toBe(19);
+  it("exposes all 21 actions and detects conflicts and reserved combos", () => {
+    expect(ACTIONS.length).toBe(21);
     const m = keymap({ playPause: ["P"] });
     expect(m.playPause).toEqual(["P"]);
     expect(checkCombo("Mod+Q", "playPause").reserved).toBe(true);
     expect(checkCombo("F", "playPause").takenBy).toBe("fullscreen");
     expect(prettyCombo("Mod+/").length).toBeGreaterThan(0);
+    expect(m.subBigger).toEqual(["Mod+="]);
+    expect(m.subSmaller).toEqual(["Mod+-"]);
+  });
+});
+
+describe("reading subtitle scales and lift", () => {
+  it("resolves continuous scale over legacy presets and keeps orig synced unless overridden", () => {
+    expect(resolveSubScale({ subtitleSize: "l" })).toBe(1.18);
+    expect(resolveSubScale({ subtitleSize: "l", subtitleScale: 1.4 })).toBe(1.4);
+    expect(resolveOrigScale({ subtitleSize: "m", subtitleScale: 1.3 })).toBe(1.3);
+    expect(resolveOrigScale({ subtitleSize: "m", subtitleScale: 1.3, subtitleOrigScale: 0.9 })).toBe(0.9);
+    expect(clampScale(0.2)).toBe(0.7);
+    expect(clampScale(3.5)).toBe(2);
+    expect(clampScale(1.13)).toBe(1.15);
+    expect(clampLift(-20)).toBe(-4);
+    expect(clampLift(120)).toBe(70);
+    expect(clampLift(12.34)).toBe(12.3);
   });
 });
 

@@ -629,10 +629,37 @@ body.resizing video { pointer-events: none; }
   width: min(100vw, 177.78vh); height: min(56.25vw, 100vh);
   transform: translate(-50%, -50%);
 }
-.video.theater .subtitle-overlay { bottom: 9vh; left: 8vw; right: 8vw; }
-.video.theater .subtitle-overlay .sub-zh { font-size: calc(clamp(22px, 2.6vw, 40px) * var(--sub-scale, 1)); }
-.video.theater .subtitle-overlay .sub-orig { font-size: calc(clamp(16px, 1.8vw, 28px) * var(--sub-scale, 1)); }
-/* App 根 YT 引擎：贴合 VideoSlot，或屏外/壳模式继续播 */
+.video.theater .subtitle-overlay {
+  left: 10%; right: 10%;
+  bottom: calc(9cqh + var(--sub-lift, 0cqh));
+  transition: bottom 0.25s var(--ease);
+}
+.video.theater:not(.idle) .subtitle-overlay {
+  bottom: calc(9cqh + var(--sub-lift, 0cqh) + 56px);
+}
+.video.theater.idle { cursor: none; }
+.theater-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  display: flex; align-items: center; gap: 12px; padding: 14px 20px 16px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.78));
+  color: #fff; transition: opacity 0.25s var(--ease);
+}
+.video.theater.idle .theater-bar { opacity: 0; pointer-events: none; }
+.theater-title {
+  margin: 0; max-width: 26%; font-size: 13.5px; font-weight: 500; color: rgba(255, 255, 255, 0.9);
+}
+.theater-bar .controls.compact {
+  flex: 1; min-width: 0; padding: 4px 10px;
+  background: rgba(20, 20, 24, 0.72); border-color: rgba(255, 255, 255, 0.14);
+  color: #fff; backdrop-filter: blur(8px);
+}
+.theater-bar .controls.compact .icon-btn,
+.theater-bar .controls.compact .rate-btn,
+.theater-bar .controls.compact .time,
+.theater-bar .theater-exit { color: #fff; }
+.theater-bar .controls.compact .icon-btn:hover,
+.theater-bar .theater-exit:hover { background: rgba(255, 255, 255, 0.16); }
+/* App 根 YT 引擎：贴合 VideoSlot，离页播放缩为右下角浮窗，或屏外/壳模式保活 */
 .yt-dock {
   position: fixed;
   z-index: 30;
@@ -647,7 +674,34 @@ body.resizing video { pointer-events: none; }
 .yt-dock.theater-host {
   z-index: 400;
   border-radius: 0;
+  clip-path: none !important;
 }
+.yt-dock.floating {
+  right: 24px;
+  bottom: 24px;
+  width: 340px;
+  height: 191px;
+  z-index: 45;
+  pointer-events: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+}
+.yt-float-shield {
+  position: absolute; inset: 0; z-index: 2;
+  margin: 0; padding: 0; border: 0;
+  background: transparent; cursor: pointer;
+}
+.video-float-bar {
+  position: absolute; top: 6px; right: 6px; z-index: 7;
+  display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s var(--ease);
+}
+.yt-dock.floating:hover .video-float-bar,
+.yt-dock.floating:focus-within .video-float-bar { opacity: 1; }
+.video-float-bar .icon-btn { background: rgba(0, 0, 0, 0.6); color: #fff; }
+.video-float-bar .icon-btn:hover { background: rgba(0, 0, 0, 0.82); }
+.yt-dock.floating .subtitle-overlay { bottom: 6%; left: 5%; right: 5%; }
+.yt-dock.floating .subtitle-overlay p { font-size: 12px !important; line-height: 1.35; }
+.yt-dock.floating .sub-box { padding: 3px 8px; pointer-events: none; cursor: default; }
+.yt-dock.floating .sub-orig { display: none; }
 .yt-dock.offscreen,
 .yt-dock.shell {
   left: -100vw;
@@ -689,22 +743,66 @@ body.resizing video { pointer-events: none; }
 }
 .yt-fs-btn:hover { background: rgba(0, 0, 0, 0.75); }
 .video.theater .yt-fs-btn { right: 16px; bottom: 16px; }
-.video .subtitle-overlay {
-  position: absolute; left: 6%; right: 6%; bottom: 12%; z-index: 3;
-  display: flex; flex-direction: column; align-items: center; pointer-events: none;
+/* 内层 size 容器：为叠字幕与 Aa 面板提供精确 cqh 基准，不触发外层 aspect-ratio 塌缩 */
+.video-cq {
+  position: absolute; inset: 0; z-index: 4;
+  container-type: size; pointer-events: none;
 }
-.video .sub-box {
-  max-width: 92%; padding: 6px 12px; border-radius: 8px;
-  background: rgba(0, 0, 0, 0.55); text-align: center;
+.video .subtitle-overlay,
+.yt-dock.floating .subtitle-overlay {
+  position: absolute; left: 6%; right: 6%; bottom: calc(6cqh + var(--sub-lift, 0cqh)); z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 0.6cqh; pointer-events: none;
 }
-.video .subtitle-overlay .sub-zh {
-  margin: 0; font-size: calc(18px * var(--sub-scale, 1)); font-weight: 600; color: #fff;
-  font-family: var(--sub-font, inherit); line-height: 1.35;
+.video .sub-box,
+.yt-dock.floating .sub-box {
+  display: flex; flex-direction: column; align-items: center; gap: 0.3cqh;
+  max-width: 100%; padding: 0.8cqh 1.8cqh; border-radius: 1.2cqh;
+  background: rgba(0, 0, 0, 0.58); backdrop-filter: blur(6px); text-align: center;
 }
-.video .subtitle-overlay .sub-orig {
-  margin: 2px 0 0; font-size: calc(13px * var(--sub-scale, 1)); color: rgba(255, 255, 255, 0.88);
-  font-family: var(--sub-font, inherit); line-height: 1.35;
+.video .subtitle-overlay .sub-box {
+  pointer-events: auto; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
 }
+.video .subtitle-overlay .sub-box.dragging { cursor: grabbing; }
+.video .subtitle-overlay .sub-zh,
+.yt-dock.floating .subtitle-overlay .sub-zh {
+  margin: 0; font-size: calc(clamp(13px, 5.6cqh, 64px) * var(--sub-scale, 1)); font-weight: 600; color: #fff;
+  font-family: var(--sub-font, inherit); line-height: 1.38; max-width: 100%;
+  overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.video .subtitle-overlay .sub-orig,
+.yt-dock.floating .subtitle-overlay .sub-orig {
+  margin: 0; font-size: calc(clamp(11px, 4.1cqh, 46px) * var(--sub-orig-scale, var(--sub-scale, 1)));
+  color: rgba(255, 255, 255, 0.88);
+  font-family: var(--sub-font, inherit); line-height: 1.38; max-width: 100%;
+  overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+/* 画中右上角 Aa 快捷调字幕 */
+.sub-tune {
+  position: absolute; top: 10px; right: 10px; z-index: 7;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  pointer-events: auto; opacity: 0; transition: opacity 0.2s var(--ease);
+}
+.video:hover .sub-tune,
+.sub-tune.open,
+.sub-tune:focus-within { opacity: 1; }
+.video.theater.idle .sub-tune:not(.open) { opacity: 0; pointer-events: none; }
+.sub-tune-btn {
+  width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer; backdrop-filter: blur(6px);
+}
+.sub-tune-btn:hover,
+.sub-tune.open .sub-tune-btn { background: rgba(0, 0, 0, 0.78); }
+.sub-tune-pop {
+  width: 280px; max-height: calc(100cqh - 62px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24); font-size: 13px; cursor: default;
+}
+.sub-tune-row { display: flex; align-items: center; gap: 10px; }
+.sub-tune-row > span:first-child { flex: none; width: 36px; color: var(--text-2); }
+.sub-tune-hint { margin: 0; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.sub-tune-foot { display: flex; justify-content: space-between; gap: 8px; }
+.sub-tune-foot .link-btn:disabled { opacity: 0.45; cursor: default; }
 .yt-fallback {
   position: absolute; inset: 0; z-index: 4; display: grid; place-items: center;
   background: rgba(0, 0, 0, 0.72); color: #fff; padding: 24px; text-align: center;
@@ -727,13 +825,13 @@ body.resizing video { pointer-events: none; }
 .cover-play:focus-visible .cover-play-btn.playing { opacity: 1; }
 .audio-sub { width: 100%; text-align: center; min-height: 0; }
 .audio-sub .sub-zh { font-size: calc(20px * var(--sub-scale, 1)); font-weight: 600; color: var(--text); }
-.audio-sub .sub-orig { font-size: calc(15px * var(--sub-scale, 1)); color: var(--text-2); margin-top: 4px; }
+.audio-sub .sub-orig { font-size: calc(15px * var(--sub-orig-scale, var(--sub-scale, 1))); color: var(--text-2); margin-top: 4px; }
 /* 音频台短句：当前句 + 淡化下一句（与原站 asub 一致） */
 .asub {
   --zh-now: calc(20px * var(--sub-scale, 1));
-  --or-now: calc(15px * var(--sub-scale, 1));
+  --or-now: calc(15px * var(--sub-orig-scale, var(--sub-scale, 1)));
   --zh-next: calc(15px * var(--sub-scale, 1));
-  --or-next: calc(13px * var(--sub-scale, 1));
+  --or-next: calc(13px * var(--sub-orig-scale, var(--sub-scale, 1)));
   --lh: 1.5;
   display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%;
 }
@@ -917,12 +1015,13 @@ textarea:focus-visible {
 .summary-foot > span:first-child { margin-right: auto; }
 .read-aloud { position: relative; display: inline-flex; align-items: center; gap: 2px; }
 .read-aloud-pop {
-  position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 300px;
+  position: fixed; z-index: 38; width: 300px; max-width: calc(100vw - 24px);
   display: flex; flex-direction: column; gap: 10px; padding: 14px;
   border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14); text-align: left;
 }
-.summary-foot .read-aloud-pop { top: auto; bottom: calc(100% + 6px); }
+.read-aloud-pop .tts-rate { width: 100%; }
+.read-aloud-pop .tts-rate button { flex: 1; min-width: 0; }
 .tts-rate-picker { position: relative; }
 .tts-rate-picker > button { font-variant-numeric: tabular-nums; }
 .tts-rate-pop {
@@ -1020,7 +1119,7 @@ textarea:focus-visible {
 
 /* ---- transcript panel ---- */
 .transcript { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
-/* 左：模式/来源；右：工具组不换行。英文长标签不再把整行拆散。 */
+/* 左：模式/轨道；右：工具组不换行。英文长标签不再把整行拆散。 */
 .panel-bar {
   position: relative; z-index: 15;
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
@@ -1029,11 +1128,9 @@ textarea:focus-visible {
 .panel-bar-main {
   display: flex; align-items: center; gap: 6px 8px; min-width: 0; flex: 1 1 auto; overflow: hidden;
 }
+.panel-bar-main:empty { display: none; }
 .panel-bar-tools {
   display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto;
-}
-.panel-bar-source {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 @container (max-width: 400px) {
   .panel-bar { flex-wrap: wrap; }
@@ -1042,8 +1139,6 @@ textarea:focus-visible {
   .hl-toggle > span:not(.hl-badge) { display: none; }
   .seg-control button { padding: 0 7px; }
 }
-.source-tag { font-size: 12px; color: var(--muted); }
-.source-tag.muted { opacity: 0.85; }
 .panel-menu { position: relative; display: inline-flex; }
 .panel-menu-pop {
   position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; min-width: 180px;
@@ -1628,11 +1723,17 @@ label.check input { margin-top: 3px; }
   text-shadow: 0 0 2px #000, 0 0 2px #000, 0 1px 3px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.6);
 }
 .reading-preview .subtitle-overlay .sub-zh { font-size: calc(18px * var(--sub-scale, 1)); }
-.reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-scale, 1)); }
+.reading-preview .subtitle-overlay .sub-orig { font-size: calc(13px * var(--sub-orig-scale, var(--sub-scale, 1))); }
 .reading-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; padding: 4px 0; font-size: 13.5px; color: var(--text);
 }
+.reading-sizes { display: flex; flex-direction: column; gap: 6px; flex: 0 1 320px; min-width: 220px; }
+.reading-note { margin: -2px 0 4px; }
+.size-row { display: flex; align-items: center; gap: 10px; }
+.size-row > span:first-child { flex: none; min-width: 36px; color: var(--text-2); }
+.size-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent, currentColor); }
+.size-row .size-val { width: 42px; text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .engine-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
 .engine {
   display: flex; gap: 10px; align-items: flex-start; padding: 12px;
@@ -1750,17 +1851,20 @@ label.check input { margin-top: 3px; }
 .shortcut-note { display: flex; align-items: center; gap: 6px; width: 100%; color: var(--text-2); }
 
 .lines .line-text, .audio-sub p, .asub-line p, .chat .msg { font-family: var(--sub-font, inherit); }
-/* 字号：基准 px × --sub-scale（禁 1em，em 指向父级会吞掉基准字号） */
+/* 字号：基准 px × --sub-scale / --sub-orig-scale（禁 1em，em 指向父级会吞掉基准字号） */
 .lines .zh { font-size: calc(15px * var(--sub-scale, 1)); }
-.lines .orig { font-size: calc(14px * var(--sub-scale, 1)); }
+.lines .orig { font-size: calc(14px * var(--sub-orig-scale, var(--sub-scale, 1))); }
 .audio-sub .sub-zh { font-size: calc(20px * var(--sub-scale, 1)); }
-.audio-sub .sub-orig { font-size: calc(15px * var(--sub-scale, 1)); }
+.audio-sub .sub-orig { font-size: calc(15px * var(--sub-orig-scale, var(--sub-scale, 1))); }
 .chat { font-size: calc(14px * var(--chat-scale, 1)); }
-.video .subtitle-overlay p { font-family: var(--sub-font, inherit); }
-:root[data-sub-look="outline"] .video .sub-box {
+.video .subtitle-overlay p,
+.yt-dock.floating .subtitle-overlay p { font-family: var(--sub-font, inherit); }
+:root[data-sub-look="outline"] .video .sub-box,
+:root[data-sub-look="outline"] .yt-dock.floating .sub-box {
   background: transparent; backdrop-filter: none; box-shadow: none; padding: 2px 6px;
 }
-:root[data-sub-look="outline"] .video .subtitle-overlay p {
+:root[data-sub-look="outline"] .video .subtitle-overlay p,
+:root[data-sub-look="outline"] .yt-dock.floating .subtitle-overlay p {
   background: transparent !important; backdrop-filter: none !important;
   text-shadow: 0 0 2px #000, 0 0 4px #000, 0 1px 3px rgba(0, 0, 0, 0.95);
 }

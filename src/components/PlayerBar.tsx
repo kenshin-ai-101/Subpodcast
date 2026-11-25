@@ -1,10 +1,10 @@
 /**
- * [INPUT]: 页内 episode；store；jobs；offline；YtEngine；SeekHighlights；pieces
- * [OUTPUT]: 媒体切换 + 封面/视频槽 + Controls；音频台短句叠字（now/next）
- * [POS]: 单集左栏播控；页 episode 与 store.current 正交；字幕时钟与原站一致
+ * [INPUT]: 页内 episode；store；jobs；offline；YtEngine；SeekHighlights；pieces；SubtitleOverlay
+ * [OUTPUT]: 媒体切换 + 封面/视频槽（含 .video-cq 容器与全屏 idle/theater-bar）+ AudioSubtitles（now/next）+ ControlsBar
+ * [POS]: 单集左栏播控；页 episode 与 store.current 正交；全屏时 2.5s 静默隐退底栏与 Aa
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -22,14 +22,14 @@ import {
 import type { Episode, Segment } from "../lib/api";
 import { clock } from "../lib/format";
 import { useT } from "../lib/i18n";
-import { looksChinese, useJobs } from "../lib/jobs";
+import { useJobs } from "../lib/jobs";
 import { releaseAudioHost, takeAudioEngine } from "../lib/audioHost";
 import { initialAudioOnly, preferAudio } from "../lib/media";
 import { audioSrc, useOffline } from "../lib/offline";
 import { pieceIndex, pieces } from "../lib/pieces";
-import { activeIndex, flushProgress, playSoon, SUBTITLE_LEAD } from "../lib/playback";
-import { useSubtitleRead } from "../lib/subtitleRead";
-import { alignCurrent, loadAlign } from "../lib/timemap";
+import { activeIndex, flushProgress, playSoon } from "../lib/playback";
+import { stopSubtitleRead, useSubtitleRead } from "../lib/subtitleRead";
+import { alignCurrent, currentMap, loadAlign, toContent } from "../lib/timemap";
 import { setLevel, toggleMute, useVolume } from "../lib/volume";
 import { kickYoutube } from "../lib/ytKick";
 import { useStore } from "../store";
@@ -44,14 +44,12 @@ function AudioSubtitles({
   episodeId,
   segs,
   items,
-  foreign,
   mode,
   progressFallback,
 }: {
   episodeId: string;
   segs: Segment[];
   items?: (string | null | undefined)[];
-  foreign: boolean;
   mode: string;
   progressFallback: number;
 }) {
@@ -66,15 +64,14 @@ function AudioSubtitles({
   const pos = useStore(
     useShallow((s) => {
       if (!segs.length) return { i: -1, k: 0 };
-      if (readIndex != null) return { i: readIndex, k: 0 };
-      const clock = s.current?.id === episodeId ? s.time : progressFallback;
-      const i = activeIndex(starts, clock);
-      if (i < 0) return { i: -1, k: 0 };
+      if (readIndex != null && s.scrubTime == null) return { i: readIndex, k: 0 };
+      const clockSec = s.current?.id === episodeId ? (s.scrubTime ?? s.time) : progressFallback;
+      const i = Math.max(0, activeIndex(starts, clockSec));
       const seg = segs[i];
-      if (!seg || clock > seg.end + 1.5) return { i: -1, k: 0 };
+      if (!seg) return { i: -1, k: 0 };
       const progress = Math.min(
         1,
-        Math.max(0, (clock + SUBTITLE_LEAD - seg.start) / Math.max(0.5, seg.end - seg.start)),
+        Math.max(0, (clockSec - seg.start) / Math.max(0.5, seg.end - seg.start)),
       );
       return { i, k: pieceIndex(pieces(seg.text, isCjk(seg.text)), progress) };
     }),
@@ -142,14 +139,13 @@ function AudioSubtitles({
             }
           : null;
 
-  // 外语节目切到「中文」模式时只显示中文，绝不显示英文原文
-  const showOrig = !foreign || mode !== "translation";
   const line = (
     l: { orig: string; zh?: string | null },
     role: "now" | "next",
     key: string,
   ) => {
     const showZh = Boolean(l.zh && mode !== "original");
+    const showOrig = mode !== "translation" || !l.zh;
     if (!showZh && !showOrig) return null;
     return (
       <div key={key} className={`asub-line ${role}`} aria-hidden={role === "next"}>
@@ -220,6 +216,129 @@ function VolumeControl() {
   );
 }
 
+function ControlsBar({
+  episodeId,
+  live,
+  busy,
+  playing,
+  rate,
+  shownSubTime,
+  shownBarTime,
+  shownLength,
+  onDrag,
+  commitDrag,
+  cancelDrag,
+  onPlayToggle,
+  compact = false,
+}: {
+  episodeId: string;
+  live: boolean;
+  busy: boolean;
+  playing: boolean;
+  rate: number;
+  shownSubTime: number;
+  shownBarTime: number;
+  shownLength: number;
+  onDrag: (v: number) => void;
+  commitDrag: () => void;
+  cancelDrag: () => void;
+  onPlayToggle: () => void;
+  compact?: boolean;
+}) {
+  const t = useT();
+  const fill = `${shownLength ? Math.min(100, (shownBarTime / shownLength) * 100) : 0}%`;
+  return (
+    <div className={`controls${compact ? " compact" : ""}`}>
+      <button
+        type="button"
+        className="icon-btn"
+        title={t("后退 15 秒")}
+        disabled={!live}
+        onClick={() => useStore.getState().player?.seek(Math.max(0, shownSubTime - 15))}
+      >
+        <RotateCcw size={16} />
+      </button>
+      <button
+        type="button"
+        className="play-btn"
+        onClick={onPlayToggle}
+        aria-label={busy ? t("缓冲中") : playing ? t("暂停") : t("播放")}
+        aria-busy={busy || undefined}
+      >
+        {busy ? (
+          <Loader2 size={18} className="spin" />
+        ) : playing ? (
+          <Pause size={18} fill="currentColor" />
+        ) : (
+          <Play size={18} fill="currentColor" />
+        )}
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title={t("前进 30 秒")}
+        disabled={!live}
+        onClick={() => useStore.getState().player?.seek(shownSubTime + 30)}
+      >
+        <RotateCw size={16} />
+      </button>
+      <span className="time">{clock(shownBarTime)}</span>
+      <div className="seek-wrap">
+        {!compact && live && (
+          <SeekHighlights
+            episodeId={episodeId}
+            length={shownLength}
+            onSeek={(sec) => useStore.getState().player?.seek(sec)}
+          />
+        )}
+        <input
+          className="seek"
+          type="range"
+          min={0}
+          max={Math.max(shownLength, 1)}
+          step={0.1}
+          value={Math.min(shownBarTime, shownLength || shownBarTime)}
+          style={{ "--fill": fill } as React.CSSProperties}
+          disabled={!live}
+          onChange={(e) => onDrag(Number(e.target.value))}
+          onPointerUp={commitDrag}
+          onPointerCancel={cancelDrag}
+          onTouchEnd={commitDrag}
+          onKeyUp={(e) => {
+            if (
+              e.key === "ArrowLeft" ||
+              e.key === "ArrowRight" ||
+              e.key === "ArrowUp" ||
+              e.key === "ArrowDown" ||
+              e.key === "Home" ||
+              e.key === "End" ||
+              e.key === "PageUp" ||
+              e.key === "PageDown"
+            ) {
+              commitDrag();
+            }
+          }}
+          onBlur={commitDrag}
+        />
+      </div>
+      <span className="time">{clock(shownLength)}</span>
+      <VolumeControl />
+      <button
+        type="button"
+        className={`rate-btn${rate >= 2 ? " fast" : ""}`}
+        title={t("播放速度")}
+        disabled={!live}
+        onClick={() => {
+          const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length] ?? 1;
+          useStore.getState().player?.setRate(next);
+        }}
+      >
+        {rate}x
+      </button>
+    </div>
+  );
+}
+
 export function PlayerBar({ episode }: { episode: Episode }) {
   const t = useT();
   const { current, time, rawTime, length, playing, rate, audioOnly, loadingSince, theater, set } = useStore(
@@ -239,33 +358,114 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const live = current?.id === episode.id;
   const [source, setSource] = useState<Episode>(episode);
   const [drag, setDrag] = useState<number | null>(null);
+  const dragRef = useRef<number | null>(null);
+  const [idle, setIdle] = useState(false);
   const transcript = useJobs((s) => s.transcripts[episode.id]);
   const items = useJobs((s) => s.translations[episode.id]?.items);
   const mode = useStore((s) => s.settings.subtitleMode);
   const saved = useOffline((s) => s.saved[source.id]);
   const ytError = useYtUi((s) => s.error);
 
-  useEffect(() => {
+  const onDrag = useCallback(
+    (val: number) => {
+      dragRef.current = val;
+      setDrag(val);
+      if (useSubtitleRead.getState().episodeId === source.id) stopSubtitleRead();
+      const subSec = toContent(currentMap(source.id), val).at;
+      useStore.getState().set({ scrubTime: subSec });
+    },
+    [source.id],
+  );
+
+  const cancelDrag = useCallback(() => {
+    dragRef.current = null;
     setDrag(null);
+    if (useStore.getState().scrubTime !== null) {
+      useStore.getState().set({ scrubTime: null });
+    }
+  }, []);
+
+  const commitDrag = useCallback(() => {
+    const val = dragRef.current;
+    if (val == null) return;
+    dragRef.current = null;
+    setDrag(null);
+    const st = useStore.getState();
+    const p = st.player;
+    if (p?.seekRaw) p.seekRaw(val);
+    else if (p) p.seek(val);
+    else {
+      const subSec = toContent(currentMap(source.id), val).at;
+      st.set({
+        time: subSec,
+        rawTime: val,
+        scrubTime: null,
+        seekWhenReady: { id: source.id, at: subSec },
+      });
+    }
+    if (useStore.getState().scrubTime !== null) {
+      useStore.getState().set({ scrubTime: null });
+    }
+  }, [source.id]);
+
+  useEffect(() => {
+    dragRef.current = null;
+    setDrag(null);
+    if (useStore.getState().scrubTime !== null) {
+      useStore.getState().set({ scrubTime: null });
+    }
   }, [episode.id, live]);
 
-  // 离开视频舞台时收起 theater（切仅音频 / 离页卸载）
+  // 拖拽中指针移出细轨道并在窗口任意处松手时也能立即提交，不悬停等待失焦
+  useEffect(() => {
+    if (drag == null) return;
+    const onWinUp = () => commitDrag();
+    const onWinCancel = () => cancelDrag();
+    window.addEventListener("pointerup", onWinUp);
+    window.addEventListener("pointercancel", onWinCancel);
+    return () => {
+      window.removeEventListener("pointerup", onWinUp);
+      window.removeEventListener("pointercancel", onWinCancel);
+    };
+  }, [drag != null, commitDrag, cancelDrag]);
+
+  // 离开视频舞台时收起 theater（切仅音频 / 离页卸载）并清理拖拽预览态
   useEffect(() => {
     return () => {
+      if (useStore.getState().scrubTime !== null) {
+        useStore.getState().set({ scrubTime: null });
+      }
       if (useStore.getState().theater) toggleTheater(false);
     };
   }, []);
 
+  // 全屏模式：2.5s 无指针移动或按键则隐退底部控制栏与 Aa 按钮；Esc 退出全屏
   useEffect(() => {
-    if (!theater) return;
+    if (!theater) {
+      setIdle(false);
+      return;
+    }
+    let timer = window.setTimeout(() => setIdle(true), 2500);
+    const wake = () => {
+      setIdle(false);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIdle(true), 2500);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         toggleTheater(false);
+        return;
       }
+      wake();
     };
+    window.addEventListener("mousemove", wake);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("mousemove", wake);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [theater]);
 
   useEffect(() => {
@@ -289,19 +489,11 @@ export function PlayerBar({ episode }: { episode: Episode }) {
   const pageAudioOnly = live ? audioOnly : initialAudioOnly(source);
   const showVideo = canVideo && !pageAudioOnly;
   const shownSubTime = live ? time : source.progress || 0;
-  // 进度条与时钟跟随播放器自身时钟（有 TimeMap 时与字幕时间区分）；拖拽中先走本地 drag，松手再 commit
+  // 进度条与时钟跟随播放器自身时钟（有 TimeMap 时与字幕时间区分）；拖拽中同步 scrubTime 实时预览字幕，松手再 commit
   const shownBarTime = drag ?? (live ? (rawTime ?? time) : source.progress || 0);
   const shownLength = live ? length || source.duration || 0 : source.duration || 0;
   const shownPlaying = live && playing;
   const busy = live && !!loadingSince;
-
-  const commitDrag = (val: number | null) => {
-    if (val == null) return;
-    setDrag(null);
-    const p = useStore.getState().player;
-    if (p?.seekRaw) p.seekRaw(val);
-    else p?.seek(val);
-  };
 
   const takeOver = () => {
     const s = useStore.getState();
@@ -330,6 +522,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       current: ep,
       time: t,
       rawTime: audio ? undefined : t,
+      scrubTime: null,
       gapEnd: null,
       audioOnly: audio,
       playing: sameYt ? s.playing : false,
@@ -353,15 +546,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
     if (why) s.notify(why);
   };
 
-  const fill = `${shownLength ? Math.min(100, (shownBarTime / shownLength) * 100) : 0}%`;
   const segs = transcript?.segments ?? [];
-  const foreign = useMemo(
-    () =>
-      transcript
-        ? !looksChinese(transcript.language, segs.slice(0, 3).map((s) => s.text).join(""))
-        : false,
-    [transcript, segs],
-  );
 
   return (
     <>
@@ -393,7 +578,7 @@ export function PlayerBar({ episode }: { episode: Episode }) {
       {showVideo && live && (
         <>
           {theater && <div className="theater-backdrop" aria-hidden />}
-          <div className={`video${theater ? " theater" : ""}`}>
+          <div className={`video${theater ? " theater" : ""}${theater && idle && drag == null ? " idle" : ""}`}>
             <VideoSlot />
             <button
               type="button"
@@ -408,19 +593,52 @@ export function PlayerBar({ episode }: { episode: Episode }) {
                 <Play size={36} fill="currentColor" />
               </span>
             )}
-            <SubtitleOverlay episodeId={episode.id} />
-            <button
-              type="button"
-              className="yt-fs-btn"
-              title={theater ? t("退出全屏（Esc）") : t("全屏（双击或 F）")}
-              aria-label={theater ? t("退出全屏") : t("全屏")}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleTheater();
-              }}
-            >
-              {theater ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
+            <div className="video-cq">
+              <SubtitleOverlay episodeId={episode.id} />
+            </div>
+            {!theater && (
+              <button
+                type="button"
+                className="yt-fs-btn"
+                title={t("全屏（双击或 F）")}
+                aria-label={t("全屏")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleTheater();
+                }}
+              >
+                <Maximize2 size={16} />
+              </button>
+            )}
+            {theater && (
+              <div className="theater-bar" onClick={(e) => e.stopPropagation()}>
+                <p className="theater-title clamp1">{source.title}</p>
+                <ControlsBar
+                  episodeId={source.id}
+                  live={live}
+                  busy={busy}
+                  playing={shownPlaying}
+                  rate={rate}
+                  shownSubTime={shownSubTime}
+                  shownBarTime={shownBarTime}
+                  shownLength={shownLength}
+                  onDrag={onDrag}
+                  commitDrag={commitDrag}
+                  cancelDrag={cancelDrag}
+                  onPlayToggle={playToggle}
+                  compact
+                />
+                <button
+                  type="button"
+                  className="icon-btn theater-exit"
+                  title={t("退出全屏（Esc）")}
+                  aria-label={t("退出全屏")}
+                  onClick={() => toggleTheater(false)}
+                >
+                  <Minimize2 size={16} />
+                </button>
+              </div>
+            )}
             {ytError && !hasFile && (
               <div className="yt-fallback">
                 <p>{ytError}</p>
@@ -450,7 +668,6 @@ export function PlayerBar({ episode }: { episode: Episode }) {
                 episodeId={source.id}
                 segs={segs}
                 items={items}
-                foreign={foreign}
                 mode={mode}
                 progressFallback={source.progress || 0}
               />
@@ -459,94 +676,20 @@ export function PlayerBar({ episode }: { episode: Episode }) {
         </div>
       )}
 
-      <div className="controls">
-        <button
-          type="button"
-          className="icon-btn"
-          title={t("后退 15 秒")}
-          disabled={!live}
-          onClick={() => useStore.getState().player?.seek(Math.max(0, shownSubTime - 15))}
-        >
-          <RotateCcw size={16} />
-        </button>
-        <button
-          type="button"
-          className="play-btn"
-          onClick={playToggle}
-          aria-label={busy ? t("缓冲中") : shownPlaying ? t("暂停") : t("播放")}
-          aria-busy={busy || undefined}
-        >
-          {busy ? (
-            <Loader2 size={18} className="spin" />
-          ) : shownPlaying ? (
-            <Pause size={18} fill="currentColor" />
-          ) : (
-            <Play size={18} fill="currentColor" />
-          )}
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={t("前进 30 秒")}
-          disabled={!live}
-          onClick={() => useStore.getState().player?.seek(shownSubTime + 30)}
-        >
-          <RotateCw size={16} />
-        </button>
-        <span className="time">{clock(shownBarTime)}</span>
-        <div className="seek-wrap">
-          {live && (
-            <SeekHighlights
-              episodeId={source.id}
-              length={shownLength}
-              onSeek={(sec) => useStore.getState().player?.seek(sec)}
-            />
-          )}
-          <input
-            className="seek"
-            type="range"
-            min={0}
-            max={Math.max(shownLength, 1)}
-            step={0.1}
-            value={Math.min(shownBarTime, shownLength || shownBarTime)}
-            style={{ "--fill": fill } as React.CSSProperties}
-            disabled={!live}
-            onChange={(e) => setDrag(Number(e.target.value))}
-            onPointerUp={() => commitDrag(drag)}
-            onPointerCancel={() => setDrag(null)}
-            onTouchEnd={() => commitDrag(drag)}
-            onKeyUp={(e) => {
-              if (
-                e.key === "ArrowLeft" ||
-                e.key === "ArrowRight" ||
-                e.key === "ArrowUp" ||
-                e.key === "ArrowDown" ||
-                e.key === "Home" ||
-                e.key === "End" ||
-                e.key === "PageUp" ||
-                e.key === "PageDown"
-              ) {
-                commitDrag(drag);
-              }
-            }}
-            onBlur={() => commitDrag(drag)}
-          />
-        </div>
-        <span className="time">{clock(shownLength)}</span>
-        <VolumeControl />
-        <button
-          type="button"
-          className={`rate-btn${rate >= 2 ? " fast" : ""}`}
-          title={t("播放速度")}
-          disabled={!live}
-          onClick={() => {
-            const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length] ?? 1;
-            useStore.getState().player?.setRate(next);
-          }}
-        >
-          {rate}x
-        </button>
-      </div>
+      <ControlsBar
+        episodeId={source.id}
+        live={live}
+        busy={busy}
+        playing={shownPlaying}
+        rate={rate}
+        shownSubTime={shownSubTime}
+        shownBarTime={shownBarTime}
+        shownLength={shownLength}
+        onDrag={onDrag}
+        commitDrag={commitDrag}
+        cancelDrag={cancelDrag}
+        onPlayToggle={playToggle}
+      />
     </>
   );
 }

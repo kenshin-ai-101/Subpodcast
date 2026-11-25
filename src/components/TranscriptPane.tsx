@@ -37,10 +37,14 @@ import {
 import { resolveLocale, tNow, useT } from "../lib/i18n";
 import {
   cancelAsr,
+  countMissingTranslations,
   ensureTranscript,
   generateTranscript,
+  hasZhTranslation,
   looksChinese,
+  stopTranslation,
   switchYoutubeTrack,
+  translateEpisode,
   useJobs,
 } from "../lib/jobs";
 import { activeIndex, seekEpisode } from "../lib/playback";
@@ -53,7 +57,6 @@ import { HighlightsPanel, useClipWarm } from "./HighlightViews";
 import { CassetteArt, NightNote, TrayArt, WaveToTextArt } from "./Illustrations";
 import { LearnText, LearnTip, WordCard, useLearnMarks, type CardTarget } from "./Learn";
 import { Dictation, EpisodeWords, useShadowing } from "./LearnPractice";
-import { RatePicker } from "./RatePicker";
 import { ReadAloudSettings } from "./ReadAloud";
 import { SubtitleExport } from "./SubtitleExport";
 import { openVideoClipDialog } from "./VideoClipDialog";
@@ -83,13 +86,6 @@ function sourceLabel(source: string) {
     default:
       return source || tNow("字幕");
   }
-}
-
-function engineLabel(engine?: string) {
-  if (engine === "youtube") return tNow("节目方中文字幕");
-  if (engine === "google") return tNow("谷歌翻译");
-  if (engine === "llm") return tNow("模型翻译");
-  return null;
 }
 
 function sizeMb(n: number) {
@@ -652,7 +648,15 @@ interface LearnMenuState {
   canShadow: boolean;
 }
 
-/** 「…」：外语导出 + 学英语工具 + 调整字幕。中文播客用栏上显式「导出」按钮。 */
+interface TranslateMenuState {
+  running: boolean;
+  missing: number;
+  hasZh: boolean;
+  onTranslate: () => void;
+  onStop: () => void;
+}
+
+/** 「…」：外语导出 + 补全翻译 + 学英语工具 + 调整字幕。中文播客用栏上显式「导出」按钮。 */
 function PanelMenu({
   ep,
   segments,
@@ -661,6 +665,7 @@ function PanelMenu({
   mode,
   source,
   learn,
+  translate,
   onAlign,
 }: {
   ep: Episode;
@@ -670,6 +675,7 @@ function PanelMenu({
   mode: Mode;
   source: string;
   learn?: LearnMenuState;
+  translate?: TranslateMenuState;
   onAlign?: () => void;
 }) {
   const t = useT();
@@ -732,6 +738,30 @@ function PanelMenu({
               </button>
               <div className="menu-sep" role="separator" />
             </>
+          )}
+          {foreign && translate?.running && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenu(false);
+                translate.onStop();
+              }}
+            >
+              <Square size={13} /> {t("停止翻译")}
+            </button>
+          )}
+          {foreign && translate && !translate.running && translate.missing > 0 && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenu(false);
+                translate.onTranslate();
+              }}
+            >
+              <Languages size={14} /> {translate.hasZh ? t("补全中文翻译") : t("翻译为中文")}
+            </button>
           )}
           {foreign && (
             <button type="button" role="menuitem" onClick={() => { setMenu(false); setExporting(true); }}>
@@ -821,9 +851,17 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const segs = transcript?.segments ?? [];
   useClipWarm(episode, segs);
   const starts = useMemo(() => segs.map((s) => s.start), [segs]);
-  // 只在「当前句」变化时重渲，避免 time 每 250ms 拖垮虚拟列表导致字幕滞后
-  const active = useStore((s) =>
-    s.current?.id === episode.id && starts.length ? activeIndex(starts, s.time) : -1,
+  // 只在「当前句」或拖拽态变化时重渲，避免 time 高频更新拖垮虚拟列表；拖拽进度条时优先消费 scrubTime 实时同步
+  const { active, scrubbing } = useStore(
+    useShallow((s) => {
+      if (s.current?.id !== episode.id || !starts.length) {
+        return { active: -1, scrubbing: false };
+      }
+      return {
+        active: activeIndex(starts, s.scrubTime ?? s.time),
+        scrubbing: s.scrubTime != null,
+      };
+    }),
   );
   const isCurrent = useStore((s) => s.current?.id === episode.id);
   // HTMLAudio 播音轨时才有「点句对齐」（含有视频但切到仅音频——字幕常对视频轨）
@@ -838,8 +876,10 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   const [aligning, setAligning] = useState(false);
   const [dismissedMismatch, setDismissedMismatch] = useState<string | null>(null);
   const [followPaused, setFollowPaused] = useState(false);
+  const prevActiveRef = useRef(active);
   useEffect(() => {
     setFollowPaused(false);
+    prevActiveRef.current = -1;
   }, [episode.id]);
   useEffect(() => {
     if (!canAlign) setAligning(false);
@@ -863,26 +903,30 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
     () => zhItems?.filter((x) => Boolean(x?.trim())).length ?? 0,
     [zhItems],
   );
+  const missingZhCount = useMemo(
+    () => (segs.length ? countMissingTranslations(segs, zhItems) : 0),
+    [segs, zhItems],
+  );
+  const hasZh = useMemo(() => hasZhTranslation(zhItems), [zhItems]);
+  const triggerTranslate = useCallback(() => {
+    if (!transcript) return;
+    void translateEpisode(episode, transcript).catch((e) => {
+      useJobs.setState((s) => ({
+        translations: {
+          ...s.translations,
+          [episode.id]: {
+            ...(s.translations[episode.id] ?? { items: [], running: false }),
+            running: false,
+            error: errText(e),
+          },
+        },
+      }));
+    });
+  }, [episode, transcript]);
   const readIndex = useSubtitleRead((s) => (s.episodeId === episode.id ? s.lineIndex : null));
   const readingHere = readIndex != null;
   const [readSetup, setReadSetup] = useState(false);
   const readBox = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!readSetup) return;
-    const onDown = (e: PointerEvent) => {
-      if (!readBox.current?.contains(e.target as Node)) setReadSetup(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setReadSetup(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [readSetup]);
 
   useEffect(() => {
     return () => {
@@ -959,7 +1003,6 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   );
   const marks = useLearnMarks(english);
   const learning = !!marks || (english && learnOn);
-  const zhTag = engineLabel(translation?.engine);
   const uiLang = useStore((s) => s.settings.uiLang);
   const enUi = resolveLocale(uiLang) === "en";
   // 英文 UI 用短标签，避免 Both/Chinese/Original 撑破右栏
@@ -982,9 +1025,18 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
   }, [learning]);
 
   useEffect(() => {
-    if (!isCurrent || active < 0 || showHighlights || aligning || followPaused || readingHere) return;
+    const prev = prevActiveRef.current;
+    prevActiveRef.current = active;
+    const jumped = prev >= 0 && active >= 0 && Math.abs(active - prev) > 3;
+    if (!isCurrent || active < 0 || showHighlights || aligning || (readingHere && !scrubbing)) return;
+    if (scrubbing || jumped) {
+      if (followPaused) setFollowPaused(false);
+      rowVirtualizer.scrollToIndex(active, { align: "center", behavior: "auto" });
+      return;
+    }
+    if (followPaused) return;
     rowVirtualizer.scrollToIndex(active, { align: "auto", behavior: "smooth" });
-  }, [active, isCurrent, showHighlights, aligning, followPaused, readingHere, rowVirtualizer]);
+  }, [active, scrubbing, isCurrent, showHighlights, aligning, followPaused, readingHere, rowVirtualizer]);
 
   // 逐句朗读中文时自动将当前朗读句保持在视野内
   useEffect(() => {
@@ -1041,10 +1093,6 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
               ))}
             </div>
           )}
-          <span className="source-tag panel-bar-source" title={sourceLabel(transcript!.source)}>
-            {sourceLabel(transcript!.source)}
-          </span>
-          {zhTag && foreign && <span className="source-tag muted">{zhTag}</span>}
           {episode.videoId && transcript && (
             <TrackPicker
               episode={episode}
@@ -1077,7 +1125,6 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
                   <Volume2 size={15} />
                 </button>
               )}
-              <RatePicker />
               <button
                 type="button"
                 className="icon-btn sm"
@@ -1088,7 +1135,7 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
               >
                 <ChevronDown size={13} />
               </button>
-              {readSetup && <ReadAloudSettings onClose={() => setReadSetup(false)} />}
+              {readSetup && <ReadAloudSettings anchorRef={readBox} onClose={() => setReadSetup(false)} />}
             </div>
           )}
           <button
@@ -1126,6 +1173,17 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
               mode={mode}
               source={transcript!.source}
               onAlign={canAlign ? () => setAligning(true) : undefined}
+              translate={
+                foreign
+                  ? {
+                      running: !!translation?.running,
+                      missing: missingZhCount,
+                      hasZh,
+                      onTranslate: triggerTranslate,
+                      onStop: () => stopTranslation(episode.id),
+                    }
+                  : undefined
+              }
               learn={
                 learning
                   ? {
@@ -1180,7 +1238,15 @@ export function TranscriptPane({ episode }: { episode: Episode }) {
         </div>
       )}
       {translation?.running && <div className="translate-bar">{t("正在翻译成中文…")}</div>}
-      {translation?.error && <div className="translate-bar">{translation.error}</div>}
+      {translation?.error && (
+        <div className="translate-bar">
+          <span>{translation.error}</span>
+          <span className="spacer" />
+          <button type="button" className="btn ghost sm" onClick={triggerTranslate}>
+            {t("重试")}
+          </button>
+        </div>
+      )}
       {shadow && isCurrent && (
         <div className="shadow-bar">
           <Mic size={13} />

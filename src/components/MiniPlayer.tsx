@@ -11,9 +11,11 @@ import { useT } from "../lib/i18n";
 import { showName } from "../lib/picks";
 import { pauseYoutubeHost } from "../lib/ytHost";
 import { useStore } from "../store";
+import { useVideoFloating } from "./YtEngine";
 
 export function MiniPlayer() {
   const t = useT();
+  const floatingEpId = useVideoFloating((s) => s.epId);
   const { current, view, playing, player, time, length, loadingSince, theater, openEpisode, set } = useStore(
     useShallow((s) => ({
       current: s.current,
@@ -29,8 +31,9 @@ export function MiniPlayer() {
     })),
   );
 
-  // 全屏舞台或正在当前单集页时不显示；离页播放（含视频离页后台播）始终保留控播与返回入口
+  // 全屏舞台、视频浮窗展示本集或正在当前单集页时不显示
   if (!current || theater) return null;
+  if (floatingEpId === current.id) return null;
   if (view.kind === "episode" && view.id === current.id) return null;
 
   const pct = length ? Math.min(100, (time / length) * 100) : 0;
